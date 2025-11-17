@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'auth_page.dart';
-import 'pages/scan_page.dart';
-//import 'home_page.dart';
+import 'home_page.dart';
+
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -48,8 +48,7 @@ class _AuthGateState extends State<AuthGate> {
         if (session == null) {
           return AuthPage(); // 👈 show login/signup
         } else {
-          return ScanPage(); // 👈 your main content
-          //return HomePage(); // 👈 your main content
+          return HomePage(); // 👈 your main content
 
         }
       },
