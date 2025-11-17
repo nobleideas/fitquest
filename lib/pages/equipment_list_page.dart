@@ -2,46 +2,100 @@ import 'package:flutter/material.dart';
 import '../services/equipment_service.dart';
 import 'exercise_list_page.dart';
 
-class EquipmentListPage extends StatelessWidget {
+class EquipmentListPage extends StatefulWidget {
   const EquipmentListPage({super.key});
+
+  @override
+  State<EquipmentListPage> createState() => _EquipmentListPageState();
+}
+
+class _EquipmentListPageState extends State<EquipmentListPage> {
+  List<Map<String, dynamic>> equipmentList = [];
+  bool isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadEquipment();
+  }
+
+  Future<void> _loadEquipment() async {
+    setState(() => isLoading = true);
+    final list = await EquipmentService().getAllEquipment();
+    setState(() {
+      equipmentList = List<Map<String, dynamic>>.from(list);
+      isLoading = false;
+    });
+  }
+
+  Future<void> _addEquipment() async {
+    final controller = TextEditingController();
+
+    await showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text("Add New Equipment"),
+        content: TextField(
+          controller: controller,
+          decoration: const InputDecoration(
+            labelText: "Equipment Name",
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text("Cancel"),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              final name = controller.text.trim();
+              if (name.isEmpty) return;
+
+              // Insert new equipment
+              await EquipmentService().insertEquipment(name);
+
+              Navigator.pop(context);
+              await _loadEquipment(); // reload list
+            },
+            child: const Text("Add"),
+          ),
+        ],
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text("Gym Equipment")),
-      body: FutureBuilder(
-        future: EquipmentService().getAllEquipment(),
-        builder: (context, snapshot) {
-          if (!snapshot.hasData) {
-            return const Center(child: CircularProgressIndicator());
-          }
+      body: isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : ListView.builder(
+              itemCount: equipmentList.length,
+              itemBuilder: (context, index) {
+                final equipment = equipmentList[index];
 
-          final equipmentList = snapshot.data as List<dynamic>;
-
-          return ListView.builder(
-            itemCount: equipmentList.length,
-            itemBuilder: (context, index) {
-              final equipment = equipmentList[index];
-
-              return ListTile(
-                title: Text(equipment['name']),
-                subtitle: Text("QR: ${equipment['qr_code']}"),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () {
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (_) => ExerciseListPage(
-                        equipmentId: equipment['id'],
-                        equipmentName: equipment['name'],
+                return ListTile(
+                  title: Text(equipment['name']),
+                  subtitle: Text("QR: ${equipment['qr_code'] ?? 'N/A'}"),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => ExerciseListPage(
+                          equipmentId: equipment['id'],
+                          equipmentName: equipment['name'],
+                        ),
                       ),
-                    ),
-                  );
-                },
-              );
-            },
-          );
-        },
+                    );
+                  },
+                );
+              },
+            ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: _addEquipment,
+        child: const Icon(Icons.add),
       ),
     );
   }

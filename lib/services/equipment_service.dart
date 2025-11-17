@@ -8,6 +8,10 @@ class EquipmentService {
     return await supabase.from('equipment').select().order('name');
   }
 
+   Future<void> insertEquipment(String name) async {
+    await supabase.from('equipment').insert({'name': name});
+    print('Inserted equipment: $name');
+  }
 
   Future<Map<String, dynamic>?> getEquipmentByQr(String qrValue) async {
     final res = await supabase

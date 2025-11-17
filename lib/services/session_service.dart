@@ -47,17 +47,21 @@ class SessionService {
   Future<List<Map<String, dynamic>>> getSessionsForDate(
     String exerciseId, DateTime date) async {
   final user = supabase.auth.currentUser!;
-  
-  final start = DateTime(date.year, date.month, date.day);
-  final end = start.add(const Duration(days: 1));
+
+  // Start and end of day in UTC
+  final startUtc = (DateTime.utc(date.year, date.month, date.day)).add(const Duration(days: 1));
+  final endUtc = startUtc.add(const Duration(days: 1));
+
+  print(startUtc.toIso8601String());
+  print(endUtc.toIso8601String());
 
   final res = await supabase
       .from('exercise_sessions')
       .select()
       .eq('exercise_id', exerciseId)
       .eq('user_id', user.id)
-      .gte('created_at', start.toIso8601String())
-      .lt('created_at', end.toIso8601String())
+      .gte('created_at', startUtc.toIso8601String())
+      .lt('created_at', endUtc.toIso8601String())
       .order('created_at', ascending: true);
 
   return List<Map<String, dynamic>>.from(res);

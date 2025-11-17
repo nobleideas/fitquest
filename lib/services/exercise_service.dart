@@ -11,4 +11,22 @@ class ExerciseService {
 
     return res;
   }
+
+  // Insert a new exercise
+  Future<void> insertExercise({
+    required String name,
+    required String primaryMuscleGroup,
+    required String type, // Push or Pull
+    required String equipmentId,
+  }) async {
+    
+    // Insert into Supabase
+    final response = await supabase.from('exercises').insert({
+      'name': name,
+      'primary_muscle_group': primaryMuscleGroup,
+      'type': type,
+      'equipment_id': equipmentId,
+    });
+
+}
 }
