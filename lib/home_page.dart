@@ -43,6 +43,7 @@ class _HomePageState extends State<HomePage> {
             TextField(controller: _controller),
             const SizedBox(height: 8),
             ElevatedButton(onPressed: _insertItem, child: const Text('Add Item')),
+            const SizedBox(height: 8),
             ElevatedButton(onPressed: () {
               Navigator.push(context, MaterialPageRoute(builder: (_) => const EquipmentListPage()),
               );
