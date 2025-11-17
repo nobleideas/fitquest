@@ -35,7 +35,7 @@ class SessionService {
   final dates = <DateTime>{};
   for (var row in res) {
     final date = DateTime.parse(row['created_at']).toLocal();
-    dates.add(DateTime(date.year, date.month, date.day));
+    dates.add(DateTime(date.year, date.month, date.day, date.hour, date.minute, date.second));
   }
 
   final sortedDates = dates.toList()
@@ -49,7 +49,7 @@ class SessionService {
   final user = supabase.auth.currentUser!;
 
   // Start and end of day in UTC
-  final startUtc = (DateTime.utc(date.year, date.month, date.day)).add(const Duration(days: 1));
+  final startUtc = (DateTime.utc(date.year, date.month, date.day, date.hour, date.minute, date.second));
   final endUtc = startUtc.add(const Duration(days: 1));
 
   print(startUtc.toIso8601String());
