@@ -35,14 +35,14 @@ class _HomePageState extends State<HomePage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Supabase Flutter Demo')),
+      appBar: AppBar(title: const Text('Fit Quest')),
       body: Padding(
         padding: const EdgeInsets.all(16.0),
         child: Column(
           children: [
             TextField(controller: _controller),
             const SizedBox(height: 8),
-            ElevatedButton(onPressed: _insertItem, child: const Text('Add Item')),
+            //ElevatedButton(onPressed: _insertItem, child: const Text('Add Item')),
             const SizedBox(height: 8),
             ElevatedButton(onPressed: () {
               Navigator.push(context, MaterialPageRoute(builder: (_) => const EquipmentListPage()),

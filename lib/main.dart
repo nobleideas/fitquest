@@ -22,7 +22,7 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      title: 'Supabase Auth Demo',
+      title: 'Fit Quest',
       theme: ThemeData(primarySwatch: Colors.deepPurple),
       home: const AuthGate(),
     );
