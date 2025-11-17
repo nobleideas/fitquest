@@ -36,81 +36,110 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
   }
 
   Future<void> _addExercise() async {
-    final nameController = TextEditingController();
-    final muscleController = TextEditingController();
-    String type = 'push'; // default value for database
+  final nameController = TextEditingController();
 
-    await showDialog(
-      context: context,
-      builder: (_) {
-        return StatefulBuilder(
-          builder: (context, setDialogState) {
-            return AlertDialog(
-              title: const Text("Add New Exercise"),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  TextField(
-                    controller: nameController,
-                    decoration: const InputDecoration(labelText: "Exercise Name"),
-                  ),
-                  TextField(
-                    controller: muscleController,
-                    decoration: const InputDecoration(labelText: "Primary Muscle Group"),
-                  ),
-                  const SizedBox(height: 12),
-                  Row(
-                    children: [
-                      const Text("Type: "),
-                      const SizedBox(width: 16),
-                      DropdownButton<String>(
-                        value: type,
-                        items: const [
-                          DropdownMenuItem(value: 'push', child: Text('Push')),
-                          DropdownMenuItem(value: 'pull', child: Text('Pull')),
-                        ],
-                        onChanged: (val) {
-                          if (val != null) {
-                            setDialogState(() {
-                              type = val; // update selected type
-                            });
-                          }
-                        },
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text("Cancel"),
+  // Default values
+  String primaryMuscleGroup = 'back';
+  String type = 'push';
+
+  await showDialog(
+    context: context,
+    builder: (_) {
+      return StatefulBuilder(
+        builder: (context, setDialogState) {
+          return AlertDialog(
+            title: const Text("Add New Exercise"),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: nameController,
+                  decoration: const InputDecoration(labelText: "Exercise Name"),
                 ),
-                ElevatedButton(
-                  onPressed: () async {
-                    final name = nameController.text.trim();
-                    final muscle = muscleController.text.trim();
-                    if (name.isEmpty || muscle.isEmpty) return;
 
-                    await ExerciseService().insertExercise(
-                      name: name,
-                      primaryMuscleGroup: muscle,
-                      type: type, // lowercase
-                      equipmentId: widget.equipmentId,
-                    );
+                const SizedBox(height: 16),
 
-                    Navigator.pop(context);
-                    await _loadExercises();
-                  },
-                  child: const Text("Add"),
+                // PRIMARY MUSCLE GROUP DROPDOWN
+                Row(
+                  children: [
+                    const Text("Muscle: "),
+                    const SizedBox(width: 16),
+                    DropdownButton<String>(
+                      value: primaryMuscleGroup,
+                      items: const [
+                        DropdownMenuItem(value: 'back', child: Text('Back')),
+                        DropdownMenuItem(value: 'chest', child: Text('Chest')),
+                        DropdownMenuItem(value: 'shoulders', child: Text('Shoulders')),
+                        DropdownMenuItem(value: 'arms', child: Text('Arms')),
+                        DropdownMenuItem(value: 'legs', child: Text('Legs')),
+                        DropdownMenuItem(value: 'core', child: Text('Core')),
+                      ],
+                      onChanged: (val) {
+                        if (val != null) {
+                          setDialogState(() {
+                            primaryMuscleGroup = val;
+                          });
+                        }
+                      },
+                    ),
+                  ],
+                ),
+
+                const SizedBox(height: 16),
+
+                // TYPE DROPDOWN
+                Row(
+                  children: [
+                    const Text("Type: "),
+                    const SizedBox(width: 16),
+                    DropdownButton<String>(
+                      value: type,
+                      items: const [
+                        DropdownMenuItem(value: 'push', child: Text('Push')),
+                        DropdownMenuItem(value: 'pull', child: Text('Pull')),
+                      ],
+                      onChanged: (val) {
+                        if (val != null) {
+                          setDialogState(() {
+                            type = val;
+                          });
+                        }
+                      },
+                    ),
+                  ],
                 ),
               ],
-            );
-          },
-        );
-      },
-    );
-  }
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text("Cancel"),
+              ),
+              ElevatedButton(
+                onPressed: () async {
+                  final name = nameController.text.trim();
+                  if (name.isEmpty) return;
+
+                  await ExerciseService().insertExercise(
+                    name: name,
+                    primaryMuscleGroup: primaryMuscleGroup,
+                    type: type,
+                    equipmentId: widget.equipmentId,
+                  );
+
+                  Navigator.pop(context);
+                  await _loadExercises();
+                },
+                child: const Text("Add"),
+              ),
+            ],
+          );
+        },
+      );
+    },
+  );
+}
+
 
   @override
   Widget build(BuildContext context) {

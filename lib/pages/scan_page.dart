@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import '../services/equipment_service.dart';
-import 'equipment_page.dart';
+import 'equipment_list_page.dart';
 
 class ScanPage extends StatefulWidget {
   const ScanPage({super.key});
@@ -40,12 +40,12 @@ class _ScanPageState extends State<ScanPage> {
     }
 
     // Navigate to equipment page
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => EquipmentPage(equipment: equipment),
-      ),
-    );
+    // Navigator.push(
+    //   context,
+    //   MaterialPageRoute(
+    //     builder: (_) => EquipmentListPage(equipment: equipment),
+    //   ),
+    // );
 
     // Allow scanning again after navigation
     Future.delayed(const Duration(milliseconds: 500), () {

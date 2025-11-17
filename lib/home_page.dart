@@ -11,25 +11,10 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> {
   final supabase = Supabase.instance.client;
-  final TextEditingController _controller = TextEditingController();
-  List<dynamic> _items = [];
-
-  Future<void> _insertItem() async {
-    final user = supabase.auth.currentUser;
-    await supabase.from('items').insert({'name': _controller.text,'user_id': user!.id});
-    _controller.clear();
-    _loadItems();
-  }
-
-  Future<void> _loadItems() async {
-    final data = await supabase.from('items').select();
-    setState(() => _items = data);
-  }
 
   @override
   void initState() {
     super.initState();
-    _loadItems();
   }
 
   @override
@@ -40,24 +25,12 @@ class _HomePageState extends State<HomePage> {
         padding: const EdgeInsets.all(16.0),
         child: Column(
           children: [
-            TextField(controller: _controller),
-            const SizedBox(height: 8),
-            //ElevatedButton(onPressed: _insertItem, child: const Text('Add Item')),
-            const SizedBox(height: 8),
             ElevatedButton(onPressed: () {
               Navigator.push(context, MaterialPageRoute(builder: (_) => const EquipmentListPage()),
               );
             },
             child: const Text("View Equipment"),
             ),
-
-            const Divider(),
-            Expanded(
-              child: ListView.builder(
-                itemCount: _items.length,
-                itemBuilder: (_, i) => ListTile(title: Text(_items[i]['name'] ?? '')),
-              ),
-            )
           ],
         ),
       ),
