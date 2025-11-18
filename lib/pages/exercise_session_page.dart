@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../services/session_service.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 class ExerciseSessionPage extends StatefulWidget {
   final Map<String, dynamic> exercise;
@@ -94,11 +95,19 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
 
                   if (weight == null || reps == null) return;
 
-                  await sessionService.insertSession(
+                  final res = await sessionService.insertSession(
                     exerciseId: exercise['id'],
                     weight: weight,
                     reps: reps,
                   );
+
+                  final sessionID = res['id'];
+
+                  await Supabase.instance.client.rpc(
+                    'add_session_xp',
+                    params: {'session_id': sessionID},
+                  );
+
 
                   weightController.clear();
                   repsController.clear();

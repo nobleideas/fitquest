@@ -3,7 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 class SessionService {
   final supabase = Supabase.instance.client;
 
-  Future<void> insertSession({
+  Future<Map<String, dynamic>> insertSession({
     required String exerciseId,
     required double weight,
     required int reps,
@@ -12,12 +12,16 @@ class SessionService {
 
     if (user == null) throw Exception("User not logged in");
 
-    await supabase.from('exercise_sessions').insert({
+    final res = await supabase.from('exercise_sessions').insert({
       'user_id': user.id,
       'exercise_id': exerciseId,
       'weight': weight,
       'reps': reps,
-    });
+    })
+    .select()
+    .single();
+
+    return res;
   }
 
   Future<List<DateTime>> getLast3SessionDates(String exerciseId) async {
