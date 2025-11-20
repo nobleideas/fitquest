@@ -29,7 +29,7 @@ class _HomePageState extends State<HomePage> {
               Navigator.push(context, MaterialPageRoute(builder: (_) => const EquipmentListPage()),
               );
             },
-            child: const Text("View Equipment"),
+            child: const Text("View My Equipment"),
             ),
           ],
         ),

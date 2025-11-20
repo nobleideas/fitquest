@@ -20,10 +20,11 @@ class ExerciseService {
     required String equipmentId,
   }) async {
     
+    final muscleGroupLower = primaryMuscleGroup.toLowerCase();
     // Insert into Supabase
     final response = await supabase.from('exercises').insert({
       'name': name,
-      'primary_muscle_group': primaryMuscleGroup,
+      'primary_muscle_group': muscleGroupLower,
       'type': type,
       'equipment_id': equipmentId,
     });

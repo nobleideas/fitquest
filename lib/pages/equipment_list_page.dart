@@ -69,7 +69,7 @@ class _EquipmentListPageState extends State<EquipmentListPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text("Gym Equipment"),
+        title: const Text("My Equipment"),
         actions: [
           IconButton(
             icon: const Icon(Icons.person),
@@ -110,6 +110,7 @@ class _EquipmentListPageState extends State<EquipmentListPage> {
             ),
       floatingActionButton: FloatingActionButton(
         onPressed: _addEquipment,
+        tooltip: 'Add Equipment',
         child: const Icon(Icons.add),
       ),
     );

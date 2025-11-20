@@ -12,7 +12,7 @@ class ProfilePage extends StatelessWidget {
     final user = Supabase.instance.client.auth.currentUser;
 
     return Scaffold(
-      appBar: AppBar(title: const Text("Your Profile")),
+      appBar: AppBar(title: const Text("My Profile")),
       body: FutureBuilder(
         future: Supabase.instance.client
             .from('profiles')
