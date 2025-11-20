@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../services/equipment_service.dart';
 import 'exercise_list_page.dart';
+import 'profile_page.dart'; // <-- Import ProfilePage
 
 class EquipmentListPage extends StatefulWidget {
   const EquipmentListPage({super.key});
@@ -67,7 +68,21 @@ class _EquipmentListPageState extends State<EquipmentListPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text("Gym Equipment")),
+      appBar: AppBar(
+        title: const Text("Gym Equipment"),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.person),
+            tooltip: 'Go to Profile',
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (_) => const ProfilePage()),
+              );
+            },
+          ),
+        ],
+      ),
       body: isLoading
           ? const Center(child: CircularProgressIndicator())
           : ListView.builder(
