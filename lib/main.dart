@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'auth_page.dart';
 import 'home_page.dart';
+import 'pages/onboarding_page.dart';
+import 'services/profile_service.dart';
 
 
 Future<void> main() async {
@@ -45,12 +47,38 @@ class _AuthGateState extends State<AuthGate> {
       stream: supabase.auth.onAuthStateChange,
       builder: (context, snapshot) {
         final session = supabase.auth.currentSession;
-        if (session == null) {
-          return AuthPage(); // 👈 show login/signup
-        } else {
-          return HomePage(); // 👈 your main content
 
+        // ---- NOT LOGGED IN ----
+        if (session == null) {
+          return const AuthPage();
         }
+
+        // ---- LOGGED IN: LOAD PROFILE ----
+        return FutureBuilder<Map<String, dynamic>?>(
+          future: ProfileService().getProfile(session.user.id),
+          builder: (context, profileSnap) {
+            if (profileSnap.connectionState == ConnectionState.waiting) {
+              return const Scaffold(
+                body: Center(child: CircularProgressIndicator()),
+              );
+            }
+
+            final profile = profileSnap.data;
+
+            // ---- PROFILE DOES NOT EXIST ----
+            if (profile == null) {
+              return const OnboardingPage(); // create profile
+            }
+
+            // ---- PROFILE EXISTS BUT GOAL NOT SET ----
+            if (profile['goal'] == null) {
+              return const OnboardingPage();
+            }
+
+            // ---- ALL GOOD: GO TO HOME ----
+            return const HomePage();
+          },
+        );
       },
     );
   }
