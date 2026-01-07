@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../utils/xp_utils.dart';
 import 'equipment_list_page.dart'; // <-- Import your EquipmentListPage
+import 'gym_list_page.dart';
 
 class ProfilePage extends StatelessWidget {
   const ProfilePage({super.key});
@@ -90,16 +91,33 @@ class ProfilePage extends StatelessWidget {
         },
       ),
       // ------------------ Floating Action Button ------------------
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () {
-          Navigator.push(
-            context,
-            MaterialPageRoute(builder: (_) => const EquipmentListPage()),
-          );
-        },
-        icon: const Icon(Icons.fitness_center),
-        label: const Text("View Equipment"),
-      ),
+      floatingActionButton: Column(
+  mainAxisSize: MainAxisSize.min,
+  crossAxisAlignment: CrossAxisAlignment.end,
+  children: [
+    FloatingActionButton.extended(
+      onPressed: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const EquipmentListPage()),
+        );
+      },
+      icon: const Icon(Icons.fitness_center),
+      label: const Text("View Equipment"),
+    ),
+    const SizedBox(height: 12), // spacing between buttons
+    FloatingActionButton.extended(
+      onPressed: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => const GymListPage()), // your GymListPage
+        );
+      },
+      icon: const Icon(Icons.list),
+      label: const Text("My Gyms"),
+    ),
+  ],
+),
     );
   }
 
