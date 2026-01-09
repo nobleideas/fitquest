@@ -13,6 +13,8 @@ class _HomePageState extends State<HomePage> {
   final supabase = Supabase.instance.client;
 
   bool isLoading = true;
+
+  /// Local workout day -> unique exercise names
   Map<DateTime, List<String>> exercisesByDay = {};
 
   @override
@@ -22,67 +24,62 @@ class _HomePageState extends State<HomePage> {
   }
 
   /* -------------------------------------------------------------------------- */
-  /*                       LOAD RECENT WORKOUT EXERCISES                         */
+  /*                     LOAD LAST 3 WORKOUT DAYS (UNIQUE EXERCISES)           */
   /* -------------------------------------------------------------------------- */
-
   Future<void> _loadRecentExercises() async {
-  setState(() => isLoading = true);
+    setState(() => isLoading = true);
 
-  final userId = supabase.auth.currentUser!.id;
+    final userId = supabase.auth.currentUser!.id;
 
-  // Step 1: fetch recent sessions
-  final sessions = await supabase
-      .from('exercise_sessions')
-      .select('created_at')
-      .eq('user_id', userId)
-      .order('created_at', ascending: false);
-
-  final Set<DateTime> uniqueDays = {};
-
-  for (final row in sessions) {
-    final utc = DateTime.parse(row['created_at']);
-    final dayUtc = DateTime.utc(utc.year, utc.month, utc.day);
-    uniqueDays.add(dayUtc);
-
-    if (uniqueDays.length >= 3) break;
-  }
-
-  final sortedDays = uniqueDays.toList()
-    ..sort((a, b) => b.compareTo(a));
-
-  final Map<DateTime, List<String>> results = {};
-
-  // Step 2: fetch exercise names per UTC day
-  for (final dayUtc in sortedDays) {
-    final startUtc = dayUtc;
-    final endUtc = dayUtc.add(const Duration(days: 1));
-
-    final response = await supabase
+    // Fetch sessions with exercise names
+    final sessions = await supabase
         .from('exercise_sessions')
-        .select('exercises(name)')
+        .select('created_at, exercises!inner(name)')
         .eq('user_id', userId)
-        .gte('created_at', startUtc.toIso8601String())
-        .lt('created_at', endUtc.toIso8601String());
+        .order('created_at', ascending: false);
 
-    final names = response
-        .map<String>((row) => row['exercises']['name'] as String)
-        .toSet()
-        .toList();
+    // Step 1: determine last 3 workout days
+    final List<DateTime> workoutDays = [];
+    for (final row in sessions) {
+      final local = DateTime.parse(row['created_at']).toLocal();
+      final day = DateTime(local.year, local.month, local.day);
 
-    results[dayUtc.toLocal()] = names; // convert for display only
+      if (!workoutDays.contains(day)) {
+        workoutDays.add(day);
+      }
+      if (workoutDays.length == 3) break;
+    }
+
+    // Step 2: collect **unique exercise names** for each day
+    final Map<DateTime, Set<String>> temp = {};
+    for (final row in sessions) {
+      final local = DateTime.parse(row['created_at']).toLocal();
+      final day = DateTime(local.year, local.month, local.day);
+
+      if (!workoutDays.contains(day)) continue;
+
+      final exerciseName = row['exercises']['name'] as String;
+
+      temp.putIfAbsent(day, () => <String>{});
+      temp[day]!.add(exerciseName); // add to Set ensures uniqueness
+    }
+
+    // Step 3: convert Sets to sorted lists (oldest → newest)
+    final Map<DateTime, List<String>> result = {};
+    for (final day in workoutDays) {
+      final exercises = temp[day] ?? {};
+      result[day] = exercises.toList()..sort();
+    }
+
+    setState(() {
+      exercisesByDay = result;
+      isLoading = false;
+    });
   }
-
-  setState(() {
-    exercisesByDay = results;
-    isLoading = false;
-  });
-}
-
 
   /* -------------------------------------------------------------------------- */
   /*                                   UI                                       */
   /* -------------------------------------------------------------------------- */
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -91,17 +88,15 @@ class _HomePageState extends State<HomePage> {
         padding: const EdgeInsets.all(16.0),
         child: ListView(
           children: [
-            /* -------------------------- RECENT WORKOUTS ------------------------- */
             const Text(
               'Recent Workouts',
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 8),
-
             if (isLoading)
               const Center(child: CircularProgressIndicator())
             else if (exercisesByDay.isEmpty)
-              const Text('No workouts logged.')
+              const Text('No workouts logged yet.')
             else
               ...exercisesByDay.entries.map((entry) {
                 final date = entry.key;
@@ -117,17 +112,12 @@ class _HomePageState extends State<HomePage> {
                         style: const TextStyle(fontWeight: FontWeight.bold),
                       ),
                       const SizedBox(height: 4),
-                      ...exercises.map(
-                        (name) => Text('• $name'),
-                      ),
+                      ...exercises.map((name) => Text('• $name')),
                     ],
                   ),
                 );
               }),
-
             const Divider(height: 32),
-
-            /* -------------------------- NAVIGATION BUTTON ------------------------ */
             ElevatedButton(
               onPressed: () {
                 Navigator.push(
