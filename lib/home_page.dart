@@ -24,7 +24,7 @@ class _HomePageState extends State<HomePage> {
   }
 
   /* -------------------------------------------------------------------------- */
-  /*                     LOAD LAST 3 WORKOUT DAYS (UNIQUE EXERCISES)           */
+  /*                     LOAD ALL WORKOUT DAYS (UNIQUE EXERCISES)               */
   /* -------------------------------------------------------------------------- */
   Future<void> _loadRecentExercises() async {
     setState(() => isLoading = true);
@@ -38,7 +38,7 @@ class _HomePageState extends State<HomePage> {
         .eq('user_id', userId)
         .order('created_at', ascending: false);
 
-    // Step 1: determine last 3 workout days
+    // Step 1: determine ALL workout days (newest → oldest)
     final List<DateTime> workoutDays = [];
     for (final row in sessions) {
       final local = DateTime.parse(row['created_at']).toLocal();
@@ -47,7 +47,6 @@ class _HomePageState extends State<HomePage> {
       if (!workoutDays.contains(day)) {
         workoutDays.add(day);
       }
-      if (workoutDays.length == 3) break;
     }
 
     // Step 2: collect **unique exercise names** for each day
@@ -56,15 +55,13 @@ class _HomePageState extends State<HomePage> {
       final local = DateTime.parse(row['created_at']).toLocal();
       final day = DateTime(local.year, local.month, local.day);
 
-      if (!workoutDays.contains(day)) continue;
-
       final exerciseName = row['exercises']['name'] as String;
 
       temp.putIfAbsent(day, () => <String>{});
       temp[day]!.add(exerciseName); // add to Set ensures uniqueness
     }
 
-    // Step 3: convert Sets to sorted lists (oldest → newest)
+    // Step 3: convert Sets to sorted lists (keep newest → oldest)
     final Map<DateTime, List<String>> result = {};
     for (final day in workoutDays) {
       final exercises = temp[day] ?? {};
