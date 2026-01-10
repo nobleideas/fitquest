@@ -31,14 +31,12 @@ class _HomePageState extends State<HomePage> {
 
     final userId = supabase.auth.currentUser!.id;
 
-    // Fetch sessions with exercise names
     final sessions = await supabase
         .from('exercise_sessions')
         .select('created_at, exercises!inner(name)')
         .eq('user_id', userId)
         .order('created_at', ascending: false);
 
-    // Step 1: determine ALL workout days (newest → oldest)
     final List<DateTime> workoutDays = [];
     for (final row in sessions) {
       final local = DateTime.parse(row['created_at']).toLocal();
@@ -49,7 +47,6 @@ class _HomePageState extends State<HomePage> {
       }
     }
 
-    // Step 2: collect **unique exercise names** for each day
     final Map<DateTime, Set<String>> temp = {};
     for (final row in sessions) {
       final local = DateTime.parse(row['created_at']).toLocal();
@@ -58,10 +55,9 @@ class _HomePageState extends State<HomePage> {
       final exerciseName = row['exercises']['name'] as String;
 
       temp.putIfAbsent(day, () => <String>{});
-      temp[day]!.add(exerciseName); // add to Set ensures uniqueness
+      temp[day]!.add(exerciseName);
     }
 
-    // Step 3: convert Sets to sorted lists (keep newest → oldest)
     final Map<DateTime, List<String>> result = {};
     for (final day in workoutDays) {
       final exercises = temp[day] ?? {};
@@ -85,6 +81,21 @@ class _HomePageState extends State<HomePage> {
         padding: const EdgeInsets.all(16.0),
         child: ListView(
           children: [
+            ElevatedButton(
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => const EquipmentListPage(),
+                  ),
+                );
+              },
+              child: const Text("View My Equipment"),
+            ),
+            const SizedBox(height: 16),
+            const Divider(),
+            const SizedBox(height: 8),
+
             const Text(
               'Recent Workouts',
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
@@ -114,18 +125,6 @@ class _HomePageState extends State<HomePage> {
                   ),
                 );
               }),
-            const Divider(height: 32),
-            ElevatedButton(
-              onPressed: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => const EquipmentListPage(),
-                  ),
-                );
-              },
-              child: const Text("View My Equipment"),
-            ),
           ],
         ),
       ),

@@ -23,8 +23,14 @@ class _EquipmentListPageState extends State<EquipmentListPage> {
   Future<void> _loadEquipment() async {
     setState(() => isLoading = true);
     final list = await EquipmentService().getAllEquipment();
+
+    final sorted = List<Map<String, dynamic>>.from(list)
+      ..sort((a, b) => (a['name'] as String)
+          .toLowerCase()
+          .compareTo((b['name'] as String).toLowerCase()));
+
     setState(() {
-      equipmentList = List<Map<String, dynamic>>.from(list);
+      equipmentList = sorted;
       isLoading = false;
     });
   }
