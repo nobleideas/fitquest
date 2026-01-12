@@ -5,6 +5,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:video_player/video_player.dart';
 import 'package:path/path.dart' as p;
 
+
 import '../services/session_service.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -96,67 +97,85 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
   }
 
   Future<void> _pickVideo() async {
+  try {
     final video = await _picker.pickVideo(source: ImageSource.gallery);
     if (video == null) return;
 
-    _pickedVideo = video;
+    // Set state immediately so UI updates
+    if (!mounted) return;
+    setState(() {
+      _pickedVideo = video;
+    });
 
-    // Local preview immediately
     await _videoController?.dispose();
-    _videoController = VideoPlayerController.file(File(video.path));
+
+    // Always use network controller — works for blob URLs (web) and public URLs
+    _videoController = VideoPlayerController.networkUrl(Uri.parse(video.path));
     await _videoController!.initialize();
     _videoController!.setLooping(true);
 
     if (!mounted) return;
     setState(() {});
+  } catch (e) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Picking video failed: $e')),
+    );
   }
+}
+
+
 
   Future<void> _uploadPickedVideo() async {
-    final video = _pickedVideo;
-    if (video == null) return;
+  final video = _pickedVideo;
+  if (video == null) return;
 
-    setState(() => _isUploadingVideo = true);
+  setState(() => _isUploadingVideo = true);
 
-    try {
-      final client = Supabase.instance.client;
-      final bucket = client.storage.from('exercise_form_videos');
+  try {
+    final client = Supabase.instance.client;
+    final bucket = client.storage.from('exercise_form_videos');
 
-      // One video per exercise: overwrite a stable path each time
-      final ext = p.extension(video.name).isNotEmpty ? p.extension(video.name) : '.mp4';
-      final storagePath = 'exercise_${widget.exercise['id']}/form$ext';
+    final ext = p.extension(video.name).isNotEmpty ? p.extension(video.name) : '.mp4';
+    final storagePath = 'exercise_${widget.exercise['id']}/form$ext';
 
-      await bucket.upload(
-        storagePath,
-        File(video.path),
-        fileOptions: const FileOptions(upsert: true),
-      );
+    final bytes = await video.readAsBytes();
 
-      // Public bucket → public URL
-      final publicUrl = bucket.getPublicUrl(storagePath);
+    await bucket.uploadBinary(
+      storagePath,
+      bytes,
+      fileOptions: FileOptions(
+        upsert: true,
+        contentType: video.mimeType ?? 'video/mp4',
+      ),
+    );
 
-      // Persist on exercise row
-      await client
-          .from('exercises')
-          .update({'form_video_url': publicUrl})
-          .eq('id', widget.exercise['id']);
+    final publicUrl = bucket.getPublicUrl(storagePath);
 
-      // Update local state + switch player to network URL (shareable)
-      _formVideoUrl = publicUrl;
-      await _initVideoPlayerFromUrl(publicUrl);
+    await client
+        .from('exercises')
+        .update({'video_url': publicUrl})
+        .eq('id', widget.exercise['id']);
 
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Form video uploaded and saved to exercise.')),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Video upload failed: $e')),
-      );
-    } finally {
-      if (mounted) setState(() => _isUploadingVideo = false);
-    }
+    _formVideoUrl = publicUrl;
+
+    await _initVideoPlayerFromUrl(publicUrl);
+
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Video uploaded and saved to exercise.')),
+    );
+  } catch (e) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Upload failed: $e')),
+    );
+  } finally {
+    if (mounted) setState(() => _isUploadingVideo = false);
   }
+}
+
+
 
   @override
   void dispose() {
