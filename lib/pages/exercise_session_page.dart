@@ -90,6 +90,10 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
     await _videoController?.dispose();
     _videoController = VideoPlayerController.networkUrl(Uri.parse(url));
     await _videoController!.initialize();
+    await _videoController!.setVolume(1.0);
+    await _videoController!.setPlaybackSpeed(1.0); // optional, but harmless
+    _videoController!.setLooping(true);
+
     _videoController!.setLooping(true);
 
     if (!mounted) return;
@@ -112,6 +116,10 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
     // Always use network controller — works for blob URLs (web) and public URLs
     _videoController = VideoPlayerController.networkUrl(Uri.parse(video.path));
     await _videoController!.initialize();
+    await _videoController!.setVolume(1.0);
+    await _videoController!.setPlaybackSpeed(1.0); // optional, but harmless
+    _videoController!.setLooping(true);
+
     _videoController!.setLooping(true);
 
     if (!mounted) return;
@@ -134,7 +142,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
 
   try {
     final client = Supabase.instance.client;
-    final bucket = client.storage.from('exercise_form_videos');
+    final bucket = client.storage.from('exercise_form_video');
 
     final ext = p.extension(video.name).isNotEmpty ? p.extension(video.name) : '.mp4';
     final storagePath = 'exercise_${widget.exercise['id']}/form$ext';
