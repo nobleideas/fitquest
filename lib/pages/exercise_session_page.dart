@@ -327,14 +327,6 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
           const Text("Saved ✓"),
         ],
       ),
-
-      // 👇 DEBUG INFO GOES HERE
-      Text(
-        "vol=${_videoController!.value.volume}  "
-        "dur=${_videoController!.value.duration.inSeconds}s  "
-        "playing=${_videoController!.value.isPlaying}",
-        style: Theme.of(context).textTheme.bodySmall,
-      ),
     ],
   )
 
