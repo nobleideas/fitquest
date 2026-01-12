@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'auth_page.dart';
-import 'home_page.dart';
+import 'pages/main_shell.dart';
 import 'pages/onboarding_page.dart';
 import 'services/profile_service.dart';
 
@@ -76,7 +76,7 @@ class _AuthGateState extends State<AuthGate> {
             }
 
             // ---- ALL GOOD: GO TO HOME ----
-            return const HomePage();
+            return const MainShell();
           },
         );
       },

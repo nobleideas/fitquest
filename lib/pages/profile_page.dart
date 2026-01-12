@@ -2,7 +2,6 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../utils/xp_utils.dart';
-import 'equipment_list_page.dart'; // <-- Import your EquipmentListPage
 import 'gym_list_page.dart';
 
 class ProfilePage extends StatelessWidget {
@@ -12,112 +11,90 @@ class ProfilePage extends StatelessWidget {
   Widget build(BuildContext context) {
     final user = Supabase.instance.client.auth.currentUser;
 
-    return Scaffold(
-      appBar: AppBar(title: const Text("My Profile")),
-      body: FutureBuilder(
-        future: Supabase.instance.client
-            .from('profiles')
-            .select()
-            .eq('id', user!.id)
-            .single(),
-        builder: (context, snapshot) {
-          if (!snapshot.hasData) {
-            return const Center(child: CircularProgressIndicator());
-          }
+    return FutureBuilder(
+      future: Supabase.instance.client
+          .from('profiles')
+          .select()
+          .eq('id', user!.id)
+          .single(),
+      builder: (context, snapshot) {
+        if (!snapshot.hasData) {
+          return const Center(child: CircularProgressIndicator());
+        }
 
-          final profile = snapshot.data as Map<String, dynamic>;
-          final xp = XPUtils.totalXP(profile);
-          final level = XPUtils.computeLevel(xp);
-          final progress = XPUtils.levelProgress(xp);
-          final rank = XPUtils.computeRank(xp);
+        final profile = snapshot.data as Map<String, dynamic>;
+        final xp = XPUtils.totalXP(profile);
+        final level = XPUtils.computeLevel(xp);
+        final progress = XPUtils.levelProgress(xp);
+        final rank = XPUtils.computeRank(xp);
 
-          return SingleChildScrollView(
-            padding: const EdgeInsets.all(20),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Rank + Level section
-                Center(
-                  child: Column(
-                    children: [
-                      Text(
-                        rank,
-                        style: const TextStyle(
-                          fontSize: 32,
-                          fontWeight: FontWeight.bold,
-                        ),
+        return SingleChildScrollView(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Column(
+                  children: [
+                    Text(
+                      rank,
+                      style: const TextStyle(
+                        fontSize: 32,
+                        fontWeight: FontWeight.bold,
                       ),
-                      const SizedBox(height: 8),
-                      Text(
-                        "Level $level",
-                        style: const TextStyle(
-                          fontSize: 22,
-                          color: Colors.grey,
-                        ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      "Level $level",
+                      style: const TextStyle(
+                        fontSize: 22,
+                        color: Colors.grey,
                       ),
-                      const SizedBox(height: 10),
-
-                      // Level progress bar
-                      LinearProgressIndicator(
-                        value: progress,
-                        minHeight: 12,
-                        borderRadius: BorderRadius.circular(10),
+                    ),
+                    const SizedBox(height: 10),
+                    LinearProgressIndicator(
+                      value: progress,
+                      minHeight: 12,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    const SizedBox(height: 16),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton.icon(
+                        onPressed: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(builder: (_) => const GymListPage()),
+                          );
+                        },
+                        icon: const Icon(Icons.list),
+                        label: const Text("My Gyms"),
                       ),
-                      const SizedBox(height: 20),
-                    ],
-                  ),
+                    ),
+                    const SizedBox(height: 20),
+                  ],
                 ),
-
-                const SizedBox(height: 30),
-                const Text(
-                  "Muscle Group XP",
-                  style: TextStyle(
-                    fontSize: 22,
-                    fontWeight: FontWeight.bold,
-                  ),
+              ),
+              const SizedBox(height: 10),
+              const Text(
+                "Muscle Group XP",
+                style: TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold,
                 ),
+              ),
+              const SizedBox(height: 20),
 
-                const SizedBox(height: 20),
-
-                _xpBar("Back", profile['xp_back']),
-                _xpBar("Chest", profile['xp_chest']),
-                _xpBar("Shoulders", profile['xp_shoulders']),
-                _xpBar("Arms", profile['xp_arms']),
-                _xpBar("Legs", profile['xp_legs']),
-                _xpBar("Core", profile['xp_core']),
-              ],
-            ),
-          );
-        },
-      ),
-      // ------------------ Floating Action Button ------------------
-      floatingActionButton: Column(
-  mainAxisSize: MainAxisSize.min,
-  crossAxisAlignment: CrossAxisAlignment.end,
-  children: [
-    FloatingActionButton.extended(
-      onPressed: () {
-        Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => const EquipmentListPage()),
+              _xpBar("Back", profile['xp_back'] ?? 0),
+              _xpBar("Chest", profile['xp_chest'] ?? 0),
+              _xpBar("Shoulders", profile['xp_shoulders'] ?? 0),
+              _xpBar("Arms", profile['xp_arms'] ?? 0),
+              _xpBar("Legs", profile['xp_legs'] ?? 0),
+              _xpBar("Core", profile['xp_core'] ?? 0),
+            ],
+          ),
         );
       },
-      icon: const Icon(Icons.fitness_center),
-      label: const Text("View Equipment"),
-    ),
-    const SizedBox(height: 12), // spacing between buttons
-    FloatingActionButton.extended(
-      onPressed: () {
-        Navigator.push(
-          context,
-          MaterialPageRoute(builder: (_) => const GymListPage()), // your GymListPage
-        );
-      },
-      icon: const Icon(Icons.list),
-      label: const Text("My Gyms"),
-    ),
-  ],
-),
     );
   }
 
@@ -125,13 +102,10 @@ class ProfilePage extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(
-          "$label — $xp XP",
-          style: const TextStyle(fontSize: 16),
-        ),
+        Text("$label — $xp XP", style: const TextStyle(fontSize: 16)),
         const SizedBox(height: 4),
         LinearProgressIndicator(
-          value: min(xp / 5000, 1), // 5k cap purely visual
+          value: min(xp / 5000, 1),
           minHeight: 10,
         ),
         const SizedBox(height: 20),
