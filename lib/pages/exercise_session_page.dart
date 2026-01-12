@@ -90,6 +90,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
     await _videoController?.dispose();
     _videoController = VideoPlayerController.networkUrl(Uri.parse(url));
     await _videoController!.initialize();
+    
     await _videoController!.setVolume(1.0);
     await _videoController!.setPlaybackSpeed(1.0); // optional, but harmless
     _videoController!.setLooping(true);
@@ -295,45 +296,48 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
             const SizedBox(height: 12),
 
             if (_videoController != null && _videoController!.value.isInitialized)
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  AspectRatio(
-                    aspectRatio: _videoController!.value.aspectRatio,
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(12),
-                      child: VideoPlayer(_videoController!),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      IconButton(
-                        icon: Icon(
-                          _videoController!.value.isPlaying ? Icons.pause : Icons.play_arrow,
-                        ),
-                        onPressed: () {
-                          setState(() {
-                            if (_videoController!.value.isPlaying) {
-                              _videoController!.pause();
-                            } else {
-                              _videoController!.play();
-                            }
-                          });
-                        },
-                      ),
-                      const Spacer(),
-                      if (_formVideoUrl != null && _formVideoUrl!.isNotEmpty)
-                        const Text("Saved ✓", style: TextStyle(fontWeight: FontWeight.w600)),
-                    ],
-                  ),
-                  if (_formVideoUrl != null && _formVideoUrl!.isNotEmpty)
-                    SelectableText(
-                      _formVideoUrl!,
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
-                ],
-              )
+  Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      AspectRatio(
+        aspectRatio: _videoController!.value.aspectRatio,
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: VideoPlayer(_videoController!),
+        ),
+      ),
+      const SizedBox(height: 8),
+      Row(
+        children: [
+          IconButton(
+            icon: Icon(
+              _videoController!.value.isPlaying ? Icons.pause : Icons.play_arrow,
+            ),
+            onPressed: () async {
+              if (_videoController!.value.isPlaying) {
+                await _videoController!.pause();
+              } else {
+                await _videoController!.setVolume(1.0);
+                await _videoController!.play();
+              }
+              if (mounted) setState(() {});
+            },
+          ),
+          const Spacer(),
+          const Text("Saved ✓"),
+        ],
+      ),
+
+      // 👇 DEBUG INFO GOES HERE
+      Text(
+        "vol=${_videoController!.value.volume}  "
+        "dur=${_videoController!.value.duration.inSeconds}s  "
+        "playing=${_videoController!.value.isPlaying}",
+        style: Theme.of(context).textTheme.bodySmall,
+      ),
+    ],
+  )
+
             else
               Text(
                 _formVideoUrl == null
