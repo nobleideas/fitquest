@@ -98,18 +98,20 @@ class _HomePageState extends State<HomePage> {
   String _formatDate(DateTime d) => '${d.month}/${d.day}/${d.year}';
 
   List<MapEntry<DateTime, _DayWorkoutSummary>> _filteredEntries() {
-    return summaryByDay.entries
-        .where((e) => _matchesFilter(e.value))
-        .toList();
+    return summaryByDay.entries.where((e) => _matchesFilter(e.value)).toList();
   }
 
-  /// Builds a shareable text block from the currently filtered workouts.
   String _buildShareText(List<MapEntry<DateTime, _DayWorkoutSummary>> entries) {
     final filterName = _filterLabel(_selectedFilter);
     final b = StringBuffer();
 
     b.writeln('Fit Quest — Workout Summary ($filterName)');
     b.writeln('');
+
+    if (entries.isEmpty) {
+      b.writeln('No workouts found for this filter.');
+      return b.toString().trim();
+    }
 
     for (final entry in entries) {
       final date = entry.key;
@@ -125,18 +127,13 @@ class _HomePageState extends State<HomePage> {
       }
 
       if (s.exerciseNames.isNotEmpty) {
-  b.writeln('Exercises:');
-  for (final name in s.exerciseNames) {
-    b.writeln('• $name');
-  }
-}
+        b.writeln('Exercises:');
+        for (final name in s.exerciseNames) {
+          b.writeln('• $name');
+        }
+      }
 
-
-      b.writeln(''); // blank line between days
-    }
-
-    if (entries.isEmpty) {
-      b.writeln('No workouts found for this filter.');
+      b.writeln('');
     }
 
     return b.toString().trim();
@@ -144,13 +141,52 @@ class _HomePageState extends State<HomePage> {
 
   Future<void> _shareFilteredWorkouts() async {
     final entries = _filteredEntries();
-
     final text = _buildShareText(entries);
 
-    // Optional: share the current page position (mobile). If context is missing, Share.share still works.
     await Share.share(
       text,
       subject: 'Workout Summary (${_filterLabel(_selectedFilter)})',
+    );
+  }
+
+  Widget _buildFilterBar() {
+    return Row(
+      children: _WorkoutFilter.values.map((f) {
+        final isSelected = _selectedFilter == f;
+
+        return Expanded(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 2),
+            child: OutlinedButton(
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 10),
+                backgroundColor: isSelected
+                    ? Theme.of(context).colorScheme.primary.withOpacity(0.15)
+                    : null,
+                side: BorderSide(
+                  color: isSelected
+                      ? Theme.of(context).colorScheme.primary
+                      : Theme.of(context).dividerColor,
+                ),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+              onPressed: () => setState(() => _selectedFilter = f),
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Text(
+                  _filterLabel(f),
+                  style: TextStyle(
+                    fontWeight: isSelected ? FontWeight.bold : FontWeight.w600,
+                    color: isSelected ? Theme.of(context).colorScheme.primary : null,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      }).toList(),
     );
   }
 
@@ -188,6 +224,7 @@ class _HomePageState extends State<HomePage> {
         }
       }
 
+      // keep newest -> oldest, remove duplicates while preserving order
       final orderedUniqueDays = <DateTime>[];
       for (final d in workoutDays) {
         if (!orderedUniqueDays.contains(d)) orderedUniqueDays.add(d);
@@ -285,26 +322,11 @@ class _HomePageState extends State<HomePage> {
           ),
           const SizedBox(height: 12),
 
-          // ---------- Filter Buttons ----------
-          SingleChildScrollView(
-  scrollDirection: Axis.horizontal,
-  child: Row(
-    children: _WorkoutFilter.values.map((f) {
-      final selected = _selectedFilter == f;
-      return Padding(
-        padding: const EdgeInsets.only(right: 8),
-        child: ChoiceChip(
-          label: Text(_filterLabel(f)),
-          selected: selected,
-          onSelected: (_) => setState(() => _selectedFilter = f),
-        ),
-      );
-    }).toList(),
-  ),
-),
-
+          // ---------- Equal-width filter bar ----------
+          _buildFilterBar(),
           const SizedBox(height: 16),
 
+          // ---------- Existing behavior ----------
           if (summaryByDay.isEmpty)
             const Text('No workouts logged yet.')
           else if (entries.isEmpty)
@@ -314,6 +336,7 @@ class _HomePageState extends State<HomePage> {
               final date = entry.key;
               final s = entry.value;
 
+              // Muscle chips ordered high->low
               final muscleEntries = s.muscleGroupCounts.entries.toList()
                 ..sort((a, b) => b.value.compareTo(a.value));
 
