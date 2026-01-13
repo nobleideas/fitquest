@@ -16,23 +16,48 @@ class _ProfilePageState extends State<ProfilePage> {
 
   bool _isSavingGoal = false;
 
+  static const _goalOptions = <String, String>{
+    'lose_weight': 'Lose Weight',
+    'gain_mass': 'Gain Mass',
+    'gain_strength': 'Gain Strength',
+  };
+
+  String _goalLabel(String? goal) {
+    if (goal == null) return 'Not set';
+    return _goalOptions[goal] ?? goal;
+  }
+
   Future<void> _editGoal(BuildContext context, Map<String, dynamic> profile) async {
-    final currentGoal = (profile['goal'] ?? '').toString();
+    final currentGoal = (profile['goal'] as String?) ?? 'gain_strength';
 
-    final controller = TextEditingController(text: currentGoal);
+    String tempSelection = currentGoal;
 
-    final newGoal = await showDialog<String>(
+    final selected = await showDialog<String>(
       context: context,
       builder: (_) => AlertDialog(
         title: const Text('Edit Goal'),
-        content: TextField(
-          controller: controller,
-          maxLines: 3,
-          decoration: const InputDecoration(
-            labelText: 'Your goal',
-            border: OutlineInputBorder(),
-            hintText: 'e.g., Lose 10 lbs, Bench 225, Run a 5k...',
-          ),
+        content: StatefulBuilder(
+          builder: (context, setLocalState) {
+            return DropdownButtonFormField<String>(
+              value: tempSelection,
+              items: _goalOptions.entries
+                  .map(
+                    (e) => DropdownMenuItem(
+                      value: e.key,
+                      child: Text(e.value),
+                    ),
+                  )
+                  .toList(),
+              onChanged: (val) {
+                if (val == null) return;
+                setLocalState(() => tempSelection = val);
+              },
+              decoration: const InputDecoration(
+                labelText: 'Goal',
+                border: OutlineInputBorder(),
+              ),
+            );
+          },
         ),
         actions: [
           TextButton(
@@ -40,21 +65,21 @@ class _ProfilePageState extends State<ProfilePage> {
             child: const Text('Cancel'),
           ),
           ElevatedButton(
-            onPressed: () => Navigator.pop(context, controller.text.trim()),
+            onPressed: () => Navigator.pop(context, tempSelection),
             child: const Text('Save'),
           ),
         ],
       ),
     );
 
-    if (newGoal == null) return; // cancelled
+    if (selected == null) return;
 
     setState(() => _isSavingGoal = true);
 
     try {
       await supabase
           .from('profiles')
-          .update({'goal': newGoal.isEmpty ? null : newGoal})
+          .update({'goal': selected})
           .eq('id', supabase.auth.currentUser!.id);
 
       if (!mounted) return;
@@ -62,7 +87,7 @@ class _ProfilePageState extends State<ProfilePage> {
         const SnackBar(content: Text('Goal updated')),
       );
 
-      // Trigger FutureBuilder to refetch
+      // refetch in FutureBuilder
       setState(() {});
     } on PostgrestException catch (e) {
       if (!mounted) return;
@@ -84,7 +109,7 @@ class _ProfilePageState extends State<ProfilePage> {
     final user = supabase.auth.currentUser;
 
     return FutureBuilder(
-      key: ValueKey(_isSavingGoal), // simple rebuild trigger after save
+      // cheap way to refetch after setState()
       future: supabase.from('profiles').select().eq('id', user!.id).single(),
       builder: (context, snapshot) {
         if (!snapshot.hasData) {
@@ -97,7 +122,7 @@ class _ProfilePageState extends State<ProfilePage> {
         final progress = XPUtils.levelProgress(xp);
         final rank = XPUtils.computeRank(xp);
 
-        final goal = (profile['goal'] as String?)?.trim();
+        final goal = profile['goal'] as String?;
 
         return SingleChildScrollView(
           padding: const EdgeInsets.all(20),
@@ -153,13 +178,9 @@ class _ProfilePageState extends State<ProfilePage> {
                                   ),
                                   const SizedBox(height: 6),
                                   Text(
-                                    (goal == null || goal.isEmpty)
-                                        ? "No goal set yet."
-                                        : goal,
+                                    _goalLabel(goal),
                                     style: TextStyle(
-                                      color: (goal == null || goal.isEmpty)
-                                          ? Colors.grey
-                                          : null,
+                                      color: goal == null ? Colors.grey : null,
                                     ),
                                   ),
                                 ],
@@ -167,9 +188,8 @@ class _ProfilePageState extends State<ProfilePage> {
                             ),
                             const SizedBox(width: 10),
                             TextButton.icon(
-                              onPressed: _isSavingGoal
-                                  ? null
-                                  : () => _editGoal(context, profile),
+                              onPressed:
+                                  _isSavingGoal ? null : () => _editGoal(context, profile),
                               icon: _isSavingGoal
                                   ? const SizedBox(
                                       width: 16,
@@ -222,6 +242,7 @@ class _ProfilePageState extends State<ProfilePage> {
                 style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 20),
+
               _xpBar("Back", profile['xp_back'] ?? 0),
               _xpBar("Chest", profile['xp_chest'] ?? 0),
               _xpBar("Shoulders", profile['xp_shoulders'] ?? 0),
