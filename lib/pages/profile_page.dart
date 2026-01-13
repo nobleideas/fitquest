@@ -1,7 +1,6 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import '../utils/xp_utils.dart';
 import 'gym_list_page.dart';
 
 class ProfilePage extends StatefulWidget {
@@ -14,6 +13,7 @@ class ProfilePage extends StatefulWidget {
 class _ProfilePageState extends State<ProfilePage> {
   final supabase = Supabase.instance.client;
 
+  // Goal editing state (dropdown)
   bool _isSavingGoal = false;
 
   static const _goalOptions = <String, String>{
@@ -22,14 +22,71 @@ class _ProfilePageState extends State<ProfilePage> {
     'gain_strength': 'Gain Strength',
   };
 
-  String _goalLabel(String? goal) {
-    if (goal == null) return 'Not set';
-    return _goalOptions[goal] ?? goal;
+  String _goalLabel(String? goal) => _goalOptions[goal] ?? (goal ?? 'Not set');
+
+  // ---- Level math based on total volume (weight * reps) ----
+  // Tune this later. Pick something that feels good with real data.
+  static const double _volumePerLevel = 25000.0;
+
+  int _computeLevel(double totalVolume) {
+    return max(1, (totalVolume / _volumePerLevel).floor() + 1);
+  }
+
+  double _levelProgress(double totalVolume) {
+    final mod = totalVolume % _volumePerLevel;
+    return (mod / _volumePerLevel).clamp(0.0, 1.0);
+  }
+
+  String _computeRank(int level) {
+    if (level >= 40) return "Legend";
+    if (level >= 25) return "Elite";
+    if (level >= 15) return "Advanced";
+    if (level >= 7) return "Intermediate";
+    return "Beginner";
+  }
+
+  Future<Map<String, dynamic>> _loadData() async {
+  final user = supabase.auth.currentUser!;
+
+  final Future<dynamic> profileFuture =
+      supabase.from('profiles').select().eq('id', user.id).single();
+
+  final Future<dynamic> volumeFuture =
+      supabase.rpc('get_training_volume_summary');
+
+  final List<dynamic> results = await Future.wait<dynamic>([
+    profileFuture,
+    volumeFuture,
+  ]);
+
+  final profile = Map<String, dynamic>.from(results[0] as Map);
+
+  final volRaw = results[1];
+  Map<String, dynamic> volRow;
+
+  if (volRaw is List && volRaw.isNotEmpty) {
+    volRow = Map<String, dynamic>.from(volRaw.first as Map);
+  } else if (volRaw is Map) {
+    volRow = Map<String, dynamic>.from(volRaw);
+  } else {
+    volRow = {};
+  }
+
+  return {
+    'profile': profile,
+    'volume': volRow,
+  };
+}
+
+
+  double _numToDouble(dynamic v) {
+    if (v == null) return 0.0;
+    if (v is num) return v.toDouble();
+    return double.tryParse(v.toString()) ?? 0.0;
   }
 
   Future<void> _editGoal(BuildContext context, Map<String, dynamic> profile) async {
     final currentGoal = (profile['goal'] as String?) ?? 'gain_strength';
-
     String tempSelection = currentGoal;
 
     final selected = await showDialog<String>(
@@ -41,12 +98,7 @@ class _ProfilePageState extends State<ProfilePage> {
             return DropdownButtonFormField<String>(
               value: tempSelection,
               items: _goalOptions.entries
-                  .map(
-                    (e) => DropdownMenuItem(
-                      value: e.key,
-                      child: Text(e.value),
-                    ),
-                  )
+                  .map((e) => DropdownMenuItem(value: e.key, child: Text(e.value)))
                   .toList(),
               onChanged: (val) {
                 if (val == null) return;
@@ -60,10 +112,7 @@ class _ProfilePageState extends State<ProfilePage> {
           },
         ),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
           ElevatedButton(
             onPressed: () => Navigator.pop(context, tempSelection),
             child: const Text('Save'),
@@ -77,52 +126,63 @@ class _ProfilePageState extends State<ProfilePage> {
     setState(() => _isSavingGoal = true);
 
     try {
-      await supabase
-          .from('profiles')
-          .update({'goal': selected})
-          .eq('id', supabase.auth.currentUser!.id);
+      await supabase.from('profiles').update({'goal': selected}).eq('id', supabase.auth.currentUser!.id);
 
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Goal updated')),
-      );
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Goal updated')));
 
-      // refetch in FutureBuilder
-      setState(() {});
-    } on PostgrestException catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Update failed: ${e.message}')),
-      );
+      setState(() {}); // refetch
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Update failed: $e')),
-      );
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Update failed: $e')));
     } finally {
       if (mounted) setState(() => _isSavingGoal = false);
     }
   }
 
+  Widget _volumeBar(String label, double volume) {
+    // A per-muscle "target" for the progress bar. Tune later.
+    const double target = 25000.0;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('$label — ${volume.toStringAsFixed(0)} total lbs', style: const TextStyle(fontSize: 16)),
+        const SizedBox(height: 4),
+        LinearProgressIndicator(
+          value: (volume / target).clamp(0.0, 1.0),
+          minHeight: 10,
+        ),
+        const SizedBox(height: 20),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final user = supabase.auth.currentUser;
-
-    return FutureBuilder(
-      // cheap way to refetch after setState()
-      future: supabase.from('profiles').select().eq('id', user!.id).single(),
+    return FutureBuilder<Map<String, dynamic>>(
+      future: _loadData(),
       builder: (context, snapshot) {
         if (!snapshot.hasData) {
           return const Center(child: CircularProgressIndicator());
         }
 
-        final profile = snapshot.data as Map<String, dynamic>;
-        final xp = XPUtils.totalXP(profile);
-        final level = XPUtils.computeLevel(xp);
-        final progress = XPUtils.levelProgress(xp);
-        final rank = XPUtils.computeRank(xp);
+        final profile = snapshot.data!['profile'] as Map<String, dynamic>;
+        final vol = snapshot.data!['volume'] as Map<String, dynamic>;
+
+        final totalVol = _numToDouble(vol['total_volume']);
+        final level = _computeLevel(totalVol);
+        final progress = _levelProgress(totalVol);
+        final rank = _computeRank(level);
 
         final goal = profile['goal'] as String?;
+
+        final back = _numToDouble(vol['volume_back']);
+        final chest = _numToDouble(vol['volume_chest']);
+        final shoulders = _numToDouble(vol['volume_shoulders']);
+        final arms = _numToDouble(vol['volume_arms']);
+        final legs = _numToDouble(vol['volume_legs']);
+        final core = _numToDouble(vol['volume_core']);
 
         return SingleChildScrollView(
           padding: const EdgeInsets.all(20),
@@ -134,10 +194,7 @@ class _ProfilePageState extends State<ProfilePage> {
                   children: [
                     Text(
                       rank,
-                      style: const TextStyle(
-                        fontSize: 32,
-                        fontWeight: FontWeight.bold,
-                      ),
+                      style: const TextStyle(fontSize: 32, fontWeight: FontWeight.bold),
                     ),
                     const SizedBox(height: 8),
                     Text(
@@ -150,14 +207,17 @@ class _ProfilePageState extends State<ProfilePage> {
                       minHeight: 12,
                       borderRadius: BorderRadius.circular(10),
                     ),
+                    const SizedBox(height: 10),
+                    Text(
+                      "Total Volume: ${totalVol.toStringAsFixed(0)} lbs",
+                      style: const TextStyle(color: Colors.grey),
+                    ),
 
                     // -------- Goal Card --------
                     const SizedBox(height: 16),
                     Card(
                       elevation: 2,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                       child: Padding(
                         padding: const EdgeInsets.all(14),
                         child: Row(
@@ -171,25 +231,16 @@ class _ProfilePageState extends State<ProfilePage> {
                                 children: [
                                   const Text(
                                     "Goal",
-                                    style: TextStyle(
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.bold,
-                                    ),
+                                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                                   ),
                                   const SizedBox(height: 6),
-                                  Text(
-                                    _goalLabel(goal),
-                                    style: TextStyle(
-                                      color: goal == null ? Colors.grey : null,
-                                    ),
-                                  ),
+                                  Text(_goalLabel(goal)),
                                 ],
                               ),
                             ),
                             const SizedBox(width: 10),
                             TextButton.icon(
-                              onPressed:
-                                  _isSavingGoal ? null : () => _editGoal(context, profile),
+                              onPressed: _isSavingGoal ? null : () => _editGoal(context, profile),
                               icon: _isSavingGoal
                                   ? const SizedBox(
                                       width: 16,
@@ -209,10 +260,7 @@ class _ProfilePageState extends State<ProfilePage> {
                       width: double.infinity,
                       child: ElevatedButton.icon(
                         onPressed: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(builder: (_) => const GymListPage()),
-                          );
+                          Navigator.push(context, MaterialPageRoute(builder: (_) => const GymListPage()));
                         },
                         icon: const Icon(Icons.list),
                         label: const Text("My Gyms"),
@@ -224,11 +272,9 @@ class _ProfilePageState extends State<ProfilePage> {
                       child: OutlinedButton.icon(
                         icon: const Icon(Icons.logout),
                         label: const Text("Log Out"),
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: Colors.red,
-                        ),
+                        style: OutlinedButton.styleFrom(foregroundColor: Colors.red),
                         onPressed: () async {
-                          await Supabase.instance.client.auth.signOut();
+                          await supabase.auth.signOut();
                         },
                       ),
                     ),
@@ -236,35 +282,24 @@ class _ProfilePageState extends State<ProfilePage> {
                   ],
                 ),
               ),
+
               const SizedBox(height: 10),
               const Text(
-                "Muscle Group XP",
+                "Muscle Group Volume",
                 style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 20),
 
-              _xpBar("Back", profile['xp_back'] ?? 0),
-              _xpBar("Chest", profile['xp_chest'] ?? 0),
-              _xpBar("Shoulders", profile['xp_shoulders'] ?? 0),
-              _xpBar("Arms", profile['xp_arms'] ?? 0),
-              _xpBar("Legs", profile['xp_legs'] ?? 0),
-              _xpBar("Core", profile['xp_core'] ?? 0),
+              _volumeBar("Back", back),
+              _volumeBar("Chest", chest),
+              _volumeBar("Shoulders", shoulders),
+              _volumeBar("Arms", arms),
+              _volumeBar("Legs", legs),
+              _volumeBar("Core", core),
             ],
           ),
         );
       },
-    );
-  }
-
-  Widget _xpBar(String label, int xp) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text("$label — $xp XP", style: const TextStyle(fontSize: 16)),
-        const SizedBox(height: 4),
-        LinearProgressIndicator(value: min(xp / 5000, 1), minHeight: 10),
-        const SizedBox(height: 20),
-      ],
     );
   }
 }
