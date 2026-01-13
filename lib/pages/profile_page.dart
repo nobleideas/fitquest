@@ -4,19 +4,88 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../utils/xp_utils.dart';
 import 'gym_list_page.dart';
 
-class ProfilePage extends StatelessWidget {
+class ProfilePage extends StatefulWidget {
   const ProfilePage({super.key});
 
   @override
+  State<ProfilePage> createState() => _ProfilePageState();
+}
+
+class _ProfilePageState extends State<ProfilePage> {
+  final supabase = Supabase.instance.client;
+
+  bool _isSavingGoal = false;
+
+  Future<void> _editGoal(BuildContext context, Map<String, dynamic> profile) async {
+    final currentGoal = (profile['goal'] ?? '').toString();
+
+    final controller = TextEditingController(text: currentGoal);
+
+    final newGoal = await showDialog<String>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Edit Goal'),
+        content: TextField(
+          controller: controller,
+          maxLines: 3,
+          decoration: const InputDecoration(
+            labelText: 'Your goal',
+            border: OutlineInputBorder(),
+            hintText: 'e.g., Lose 10 lbs, Bench 225, Run a 5k...',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, controller.text.trim()),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+
+    if (newGoal == null) return; // cancelled
+
+    setState(() => _isSavingGoal = true);
+
+    try {
+      await supabase
+          .from('profiles')
+          .update({'goal': newGoal.isEmpty ? null : newGoal})
+          .eq('id', supabase.auth.currentUser!.id);
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Goal updated')),
+      );
+
+      // Trigger FutureBuilder to refetch
+      setState(() {});
+    } on PostgrestException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Update failed: ${e.message}')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Update failed: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _isSavingGoal = false);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final user = Supabase.instance.client.auth.currentUser;
+    final user = supabase.auth.currentUser;
 
     return FutureBuilder(
-      future: Supabase.instance.client
-          .from('profiles')
-          .select()
-          .eq('id', user!.id)
-          .single(),
+      key: ValueKey(_isSavingGoal), // simple rebuild trigger after save
+      future: supabase.from('profiles').select().eq('id', user!.id).single(),
       builder: (context, snapshot) {
         if (!snapshot.hasData) {
           return const Center(child: CircularProgressIndicator());
@@ -27,6 +96,8 @@ class ProfilePage extends StatelessWidget {
         final level = XPUtils.computeLevel(xp);
         final progress = XPUtils.levelProgress(xp);
         final rank = XPUtils.computeRank(xp);
+
+        final goal = (profile['goal'] as String?)?.trim();
 
         return SingleChildScrollView(
           padding: const EdgeInsets.all(20),
@@ -54,6 +125,65 @@ class ProfilePage extends StatelessWidget {
                       minHeight: 12,
                       borderRadius: BorderRadius.circular(10),
                     ),
+
+                    // -------- Goal Card --------
+                    const SizedBox(height: 16),
+                    Card(
+                      elevation: 2,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.all(14),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Icon(Icons.flag_outlined),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Text(
+                                    "Goal",
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    (goal == null || goal.isEmpty)
+                                        ? "No goal set yet."
+                                        : goal,
+                                    style: TextStyle(
+                                      color: (goal == null || goal.isEmpty)
+                                          ? Colors.grey
+                                          : null,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            TextButton.icon(
+                              onPressed: _isSavingGoal
+                                  ? null
+                                  : () => _editGoal(context, profile),
+                              icon: _isSavingGoal
+                                  ? const SizedBox(
+                                      width: 16,
+                                      height: 16,
+                                      child: CircularProgressIndicator(strokeWidth: 2),
+                                    )
+                                  : const Icon(Icons.edit),
+                              label: const Text("Edit"),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+
                     const SizedBox(height: 16),
                     SizedBox(
                       width: double.infinity,
@@ -61,9 +191,7 @@ class ProfilePage extends StatelessWidget {
                         onPressed: () {
                           Navigator.push(
                             context,
-                            MaterialPageRoute(
-                              builder: (_) => const GymListPage(),
-                            ),
+                            MaterialPageRoute(builder: (_) => const GymListPage()),
                           );
                         },
                         icon: const Icon(Icons.list),
@@ -94,7 +222,6 @@ class ProfilePage extends StatelessWidget {
                 style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 20),
-
               _xpBar("Back", profile['xp_back'] ?? 0),
               _xpBar("Chest", profile['xp_chest'] ?? 0),
               _xpBar("Shoulders", profile['xp_shoulders'] ?? 0),

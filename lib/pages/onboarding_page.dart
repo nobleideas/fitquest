@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../services/profile_service.dart';
-import 'main_shell.dart'; // <-- Update path if needed
 
 class OnboardingPage extends StatefulWidget {
   const OnboardingPage({super.key});
@@ -12,7 +11,7 @@ class OnboardingPage extends StatefulWidget {
 
 class _OnboardingPageState extends State<OnboardingPage> {
   final _usernameController = TextEditingController();
-  String _selectedGoal = 'gain_strength'; // default
+  String _selectedGoal = 'gain_strength';
   bool _isLoading = false;
 
   Future<void> _submit() async {
@@ -29,21 +28,30 @@ class _OnboardingPageState extends State<OnboardingPage> {
 
     setState(() => _isLoading = true);
 
-    await ProfileService().createProfile(
-      userId: user.id,
-      username: username,
-      goal: _selectedGoal,
-    );
-
-    setState(() => _isLoading = false);
-
-    // Navigate to Profile Page
-    if (mounted) {
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (_) => const MainShell()),
+    try {
+      await ProfileService().createProfile(
+        userId: user.id,
+        username: username,
+        goal: _selectedGoal,
       );
+
+      if (!mounted) return;
+
+      // ✅ Let AuthGate decide where to go next (it will see goal is set and go to MainShell)
+      Navigator.of(context).pushNamedAndRemoveUntil('/', (route) => false);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Setup failed: $e")),
+      );
+      setState(() => _isLoading = false);
     }
+  }
+
+  @override
+  void dispose() {
+    _usernameController.dispose();
+    super.dispose();
   }
 
   @override
@@ -51,7 +59,7 @@ class _OnboardingPageState extends State<OnboardingPage> {
     return Scaffold(
       appBar: AppBar(
         title: const Text("Welcome!"),
-        automaticallyImplyLeading: false, // prevent back button
+        automaticallyImplyLeading: false,
       ),
       body: Padding(
         padding: const EdgeInsets.all(24.0),
@@ -64,7 +72,6 @@ class _OnboardingPageState extends State<OnboardingPage> {
             ),
             const SizedBox(height: 24),
 
-            // Username
             TextField(
               controller: _usernameController,
               decoration: const InputDecoration(
@@ -75,32 +82,28 @@ class _OnboardingPageState extends State<OnboardingPage> {
 
             const SizedBox(height: 24),
 
-            // Goal dropdown
             const Text("Your Goal", style: TextStyle(fontSize: 16)),
             const SizedBox(height: 8),
+
             DropdownButtonFormField<String>(
               value: _selectedGoal,
               items: const [
-                DropdownMenuItem(
-                    value: 'lose_weight', child: Text("Lose Weight")),
-                DropdownMenuItem(
-                    value: 'gain_mass', child: Text("Gain Mass")),
-                DropdownMenuItem(
-                    value: 'gain_strength', child: Text("Gain Strength")),
+                DropdownMenuItem(value: 'lose_weight', child: Text("Lose Weight")),
+                DropdownMenuItem(value: 'gain_mass', child: Text("Gain Mass")),
+                DropdownMenuItem(value: 'gain_strength', child: Text("Gain Strength")),
               ],
-              onChanged: (val) {
-                if (val != null) {
-                  setState(() => _selectedGoal = val);
-                }
-              },
-              decoration: const InputDecoration(
-                border: OutlineInputBorder(),
-              ),
+              onChanged: _isLoading
+                  ? null
+                  : (val) {
+                      if (val != null) setState(() => _selectedGoal = val);
+                    },
+              decoration: const InputDecoration(border: OutlineInputBorder()),
             ),
 
             const SizedBox(height: 40),
 
-            Center(
+            SizedBox(
+              width: double.infinity,
               child: ElevatedButton(
                 onPressed: _isLoading ? null : _submit,
                 child: _isLoading
