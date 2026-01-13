@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_application_template_1/services/gym_service.dart';
+import 'package:fit_quest/services/gym_service.dart';
 import '../services/equipment_service.dart';
 import 'exercise_list_page.dart';
 
