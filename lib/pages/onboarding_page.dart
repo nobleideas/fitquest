@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../services/profile_service.dart';
-import 'profile_page.dart'; // <-- Update path if needed
+import 'main_shell.dart'; // <-- Update path if needed
 
 class OnboardingPage extends StatefulWidget {
   const OnboardingPage({super.key});
@@ -41,7 +41,7 @@ class _OnboardingPageState extends State<OnboardingPage> {
     if (mounted) {
       Navigator.pushReplacement(
         context,
-        MaterialPageRoute(builder: (_) => const ProfilePage()),
+        MaterialPageRoute(builder: (_) => const MainShell()),
       );
     }
   }
