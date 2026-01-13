@@ -125,8 +125,12 @@ class _HomePageState extends State<HomePage> {
       }
 
       if (s.exerciseNames.isNotEmpty) {
-        b.writeln('Exercises: ${s.exerciseNames.join(', ')}');
-      }
+  b.writeln('Exercises:');
+  for (final name in s.exerciseNames) {
+    b.writeln('• $name');
+  }
+}
+
 
       b.writeln(''); // blank line between days
     }
@@ -282,18 +286,23 @@ class _HomePageState extends State<HomePage> {
           const SizedBox(height: 12),
 
           // ---------- Filter Buttons ----------
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: _WorkoutFilter.values.map((f) {
-              final selected = _selectedFilter == f;
-              return ChoiceChip(
-                label: Text(_filterLabel(f)),
-                selected: selected,
-                onSelected: (_) => setState(() => _selectedFilter = f),
-              );
-            }).toList(),
-          ),
+          SingleChildScrollView(
+  scrollDirection: Axis.horizontal,
+  child: Row(
+    children: _WorkoutFilter.values.map((f) {
+      final selected = _selectedFilter == f;
+      return Padding(
+        padding: const EdgeInsets.only(right: 8),
+        child: ChoiceChip(
+          label: Text(_filterLabel(f)),
+          selected: selected,
+          onSelected: (_) => setState(() => _selectedFilter = f),
+        ),
+      );
+    }).toList(),
+  ),
+),
+
           const SizedBox(height: 16),
 
           if (summaryByDay.isEmpty)
