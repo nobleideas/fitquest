@@ -26,38 +26,45 @@ class SessionService {
 
   Future<List<DateTime>> getLast3SessionDates(String exerciseId) async {
   final user = supabase.auth.currentUser!;
-  
+
   final res = await supabase
       .from('exercise_sessions')
       .select('created_at')
       .eq('exercise_id', exerciseId)
       .eq('user_id', user.id)
       .order('created_at', ascending: false)
-      .limit(1000); // fetch enough rows
+      .limit(1000); // enough rows to find last 3 distinct days
 
-  // Extract distinct dates
-  final dates = <DateTime>{};
-  for (var row in res) {
-    final date = DateTime.parse(row['created_at']).toLocal();
-    dates.add(DateTime(date.year, date.month, date.day, date.hour, date.minute, date.second));
+  final seenDayKeys = <String>{};
+  final days = <DateTime>[];
+
+  for (final row in res) {
+    final createdLocal = DateTime.parse(row['created_at']).toLocal();
+    final dayLocal = DateTime(createdLocal.year, createdLocal.month, createdLocal.day); // midnight local
+    final key = '${dayLocal.year}-${dayLocal.month}-${dayLocal.day}';
+
+    if (seenDayKeys.add(key)) {
+      days.add(dayLocal);
+      if (days.length == 3) break;
+    }
   }
 
-  final sortedDates = dates.toList()
-    ..sort((a, b) => b.compareTo(a)); // descending
-
-  return sortedDates.take(3).toList();
-  }
+  return days; // already in newest-first order because query is desc
+}
 
   Future<List<Map<String, dynamic>>> getSessionsForDate(
-    String exerciseId, DateTime date) async {
+  String exerciseId,
+  DateTime dayLocal,
+) async {
   final user = supabase.auth.currentUser!;
 
-  // Start and end of day in UTC
-  final startUtc = (DateTime.utc(date.year, date.month, date.day, date.hour, date.minute, date.second));
-  final endUtc = startUtc.add(const Duration(days: 1));
+  // Ensure dayLocal is treated as local midnight
+  final startLocal = DateTime(dayLocal.year, dayLocal.month, dayLocal.day);
+  final endLocal = startLocal.add(const Duration(days: 1));
 
-  print(startUtc.toIso8601String());
-  print(endUtc.toIso8601String());
+  // Convert local boundaries to UTC instants for DB query
+  final startUtc = startLocal.toUtc();
+  final endUtc = endLocal.toUtc();
 
   final res = await supabase
       .from('exercise_sessions')
@@ -66,10 +73,10 @@ class SessionService {
       .eq('user_id', user.id)
       .gte('created_at', startUtc.toIso8601String())
       .lt('created_at', endUtc.toIso8601String())
-      .order('created_at', ascending: true);
+      .order('created_at', ascending: false); // newest first
 
   return List<Map<String, dynamic>>.from(res);
-  }
+}
 
   Future<void> deleteSession(String sessionId) async {
   await supabase.from('exercise_sessions').delete().eq('id', sessionId);

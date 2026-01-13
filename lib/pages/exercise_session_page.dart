@@ -406,7 +406,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
                             title: Text("No sessions found for this day."),
                           ),
                         ]
-                      : sessions.reversed.map((s) {
+                      : sessions.map((s) {
                           return Dismissible(
                             key: Key(s['id'].toString()),
                             direction: DismissDirection.endToStart,
