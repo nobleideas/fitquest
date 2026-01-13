@@ -1,17 +1,19 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+
 import 'auth_page.dart';
 import 'pages/main_shell.dart';
 import 'pages/onboarding_page.dart';
+import 'pages/reset_password_page.dart';
 import 'services/profile_service.dart';
-
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   await Supabase.initialize(
     url: 'https://innhkmqtrdxpsggxutxw.supabase.co',
-    anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlubmhrbXF0cmR4cHNnZ3h1dHh3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjEzMzU0MjgsImV4cCI6MjA3NjkxMTQyOH0.zdYjjpHiEW03cp_MHOuzZHXFzTKQSrdBkmugUQhscWI',
+    anonKey:
+        'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlubmhrbXF0cmR4cHNnZ3h1dHh3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjEzMzU0MjgsImV4cCI6MjA3NjkxMTQyOH0.zdYjjpHiEW03cp_MHOuzZHXFzTKQSrdBkmugUQhscWI',
   );
 
   runApp(const MyApp());
@@ -26,7 +28,17 @@ class MyApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       title: 'Fit Quest',
       theme: ThemeData(primarySwatch: Colors.deepPurple),
-      home: const AuthGate(),
+
+      // Routes for web deep links (including Supabase recovery redirect)
+      initialRoute: '/',
+      onGenerateRoute: (settings) {
+        if (settings.name == '/reset-password') {
+          return MaterialPageRoute(builder: (_) => const ResetPasswordPage());
+        }
+
+        // default
+        return MaterialPageRoute(builder: (_) => const AuthGate());
+      },
     );
   }
 }
@@ -65,17 +77,9 @@ class _AuthGateState extends State<AuthGate> {
 
             final profile = profileSnap.data;
 
-            // ---- PROFILE DOES NOT EXIST ----
-            if (profile == null) {
-              return const OnboardingPage(); // create profile
-            }
+            if (profile == null) return const OnboardingPage();
+            if (profile['goal'] == null) return const OnboardingPage();
 
-            // ---- PROFILE EXISTS BUT GOAL NOT SET ----
-            if (profile['goal'] == null) {
-              return const OnboardingPage();
-            }
-
-            // ---- ALL GOOD: GO TO HOME ----
             return const MainShell();
           },
         );
