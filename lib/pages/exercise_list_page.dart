@@ -42,9 +42,11 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
     });
   }
 
+  // ---------- ADD EXERCISE ----------
   Future<void> _addExercise() async {
     final nameController = TextEditingController();
 
+    // Default values
     String primaryMuscleGroup = 'back';
     String type = 'push';
 
@@ -82,9 +84,7 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
                         ],
                         onChanged: (val) {
                           if (val != null) {
-                            setDialogState(() {
-                              primaryMuscleGroup = val;
-                            });
+                            setDialogState(() => primaryMuscleGroup = val);
                           }
                         },
                       ),
@@ -103,9 +103,7 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
                         ],
                         onChanged: (val) {
                           if (val != null) {
-                            setDialogState(() {
-                              type = val;
-                            });
+                            setDialogState(() => type = val);
                           }
                         },
                       ),
@@ -130,6 +128,7 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
                       equipmentId: widget.equipmentId,
                     );
 
+                    if (!mounted) return;
                     Navigator.pop(context);
                     await _loadExercises();
                   },
@@ -143,6 +142,104 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
     );
   }
 
+  // ---------- EDIT EXERCISE NAME ----------
+  Future<void> _editExerciseName(Map<String, dynamic> exercise) async {
+    final currentName = (exercise['name'] ?? '').toString();
+    final controller = TextEditingController(text: currentName);
+
+    await showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text("Edit Exercise Name"),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(labelText: "Exercise Name"),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text("Cancel"),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              final newName = controller.text.trim();
+              if (newName.isEmpty) return;
+
+              final exerciseId = exercise['id'].toString();
+
+              await ExerciseService().updateExerciseName(
+                exerciseId: exerciseId,
+                name: newName,
+              );
+
+              if (!mounted) return;
+              Navigator.pop(context);
+              await _loadExercises();
+            },
+            child: const Text("Save"),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ---------- DELETE EXERCISE ----------
+  Future<void> _deleteExercise(Map<String, dynamic> exercise) async {
+  final name = (exercise['name'] ?? 'this exercise').toString();
+  final exerciseId = exercise['id'].toString();
+
+  // 1) Check if sessions exist
+  final sessionCount =
+      await ExerciseService().getSessionCountForExercise(exerciseId);
+
+  // 2) Show confirmation (different wording if sessions exist)
+  final confirm = await showDialog<bool>(
+    context: context,
+    builder: (_) => AlertDialog(
+      title: const Text("Delete Exercise?"),
+      content: Text(
+        sessionCount > 0
+            ? "“$name” has $sessionCount recorded session${sessionCount == 1 ? '' : 's'}.\n\n"
+              "Deleting this exercise will also delete those session${sessionCount == 1 ? '' : 's'}.\n\n"
+              "Do you want to continue?"
+            : "Are you sure you want to delete “$name”?",
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, false),
+          child: const Text("Cancel"),
+        ),
+        ElevatedButton(
+          onPressed: () => Navigator.pop(context, true),
+          child: const Text("Delete"),
+        ),
+      ],
+    ),
+  );
+
+  if (confirm != true) return;
+
+  // 3) Cascade delete
+  await ExerciseService().deleteExerciseCascade(exerciseId);
+
+  if (!mounted) return;
+  await _loadExercises();
+}
+
+
+  // ---------- MENU HANDLER ----------
+  Future<void> _onMenuSelected(String value, Map<String, dynamic> exercise) async {
+    switch (value) {
+      case 'edit':
+        await _editExerciseName(exercise);
+        break;
+      case 'delete':
+        await _deleteExercise(exercise);
+        break;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -151,7 +248,8 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
           ? const Center(child: CircularProgressIndicator())
           : exercises.isEmpty
               ? const Center(
-                  child: Text("No exercises available for this equipment."))
+                  child: Text("No exercises available for this equipment."),
+                )
               : ListView.builder(
                   itemCount: exercises.length,
                   itemBuilder: (context, index) {
@@ -160,14 +258,35 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
                     return ListTile(
                       title: Text(exercise['name']),
                       subtitle: Text(
-                          "${exercise['primary_muscle_group']} • ${exercise['type']}"),
-                      trailing: const Icon(Icons.fitness_center),
+                        "${exercise['primary_muscle_group']} • ${exercise['type']}",
+                      ),
+                      // Dumbbell icon + 3-dot menu
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.fitness_center),
+                          const SizedBox(width: 8),
+                          PopupMenuButton<String>(
+                            onSelected: (value) =>
+                                _onMenuSelected(value, exercise),
+                            itemBuilder: (context) => const [
+                              PopupMenuItem(
+                                value: 'edit',
+                                child: Text('Edit name'),
+                              ),
+                              PopupMenuItem(
+                                value: 'delete',
+                                child: Text('Delete'),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
                       onTap: () {
                         Navigator.push(
                           context,
                           MaterialPageRoute(
-                            builder: (_) =>
-                                ExerciseSessionPage(exercise: exercise),
+                            builder: (_) => ExerciseSessionPage(exercise: exercise),
                           ),
                         );
                       },
