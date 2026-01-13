@@ -72,7 +72,7 @@ class _AuthPageState extends State<AuthPage> {
                 try {
                   await supabase.auth.resetPasswordForEmail(
   emailController.text.trim(),
-  redirectTo: 'https://supabase-auth-sigma.vercel.app/reset-password',
+  redirectTo: 'https://supabase-auth-sigma.vercel.app/#/reset-password',
 );
 
                   setState(() => errorMessage = "Check your email to reset your password.");
