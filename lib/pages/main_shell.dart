@@ -13,10 +13,13 @@ class MainShell extends StatefulWidget {
 class _MainShellState extends State<MainShell> {
   int _index = 0;
 
-  final _pages = const [
-    HomePage(),
-    EquipmentListPage(),
-    ProfilePage(),
+  // ✅ NEW: key uses the PUBLIC HomePageState type
+  final GlobalKey<HomePageState> _homeKey = GlobalKey<HomePageState>();
+
+  late final List<Widget> _pages = [
+    HomePage(key: _homeKey),
+    const EquipmentListPage(),
+    const ProfilePage(),
   ];
 
   String get _title {
@@ -32,6 +35,13 @@ class _MainShellState extends State<MainShell> {
     }
   }
 
+  void _onTap(int i) {
+    if (i == 0) {
+      _homeKey.currentState?.refresh();
+    }
+    setState(() => _index = i);
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -42,7 +52,7 @@ class _MainShellState extends State<MainShell> {
       ),
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _index,
-        onTap: (i) => setState(() => _index = i),
+        onTap: _onTap,
         items: const [
           BottomNavigationBarItem(icon: Icon(Icons.home), label: 'Home'),
           BottomNavigationBarItem(icon: Icon(Icons.fitness_center), label: 'Equipment'),

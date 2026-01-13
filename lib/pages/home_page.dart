@@ -6,7 +6,7 @@ class HomePage extends StatefulWidget {
   const HomePage({super.key});
 
   @override
-  State<HomePage> createState() => _HomePageState();
+  HomePageState createState() => HomePageState();
 }
 
 class _DayWorkoutSummary {
@@ -25,13 +25,19 @@ class _DayWorkoutSummary {
 
 enum _WorkoutFilter { all, push, pull, legs, core }
 
-class _HomePageState extends State<HomePage> {
+// ✅ CHANGED: made public so MainShell can reference it in GlobalKey<HomePageState>
+class HomePageState extends State<HomePage> {
   final supabase = Supabase.instance.client;
 
   bool isLoading = true;
   Map<DateTime, _DayWorkoutSummary> summaryByDay = {};
 
   _WorkoutFilter _selectedFilter = _WorkoutFilter.all;
+
+  // ✅ NEW: allow MainShell to refresh Home tab on selection
+  Future<void> refresh() async {
+    await _loadRecentExercises();
+  }
 
   @override
   void initState() {
@@ -119,11 +125,12 @@ class _HomePageState extends State<HomePage> {
 
       b.writeln('${_formatDate(date)} — ${s.dayTypeLabel}');
 
-      // Muscle counts (high -> low)
       final muscles = s.muscleGroupCounts.entries.toList()
         ..sort((a, b) => b.value.compareTo(a.value));
       if (muscles.isNotEmpty) {
-        b.writeln('Muscles: ${muscles.map((e) => '${e.key}(${e.value})').join(', ')}');
+        b.writeln(
+          'Muscles: ${muscles.map((e) => '${e.key}(${e.value})').join(', ')}',
+        );
       }
 
       if (s.exerciseNames.isNotEmpty) {
@@ -191,7 +198,9 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _loadRecentExercises() async {
+    if (!mounted) return;
     setState(() => isLoading = true);
+
     try {
       final user = supabase.auth.currentUser;
       if (user == null) {
@@ -220,11 +229,10 @@ class _HomePageState extends State<HomePage> {
 
         uniqueExercisesByDay.putIfAbsent(day, () => {});
         for (final ex in list) {
-          uniqueExercisesByDay[day]![ex['id'].toString()] = ex; // UUID-safe unique
+          uniqueExercisesByDay[day]![ex['id'].toString()] = ex;
         }
       }
 
-      // keep newest -> oldest, remove duplicates while preserving order
       final orderedUniqueDays = <DateTime>[];
       for (final d in workoutDays) {
         if (!orderedUniqueDays.contains(d)) orderedUniqueDays.add(d);
@@ -277,16 +285,17 @@ class _HomePageState extends State<HomePage> {
         );
       }
 
+      if (!mounted) return;
       setState(() => summaryByDay = result);
     } catch (e, st) {
       debugPrint('Error loading workout summary: $e');
       debugPrint('$st');
+      if (!mounted) return;
+
       setState(() => summaryByDay = {});
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to load workouts: $e')),
-        );
-      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to load workouts: $e')),
+      );
     } finally {
       if (mounted) setState(() => isLoading = false);
     }
@@ -304,7 +313,6 @@ class _HomePageState extends State<HomePage> {
       padding: const EdgeInsets.all(16.0),
       child: ListView(
         children: [
-          // ---------- Header row with Share ----------
           Row(
             children: [
               Expanded(
@@ -322,11 +330,9 @@ class _HomePageState extends State<HomePage> {
           ),
           const SizedBox(height: 12),
 
-          // ---------- Equal-width filter bar ----------
           _buildFilterBar(),
           const SizedBox(height: 16),
 
-          // ---------- Existing behavior ----------
           if (summaryByDay.isEmpty)
             const Text('No workouts logged yet.')
           else if (entries.isEmpty)
@@ -336,7 +342,6 @@ class _HomePageState extends State<HomePage> {
               final date = entry.key;
               final s = entry.value;
 
-              // Muscle chips ordered high->low
               final muscleEntries = s.muscleGroupCounts.entries.toList()
                 ..sort((a, b) => b.value.compareTo(a.value));
 

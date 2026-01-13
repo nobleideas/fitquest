@@ -287,6 +287,55 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
 
             const SizedBox(height: 24),
 
+            // ----------------- Last 3 Recorded Days -----------------
+            if (last3DayKeys.isNotEmpty)
+              Text(
+                "Last 3 Recorded Days",
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+            const SizedBox(height: 12),
+
+            ...last3DayKeys.map((key) {
+              final date = _dateFromDayKey(key);
+              final sessions = sessionsByDayKey[key] ?? const [];
+
+              return Card(
+                margin: const EdgeInsets.only(bottom: 12),
+                elevation: 3,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                child: ExpansionTile(
+                  title: Text(_formatDate(date)),
+                  children: sessions.isEmpty
+                      ? [
+                          const ListTile(
+                            leading: Icon(Icons.info_outline),
+                            title: Text("No sessions found for this day."),
+                          ),
+                        ]
+                      : sessions.map((s) {
+                          return Dismissible(
+                            key: Key(s['id'].toString()),
+                            direction: DismissDirection.endToStart,
+                            background: Container(
+                              alignment: Alignment.centerRight,
+                              color: Colors.red,
+                              padding: const EdgeInsets.only(right: 20),
+                              child: const Icon(Icons.delete, color: Colors.white),
+                            ),
+                            onDismissed: (_) => _deleteSession(s['id'].toString()),
+                            child: ListTile(
+                              leading: const Icon(Icons.fitness_center),
+                              title: Text("Weight: ${s['weight']}"),
+                              subtitle: Text("Reps: ${s['reps']}"),
+                            ),
+                          );
+                        }).toList(),
+                ),
+              );
+            }).toList(),
+
+            const SizedBox(height: 24),
+
             // ----------------- Exercise Form Video -----------------
             Text(
               "Exercise Form Video",
@@ -378,55 +427,6 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
                     : "Loading form video...",
                 style: Theme.of(context).textTheme.bodySmall,
               ),
-
-            const SizedBox(height: 24),
-
-            // ----------------- Last 3 Recorded Days -----------------
-            if (last3DayKeys.isNotEmpty)
-              Text(
-                "Last 3 Recorded Days",
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-            const SizedBox(height: 12),
-
-            ...last3DayKeys.map((key) {
-              final date = _dateFromDayKey(key);
-              final sessions = sessionsByDayKey[key] ?? const [];
-
-              return Card(
-                margin: const EdgeInsets.only(bottom: 12),
-                elevation: 3,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                child: ExpansionTile(
-                  title: Text(_formatDate(date)),
-                  children: sessions.isEmpty
-                      ? [
-                          const ListTile(
-                            leading: Icon(Icons.info_outline),
-                            title: Text("No sessions found for this day."),
-                          ),
-                        ]
-                      : sessions.map((s) {
-                          return Dismissible(
-                            key: Key(s['id'].toString()),
-                            direction: DismissDirection.endToStart,
-                            background: Container(
-                              alignment: Alignment.centerRight,
-                              color: Colors.red,
-                              padding: const EdgeInsets.only(right: 20),
-                              child: const Icon(Icons.delete, color: Colors.white),
-                            ),
-                            onDismissed: (_) => _deleteSession(s['id'].toString()),
-                            child: ListTile(
-                              leading: const Icon(Icons.fitness_center),
-                              title: Text("Weight: ${s['weight']}"),
-                              subtitle: Text("Reps: ${s['reps']}"),
-                            ),
-                          );
-                        }).toList(),
-                ),
-              );
-            }).toList(),
           ],
         ),
       ),
