@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:share_plus/share_plus.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -22,11 +23,15 @@ class _DayWorkoutSummary {
   });
 }
 
+enum _WorkoutFilter { all, push, pull, legs, core }
+
 class _HomePageState extends State<HomePage> {
   final supabase = Supabase.instance.client;
 
   bool isLoading = true;
   Map<DateTime, _DayWorkoutSummary> summaryByDay = {};
+
+  _WorkoutFilter _selectedFilter = _WorkoutFilter.all;
 
   @override
   void initState() {
@@ -55,6 +60,94 @@ class _HomePageState extends State<HomePage> {
         g == 'obliques' ||
         g == 'lower abs' ||
         g == 'upper abs';
+  }
+
+  String _filterLabel(_WorkoutFilter f) {
+    switch (f) {
+      case _WorkoutFilter.all:
+        return 'All';
+      case _WorkoutFilter.push:
+        return 'Push';
+      case _WorkoutFilter.pull:
+        return 'Pull';
+      case _WorkoutFilter.legs:
+        return 'Legs';
+      case _WorkoutFilter.core:
+        return 'Core';
+    }
+  }
+
+  bool _matchesFilter(_DayWorkoutSummary s) {
+    if (_selectedFilter == _WorkoutFilter.all) return true;
+
+    final label = s.dayTypeLabel.trim().toLowerCase();
+    switch (_selectedFilter) {
+      case _WorkoutFilter.all:
+        return true;
+      case _WorkoutFilter.push:
+        return label == 'push';
+      case _WorkoutFilter.pull:
+        return label == 'pull';
+      case _WorkoutFilter.legs:
+        return label == 'legs';
+      case _WorkoutFilter.core:
+        return label == 'core';
+    }
+  }
+
+  String _formatDate(DateTime d) => '${d.month}/${d.day}/${d.year}';
+
+  List<MapEntry<DateTime, _DayWorkoutSummary>> _filteredEntries() {
+    return summaryByDay.entries
+        .where((e) => _matchesFilter(e.value))
+        .toList();
+  }
+
+  /// Builds a shareable text block from the currently filtered workouts.
+  String _buildShareText(List<MapEntry<DateTime, _DayWorkoutSummary>> entries) {
+    final filterName = _filterLabel(_selectedFilter);
+    final b = StringBuffer();
+
+    b.writeln('Fit Quest — Workout Summary ($filterName)');
+    b.writeln('');
+
+    for (final entry in entries) {
+      final date = entry.key;
+      final s = entry.value;
+
+      b.writeln('${_formatDate(date)} — ${s.dayTypeLabel}');
+
+      // Muscle counts (high -> low)
+      final muscles = s.muscleGroupCounts.entries.toList()
+        ..sort((a, b) => b.value.compareTo(a.value));
+      if (muscles.isNotEmpty) {
+        b.writeln('Muscles: ${muscles.map((e) => '${e.key}(${e.value})').join(', ')}');
+      }
+
+      if (s.exerciseNames.isNotEmpty) {
+        b.writeln('Exercises: ${s.exerciseNames.join(', ')}');
+      }
+
+      b.writeln(''); // blank line between days
+    }
+
+    if (entries.isEmpty) {
+      b.writeln('No workouts found for this filter.');
+    }
+
+    return b.toString().trim();
+  }
+
+  Future<void> _shareFilteredWorkouts() async {
+    final entries = _filteredEntries();
+
+    final text = _buildShareText(entries);
+
+    // Optional: share the current page position (mobile). If context is missing, Share.share still works.
+    await Share.share(
+      text,
+      subject: 'Workout Summary (${_filterLabel(_selectedFilter)})',
+    );
   }
 
   Future<void> _loadRecentExercises() async {
@@ -91,7 +184,6 @@ class _HomePageState extends State<HomePage> {
         }
       }
 
-      // keep newest -> oldest, remove duplicates while preserving order
       final orderedUniqueDays = <DateTime>[];
       for (final d in workoutDays) {
         if (!orderedUniqueDays.contains(d)) orderedUniqueDays.add(d);
@@ -165,73 +257,107 @@ class _HomePageState extends State<HomePage> {
       return const Center(child: CircularProgressIndicator());
     }
 
-    if (summaryByDay.isEmpty) {
-      return const Padding(
-        padding: EdgeInsets.all(16),
-        child: Text('No workouts logged yet.'),
-      );
-    }
+    final entries = _filteredEntries();
 
     return Padding(
       padding: const EdgeInsets.all(16.0),
       child: ListView(
-        children: summaryByDay.entries.map((entry) {
-          final date = entry.key;
-          final s = entry.value;
+        children: [
+          // ---------- Header row with Share ----------
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Workout Summary',
+                  style: Theme.of(context).textTheme.headlineSmall,
+                ),
+              ),
+              IconButton(
+                tooltip: 'Share',
+                onPressed: entries.isEmpty ? null : _shareFilteredWorkouts,
+                icon: const Icon(Icons.share),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
 
-          // Muscle chips ordered high->low
-          final muscleEntries = s.muscleGroupCounts.entries.toList()
-            ..sort((a, b) => b.value.compareTo(a.value));
+          // ---------- Filter Buttons ----------
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: _WorkoutFilter.values.map((f) {
+              final selected = _selectedFilter == f;
+              return ChoiceChip(
+                label: Text(_filterLabel(f)),
+                selected: selected,
+                onSelected: (_) => setState(() => _selectedFilter = f),
+              );
+            }).toList(),
+          ),
+          const SizedBox(height: 16),
 
-          return Padding(
-            padding: const EdgeInsets.symmetric(vertical: 10),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
+          if (summaryByDay.isEmpty)
+            const Text('No workouts logged yet.')
+          else if (entries.isEmpty)
+            const Text('No workouts found for this filter.')
+          else
+            ...entries.map((entry) {
+              final date = entry.key;
+              final s = entry.value;
+
+              final muscleEntries = s.muscleGroupCounts.entries.toList()
+                ..sort((a, b) => b.value.compareTo(a.value));
+
+              return Padding(
+                padding: const EdgeInsets.symmetric(vertical: 10),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Expanded(
-                      child: Text(
-                        '${date.month}/${date.day}/${date.year}',
-                        style: const TextStyle(fontWeight: FontWeight.bold),
-                      ),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            _formatDate(date),
+                            style: const TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                          decoration: BoxDecoration(
+                            border: Border.all(color: Theme.of(context).dividerColor),
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          child: Text(
+                            s.dayTypeLabel,
+                            style: const TextStyle(fontWeight: FontWeight.w600),
+                          ),
+                        ),
+                      ],
                     ),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                      decoration: BoxDecoration(
-                        border: Border.all(color: Theme.of(context).dividerColor),
-                        borderRadius: BorderRadius.circular(16),
+                    const SizedBox(height: 6),
+                    if (muscleEntries.isNotEmpty)
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: muscleEntries.map((e) {
+                          return Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                              borderRadius: BorderRadius.circular(16),
+                            ),
+                            child: Text('${e.key}: ${e.value}'),
+                          );
+                        }).toList(),
                       ),
-                      child: Text(
-                        s.dayTypeLabel,
-                        style: const TextStyle(fontWeight: FontWeight.w600),
-                      ),
-                    ),
+                    const SizedBox(height: 8),
+                    ...s.exerciseNames.map((name) => Text('• $name')),
+                    const Divider(height: 24),
                   ],
                 ),
-                const SizedBox(height: 6),
-                if (muscleEntries.isNotEmpty)
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: muscleEntries.map((e) {
-                      return Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                        decoration: BoxDecoration(
-                          color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                          borderRadius: BorderRadius.circular(16),
-                        ),
-                        child: Text('${e.key}: ${e.value}'),
-                      );
-                    }).toList(),
-                  ),
-                const SizedBox(height: 8),
-                ...s.exerciseNames.map((name) => Text('• $name')),
-                const Divider(height: 24),
-              ],
-            ),
-          );
-        }).toList(),
+              );
+            }).toList(),
+        ],
       ),
     );
   }

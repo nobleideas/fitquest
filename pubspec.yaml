@@ -10,6 +10,7 @@ dependencies:
   flutter:
     sdk: flutter
   sqflite_common_ffi_web: ^1.0.1+2
+  share_plus: ^10.0.2
   english_words: ^4.0.0
   image_picker: ^1.0.7
   video_player: ^2.8.2
