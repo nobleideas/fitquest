@@ -41,19 +41,33 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
   }
 
   Future<void> _loadLast3DatesAndSessions() async {
-    final dates = await sessionService.getLast3SessionDates(widget.exercise['id']);
-    final Map<DateTime, List<Map<String, dynamic>>> map = {};
+  final rawDates = await sessionService.getLast3SessionDates(widget.exercise['id']);
 
-    for (final date in dates) {
-      map[date] = await sessionService.getSessionsForDate(widget.exercise['id'], date);
+  // Deduplicate by calendar day while preserving order
+  final seen = <String>{};
+  final dates = <DateTime>[];
+
+  for (final d in rawDates) {
+    final dayKey = '${d.year}-${d.month}-${d.day}';
+    if (seen.add(dayKey)) {
+      // normalize to midnight so Map keys are consistent
+      dates.add(DateTime(d.year, d.month, d.day));
     }
-
-    if (!mounted) return;
-    setState(() {
-      last3Dates = dates;
-      sessionsByDate = map;
-    });
   }
+
+  final Map<DateTime, List<Map<String, dynamic>>> map = {};
+
+  for (final date in dates) {
+    map[date] = await sessionService.getSessionsForDate(widget.exercise['id'], date);
+  }
+
+  if (!mounted) return;
+  setState(() {
+    last3Dates = dates;
+    sessionsByDate = map;
+  });
+}
+
 
   Future<void> _deleteSession(String sessionId) async {
     await sessionService.deleteSession(sessionId);
@@ -354,7 +368,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                 child: ExpansionTile(
                   title: Text("${date.month}/${date.day}/${date.year}"),
-                  children: sessions.map((s) {
+                  children: sessions.reversed.map((s) {
                     return Dismissible(
                       key: Key(s['id']),
                       direction: DismissDirection.endToStart,
