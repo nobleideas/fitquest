@@ -5,7 +5,6 @@ import 'package:image_picker/image_picker.dart';
 import 'package:video_player/video_player.dart';
 import 'package:path/path.dart' as p;
 
-
 import '../services/session_service.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -22,8 +21,9 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
   final repsController = TextEditingController();
   final SessionService sessionService = SessionService();
 
-  List<DateTime> last3Dates = [];
-  Map<DateTime, List<Map<String, dynamic>>> sessionsByDate = {};
+  // --- Last 3 recorded days (stable day-key approach avoids timezone/dup bugs)
+  List<String> last3DayKeys = []; // "YYYY-MM-DD"
+  Map<String, List<Map<String, dynamic>>> sessionsByDayKey = {};
 
   // -------- Form video state --------
   final ImagePicker _picker = ImagePicker();
@@ -31,51 +31,63 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
   VideoPlayerController? _videoController;
 
   bool _isUploadingVideo = false;
-  String? _formVideoUrl; // persisted URL from exercises.form_video_url
+  String? _formVideoUrl; // persisted URL from exercises.video_url
 
   @override
   void initState() {
     super.initState();
-    _loadLast3DatesAndSessions();
+    _loadLast3DaysAndSessions();
     _loadExistingFormVideo();
   }
 
-  Future<void> _loadLast3DatesAndSessions() async {
-  final rawDates = await sessionService.getLast3SessionDates(widget.exercise['id']);
+  // ---------- Day key helpers ----------
+  String _dayKey(DateTime dt) {
+    final d = dt.toLocal();
+    final y = d.year.toString().padLeft(4, '0');
+    final m = d.month.toString().padLeft(2, '0');
+    final day = d.day.toString().padLeft(2, '0');
+    return '$y-$m-$day';
+  }
 
-  // Deduplicate by calendar day while preserving order
-  final seen = <String>{};
-  final dates = <DateTime>[];
+  DateTime _dateFromDayKey(String key) {
+    final parts = key.split('-').map(int.parse).toList();
+    return DateTime(parts[0], parts[1], parts[2]);
+  }
 
-  for (final d in rawDates) {
-    final dayKey = '${d.year}-${d.month}-${d.day}';
-    if (seen.add(dayKey)) {
-      // normalize to midnight so Map keys are consistent
-      dates.add(DateTime(d.year, d.month, d.day));
+  String _formatDate(DateTime d) => "${d.month}/${d.day}/${d.year}";
+
+  // ---------- Sessions ----------
+  Future<void> _loadLast3DaysAndSessions() async {
+    final rawDates = await sessionService.getLast3SessionDates(widget.exercise['id']);
+
+    // Deduplicate by day; keep newest-first order as returned by service.
+    final seen = <String>{};
+    final keys = <String>[];
+    for (final d in rawDates) {
+      final key = _dayKey(d);
+      if (seen.add(key)) keys.add(key);
+      if (keys.length == 3) break;
     }
+
+    final Map<String, List<Map<String, dynamic>>> map = {};
+    for (final key in keys) {
+      final date = _dateFromDayKey(key);
+      map[key] = await sessionService.getSessionsForDate(widget.exercise['id'], date);
+    }
+
+    if (!mounted) return;
+    setState(() {
+      last3DayKeys = keys;
+      sessionsByDayKey = map;
+    });
   }
-
-  final Map<DateTime, List<Map<String, dynamic>>> map = {};
-
-  for (final date in dates) {
-    map[date] = await sessionService.getSessionsForDate(widget.exercise['id'], date);
-  }
-
-  if (!mounted) return;
-  setState(() {
-    last3Dates = dates;
-    sessionsByDate = map;
-  });
-}
-
 
   Future<void> _deleteSession(String sessionId) async {
     await sessionService.deleteSession(sessionId);
-    await _loadLast3DatesAndSessions();
+    await _loadLast3DaysAndSessions();
   }
 
   // ---------- Video helpers ----------
-
   Future<void> _loadExistingFormVideo() async {
     // If the caller already included it, use it immediately
     final existing = widget.exercise['video_url'] as String?;
@@ -85,7 +97,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
       return;
     }
 
-    // Otherwise fetch from DB (recommended so it always stays fresh)
+    // Otherwise fetch from DB (keeps fresh if caller didn't include it)
     final client = Supabase.instance.client;
     final data = await client
         .from('exercises')
@@ -97,6 +109,11 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
     if (url != null && url.isNotEmpty) {
       _formVideoUrl = url;
       await _initVideoPlayerFromUrl(url);
+    } else {
+      if (!mounted) return;
+      setState(() {
+        _formVideoUrl = null;
+      });
     }
   }
 
@@ -104,11 +121,8 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
     await _videoController?.dispose();
     _videoController = VideoPlayerController.networkUrl(Uri.parse(url));
     await _videoController!.initialize();
-    
     await _videoController!.setVolume(1.0);
-    await _videoController!.setPlaybackSpeed(1.0); // optional, but harmless
-    _videoController!.setLooping(true);
-
+    await _videoController!.setPlaybackSpeed(1.0);
     _videoController!.setLooping(true);
 
     if (!mounted) return;
@@ -116,89 +130,84 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
   }
 
   Future<void> _pickVideo() async {
-  try {
-    final video = await _picker.pickVideo(source: ImageSource.gallery);
-    if (video == null) return;
+    try {
+      final video = await _picker.pickVideo(source: ImageSource.gallery);
+      if (video == null) return;
 
-    // Set state immediately so UI updates
-    if (!mounted) return;
-    setState(() {
-      _pickedVideo = video;
-    });
+      if (!mounted) return;
+      setState(() {
+        _pickedVideo = video; // enables Upload immediately
+      });
 
-    await _videoController?.dispose();
+      await _videoController?.dispose();
 
-    // Always use network controller — works for blob URLs (web) and public URLs
-    _videoController = VideoPlayerController.networkUrl(Uri.parse(video.path));
-    await _videoController!.initialize();
-    await _videoController!.setVolume(1.0);
-    await _videoController!.setPlaybackSpeed(1.0); // optional, but harmless
-    _videoController!.setLooping(true);
+      // Works for blob URLs (web) and public URLs
+      _videoController = VideoPlayerController.networkUrl(Uri.parse(video.path));
+      await _videoController!.initialize();
+      await _videoController!.setVolume(1.0);
+      await _videoController!.setPlaybackSpeed(1.0);
+      _videoController!.setLooping(true);
 
-    _videoController!.setLooping(true);
-
-    if (!mounted) return;
-    setState(() {});
-  } catch (e) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Picking video failed: $e')),
-    );
+      if (!mounted) return;
+      setState(() {});
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Picking video failed: $e')),
+      );
+    }
   }
-}
-
-
 
   Future<void> _uploadPickedVideo() async {
-  final video = _pickedVideo;
-  if (video == null) return;
+    final video = _pickedVideo;
+    if (video == null) return;
 
-  setState(() => _isUploadingVideo = true);
+    setState(() => _isUploadingVideo = true);
 
-  try {
-    final client = Supabase.instance.client;
-    final bucket = client.storage.from('exercise_form_video');
+    try {
+      final client = Supabase.instance.client;
 
-    final ext = p.extension(video.name).isNotEmpty ? p.extension(video.name) : '.mp4';
-    final storagePath = 'exercise_${widget.exercise['id']}/form$ext';
+      // Make sure this matches your bucket id exactly
+      final bucket = client.storage.from('exercise_form_video');
 
-    final bytes = await video.readAsBytes();
+      final ext = p.extension(video.name).isNotEmpty ? p.extension(video.name) : '.mp4';
+      final storagePath = 'exercise_${widget.exercise['id']}/form$ext';
 
-    await bucket.uploadBinary(
-      storagePath,
-      bytes,
-      fileOptions: FileOptions(
-        upsert: true,
-        contentType: video.mimeType ?? 'video/mp4',
-      ),
-    );
+      final bytes = await video.readAsBytes();
 
-    final publicUrl = bucket.getPublicUrl(storagePath);
+      await bucket.uploadBinary(
+        storagePath,
+        bytes,
+        fileOptions: FileOptions(
+          upsert: true,
+          contentType: video.mimeType ?? 'video/mp4',
+        ),
+      );
 
-    await client
-        .from('exercises')
-        .update({'video_url': publicUrl})
-        .eq('id', widget.exercise['id']);
+      final publicUrl = bucket.getPublicUrl(storagePath);
 
-    _formVideoUrl = publicUrl;
+      await client
+          .from('exercises')
+          .update({'video_url': publicUrl})
+          .eq('id', widget.exercise['id']);
 
-    await _initVideoPlayerFromUrl(publicUrl);
+      _formVideoUrl = publicUrl;
 
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Video uploaded and saved to exercise.')),
-    );
-  } catch (e) {
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Upload failed: $e')),
-    );
-  } finally {
-    if (mounted) setState(() => _isUploadingVideo = false);
+      await _initVideoPlayerFromUrl(publicUrl);
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Video uploaded and saved to exercise.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Upload failed: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _isUploadingVideo = false);
+    }
   }
-}
-
-
 
   @override
   void dispose() {
@@ -220,7 +229,10 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             // ----------------- Log Form -----------------
-            Text("Log Your Session", style: Theme.of(context).textTheme.headlineSmall),
+            Text(
+              "Log Your Session",
+              style: Theme.of(context).textTheme.headlineSmall,
+            ),
             const SizedBox(height: 12),
 
             TextField(
@@ -268,7 +280,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
 
                   weightController.clear();
                   repsController.clear();
-                  await _loadLast3DatesAndSessions();
+                  await _loadLast3DaysAndSessions();
                 },
               ),
             ),
@@ -276,7 +288,10 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
             const SizedBox(height: 24),
 
             // ----------------- Exercise Form Video -----------------
-            Text("Exercise Form Video", style: Theme.of(context).textTheme.titleMedium),
+            Text(
+              "Exercise Form Video",
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
             const SizedBox(height: 12),
 
             Row(
@@ -307,43 +322,55 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
               ],
             ),
 
+            if (_pickedVideo != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: Text(
+                  "Selected: ${_pickedVideo!.name}",
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
+
             const SizedBox(height: 12),
 
             if (_videoController != null && _videoController!.value.isInitialized)
-  Column(
-    crossAxisAlignment: CrossAxisAlignment.start,
-    children: [
-      AspectRatio(
-        aspectRatio: _videoController!.value.aspectRatio,
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(12),
-          child: VideoPlayer(_videoController!),
-        ),
-      ),
-      const SizedBox(height: 8),
-      Row(
-        children: [
-          IconButton(
-            icon: Icon(
-              _videoController!.value.isPlaying ? Icons.pause : Icons.play_arrow,
-            ),
-            onPressed: () async {
-              if (_videoController!.value.isPlaying) {
-                await _videoController!.pause();
-              } else {
-                await _videoController!.setVolume(1.0);
-                await _videoController!.play();
-              }
-              if (mounted) setState(() {});
-            },
-          ),
-          const Spacer(),
-          const Text("Saved ✓"),
-        ],
-      ),
-    ],
-  )
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  AspectRatio(
+                    aspectRatio: _videoController!.value.aspectRatio,
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: VideoPlayer(_videoController!),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      IconButton(
+                        icon: Icon(
+                          _videoController!.value.isPlaying ? Icons.pause : Icons.play_arrow,
+                        ),
+                        onPressed: () async {
+                          if (_videoController == null) return;
 
+                          if (_videoController!.value.isPlaying) {
+                            await _videoController!.pause();
+                          } else {
+                            await _videoController!.setVolume(1.0);
+                            await _videoController!.play();
+                          }
+
+                          if (mounted) setState(() {});
+                        },
+                      ),
+                      const Spacer(),
+                      if (_formVideoUrl != null && _formVideoUrl!.isNotEmpty)
+                        const Text("Saved ✓"),
+                    ],
+                  ),
+                ],
+              )
             else
               Text(
                 _formVideoUrl == null
@@ -355,37 +382,48 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
             const SizedBox(height: 24),
 
             // ----------------- Last 3 Recorded Days -----------------
-            if (last3Dates.isNotEmpty)
-              Text("Last 3 Recorded Days", style: Theme.of(context).textTheme.titleMedium),
+            if (last3DayKeys.isNotEmpty)
+              Text(
+                "Last 3 Recorded Days",
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
             const SizedBox(height: 12),
 
-            ...last3Dates.map((date) {
-              final sessions = sessionsByDate[date] ?? [];
+            ...last3DayKeys.map((key) {
+              final date = _dateFromDayKey(key);
+              final sessions = sessionsByDayKey[key] ?? const [];
 
               return Card(
                 margin: const EdgeInsets.only(bottom: 12),
                 elevation: 3,
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                 child: ExpansionTile(
-                  title: Text("${date.month}/${date.day}/${date.year}"),
-                  children: sessions.reversed.map((s) {
-                    return Dismissible(
-                      key: Key(s['id']),
-                      direction: DismissDirection.endToStart,
-                      background: Container(
-                        alignment: Alignment.centerRight,
-                        color: Colors.red,
-                        padding: const EdgeInsets.only(right: 20),
-                        child: const Icon(Icons.delete, color: Colors.white),
-                      ),
-                      onDismissed: (_) => _deleteSession(s['id']),
-                      child: ListTile(
-                        leading: const Icon(Icons.fitness_center),
-                        title: Text("Weight: ${s['weight']}"),
-                        subtitle: Text("Reps: ${s['reps']}"),
-                      ),
-                    );
-                  }).toList(),
+                  title: Text(_formatDate(date)),
+                  children: sessions.isEmpty
+                      ? [
+                          const ListTile(
+                            leading: Icon(Icons.info_outline),
+                            title: Text("No sessions found for this day."),
+                          ),
+                        ]
+                      : sessions.reversed.map((s) {
+                          return Dismissible(
+                            key: Key(s['id'].toString()),
+                            direction: DismissDirection.endToStart,
+                            background: Container(
+                              alignment: Alignment.centerRight,
+                              color: Colors.red,
+                              padding: const EdgeInsets.only(right: 20),
+                              child: const Icon(Icons.delete, color: Colors.white),
+                            ),
+                            onDismissed: (_) => _deleteSession(s['id'].toString()),
+                            child: ListTile(
+                              leading: const Icon(Icons.fitness_center),
+                              title: Text("Weight: ${s['weight']}"),
+                              subtitle: Text("Reps: ${s['reps']}"),
+                            ),
+                          );
+                        }).toList(),
                 ),
               );
             }).toList(),
