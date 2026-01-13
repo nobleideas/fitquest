@@ -46,10 +46,7 @@ class ProfilePage extends StatelessWidget {
                     const SizedBox(height: 8),
                     Text(
                       "Level $level",
-                      style: const TextStyle(
-                        fontSize: 22,
-                        color: Colors.grey,
-                      ),
+                      style: const TextStyle(fontSize: 22, color: Colors.grey),
                     ),
                     const SizedBox(height: 10),
                     LinearProgressIndicator(
@@ -64,11 +61,27 @@ class ProfilePage extends StatelessWidget {
                         onPressed: () {
                           Navigator.push(
                             context,
-                            MaterialPageRoute(builder: (_) => const GymListPage()),
+                            MaterialPageRoute(
+                              builder: (_) => const GymListPage(),
+                            ),
                           );
                         },
                         icon: const Icon(Icons.list),
                         label: const Text("My Gyms"),
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    SizedBox(
+                      width: double.infinity,
+                      child: OutlinedButton.icon(
+                        icon: const Icon(Icons.logout),
+                        label: const Text("Log Out"),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: Colors.red,
+                        ),
+                        onPressed: () async {
+                          await Supabase.instance.client.auth.signOut();
+                        },
                       ),
                     ),
                     const SizedBox(height: 20),
@@ -78,10 +91,7 @@ class ProfilePage extends StatelessWidget {
               const SizedBox(height: 10),
               const Text(
                 "Muscle Group XP",
-                style: TextStyle(
-                  fontSize: 22,
-                  fontWeight: FontWeight.bold,
-                ),
+                style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 20),
 
@@ -104,10 +114,7 @@ class ProfilePage extends StatelessWidget {
       children: [
         Text("$label — $xp XP", style: const TextStyle(fontSize: 16)),
         const SizedBox(height: 4),
-        LinearProgressIndicator(
-          value: min(xp / 5000, 1),
-          minHeight: 10,
-        ),
+        LinearProgressIndicator(value: min(xp / 5000, 1), minHeight: 10),
         const SizedBox(height: 20),
       ],
     );
