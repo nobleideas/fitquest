@@ -260,7 +260,8 @@ class _ProfilePageState extends State<ProfilePage> {
                       width: double.infinity,
                       child: ElevatedButton.icon(
                         onPressed: () {
-                          Navigator.push(context, MaterialPageRoute(builder: (_) => const GymListPage()));
+                          
+                          // Navigator.push(context, MaterialPageRoute(builder: (_) => const GymListPage()));
                         },
                         icon: const Icon(Icons.list),
                         label: const Text("My Gyms"),
