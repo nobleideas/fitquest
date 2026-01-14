@@ -1,7 +1,7 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'gym_list_page.dart';
+import 'friend_profile_page.dart';
 
 class ProfilePage extends StatefulWidget {
   const ProfilePage({super.key});
@@ -13,8 +13,15 @@ class ProfilePage extends StatefulWidget {
 class _ProfilePageState extends State<ProfilePage> {
   final supabase = Supabase.instance.client;
 
-  // Goal editing state (dropdown)
+  // Goal editing state
   bool _isSavingGoal = false;
+
+  // Friends UI state
+  final _friendUsernameController = TextEditingController();
+  bool _isSendingRequest = false;
+
+  // Reset stats UI state
+  bool _isResettingStats = false;
 
   static const _goalOptions = <String, String>{
     'lose_weight': 'Lose Weight',
@@ -25,7 +32,6 @@ class _ProfilePageState extends State<ProfilePage> {
   String _goalLabel(String? goal) => _goalOptions[goal] ?? (goal ?? 'Not set');
 
   // ---- Level math based on total volume (weight * reps) ----
-  // Tune this later. Pick something that feels good with real data.
   static const double _volumePerLevel = 25000.0;
 
   int _computeLevel(double totalVolume) {
@@ -45,44 +51,60 @@ class _ProfilePageState extends State<ProfilePage> {
     return "Beginner";
   }
 
-  Future<Map<String, dynamic>> _loadData() async {
-  final user = supabase.auth.currentUser!;
-
-  final Future<dynamic> profileFuture =
-      supabase.from('profiles').select().eq('id', user.id).single();
-
-  final Future<dynamic> volumeFuture =
-      supabase.rpc('get_training_volume_summary');
-
-  final List<dynamic> results = await Future.wait<dynamic>([
-    profileFuture,
-    volumeFuture,
-  ]);
-
-  final profile = Map<String, dynamic>.from(results[0] as Map);
-
-  final volRaw = results[1];
-  Map<String, dynamic> volRow;
-
-  if (volRaw is List && volRaw.isNotEmpty) {
-    volRow = Map<String, dynamic>.from(volRaw.first as Map);
-  } else if (volRaw is Map) {
-    volRow = Map<String, dynamic>.from(volRaw);
-  } else {
-    volRow = {};
-  }
-
-  return {
-    'profile': profile,
-    'volume': volRow,
-  };
-}
-
-
   double _numToDouble(dynamic v) {
     if (v == null) return 0.0;
     if (v is num) return v.toDouble();
     return double.tryParse(v.toString()) ?? 0.0;
+  }
+
+  Future<Map<String, dynamic>> _loadData() async {
+    final user = supabase.auth.currentUser!;
+
+    final profileFuture = supabase
+        .from('profiles')
+        .select('id, username, goal, reset_at')
+        .eq('id', user.id)
+        .single();
+
+    final volumeFuture = supabase.rpc('get_training_volume_summary');
+
+    final acceptedFriendsFuture = supabase.rpc('get_accepted_friends');
+    final incomingRequestsFuture = supabase.rpc('get_incoming_friend_requests');
+
+    final results = await Future.wait<dynamic>([
+      profileFuture,
+      volumeFuture,
+      acceptedFriendsFuture,
+      incomingRequestsFuture,
+    ]);
+
+    final profile = Map<String, dynamic>.from(results[0] as Map);
+
+    final volRaw = results[1];
+    Map<String, dynamic> volRow;
+
+    if (volRaw is List && volRaw.isNotEmpty) {
+      volRow = Map<String, dynamic>.from(volRaw.first as Map);
+    } else if (volRaw is Map) {
+      volRow = Map<String, dynamic>.from(volRaw);
+    } else {
+      volRow = {};
+    }
+
+    final acceptedFriends = (results[2] is List)
+        ? List<Map<String, dynamic>>.from(results[2] as List)
+        : <Map<String, dynamic>>[];
+
+    final incomingRequests = (results[3] is List)
+        ? List<Map<String, dynamic>>.from(results[3] as List)
+        : <Map<String, dynamic>>[];
+
+    return {
+      'profile': profile,
+      'volume': volRow,
+      'acceptedFriends': acceptedFriends,
+      'incomingRequests': incomingRequests,
+    };
   }
 
   Future<void> _editGoal(BuildContext context, Map<String, dynamic> profile) async {
@@ -126,11 +148,13 @@ class _ProfilePageState extends State<ProfilePage> {
     setState(() => _isSavingGoal = true);
 
     try {
-      await supabase.from('profiles').update({'goal': selected}).eq('id', supabase.auth.currentUser!.id);
+      await supabase
+          .from('profiles')
+          .update({'goal': selected})
+          .eq('id', supabase.auth.currentUser!.id);
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Goal updated')));
-
       setState(() {}); // refetch
     } catch (e) {
       if (!mounted) return;
@@ -140,8 +164,91 @@ class _ProfilePageState extends State<ProfilePage> {
     }
   }
 
+  Future<void> _resetStats(BuildContext context) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text("Reset stats?"),
+        content: const Text(
+          "This will reset your Level/Rank/Volume stats back to zero.\n\n"
+          "Your workout history will NOT be deleted — it just won’t count toward stats anymore.",
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text("Cancel")),
+          ElevatedButton(onPressed: () => Navigator.pop(context, true), child: const Text("Reset")),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
+    setState(() => _isResettingStats = true);
+
+    try {
+      await supabase
+          .from('profiles')
+          .update({'reset_at': DateTime.now().toUtc().toIso8601String()})
+          .eq('id', supabase.auth.currentUser!.id);
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Stats reset")));
+      setState(() {}); // refetch
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Reset failed: $e")));
+    } finally {
+      if (mounted) setState(() => _isResettingStats = false);
+    }
+  }
+
+  Future<void> _sendFriendRequest(BuildContext context) async {
+    final username = _friendUsernameController.text.trim();
+    if (username.isEmpty) return;
+
+    setState(() => _isSendingRequest = true);
+
+    try {
+      await supabase.rpc('send_friend_request_by_username', params: {
+        'friend_username': username,
+      });
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Friend request sent to $username")),
+      );
+      _friendUsernameController.clear();
+      setState(() {}); // refetch
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Send failed: $e")),
+      );
+    } finally {
+      if (mounted) setState(() => _isSendingRequest = false);
+    }
+  }
+
+  Future<void> _respondToRequest(BuildContext context, String requestId, String newStatus) async {
+    try {
+      await supabase.rpc('respond_to_friend_request', params: {
+        'req_id': requestId,
+        'new_status': newStatus,
+      });
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(newStatus == 'accepted' ? "Request accepted" : "Request declined")),
+      );
+      setState(() {}); // refetch
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Action failed: $e")),
+      );
+    }
+  }
+
   Widget _volumeBar(String label, double volume) {
-    // A per-muscle "target" for the progress bar. Tune later.
     const double target = 25000.0;
 
     return Column(
@@ -159,6 +266,12 @@ class _ProfilePageState extends State<ProfilePage> {
   }
 
   @override
+  void dispose() {
+    _friendUsernameController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return FutureBuilder<Map<String, dynamic>>(
       future: _loadData(),
@@ -169,6 +282,8 @@ class _ProfilePageState extends State<ProfilePage> {
 
         final profile = snapshot.data!['profile'] as Map<String, dynamic>;
         final vol = snapshot.data!['volume'] as Map<String, dynamic>;
+        final acceptedFriends = snapshot.data!['acceptedFriends'] as List<Map<String, dynamic>>;
+        final incomingRequests = snapshot.data!['incomingRequests'] as List<Map<String, dynamic>>;
 
         final totalVol = _numToDouble(vol['total_volume']);
         final level = _computeLevel(totalVol);
@@ -176,6 +291,7 @@ class _ProfilePageState extends State<ProfilePage> {
         final rank = _computeRank(level);
 
         final goal = profile['goal'] as String?;
+        final username = (profile['username'] as String?)?.trim();
 
         final back = _numToDouble(vol['volume_back']);
         final chest = _numToDouble(vol['volume_chest']);
@@ -192,15 +308,17 @@ class _ProfilePageState extends State<ProfilePage> {
               Center(
                 child: Column(
                   children: [
-                    Text(
-                      rank,
-                      style: const TextStyle(fontSize: 32, fontWeight: FontWeight.bold),
-                    ),
+                    Text(rank, style: const TextStyle(fontSize: 32, fontWeight: FontWeight.bold)),
                     const SizedBox(height: 8),
-                    Text(
-                      "Level $level",
-                      style: const TextStyle(fontSize: 22, color: Colors.grey),
-                    ),
+
+                    if (username != null && username.isNotEmpty)
+                      Text(
+                        "@$username",
+                        style: const TextStyle(fontSize: 16, color: Colors.grey),
+                      ),
+
+                    const SizedBox(height: 6),
+                    Text("Level $level", style: const TextStyle(fontSize: 22, color: Colors.grey)),
                     const SizedBox(height: 10),
                     LinearProgressIndicator(
                       value: progress,
@@ -208,10 +326,7 @@ class _ProfilePageState extends State<ProfilePage> {
                       borderRadius: BorderRadius.circular(10),
                     ),
                     const SizedBox(height: 10),
-                    Text(
-                      "Total Volume: ${totalVol.toStringAsFixed(0)} lbs",
-                      style: const TextStyle(color: Colors.grey),
-                    ),
+                    Text("Total Volume: ${totalVol.toStringAsFixed(0)} lbs", style: const TextStyle(color: Colors.grey)),
 
                     // -------- Goal Card --------
                     const SizedBox(height: 16),
@@ -229,10 +344,7 @@ class _ProfilePageState extends State<ProfilePage> {
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  const Text(
-                                    "Goal",
-                                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                                  ),
+                                  const Text("Goal", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
                                   const SizedBox(height: 6),
                                   Text(_goalLabel(goal)),
                                 ],
@@ -242,11 +354,7 @@ class _ProfilePageState extends State<ProfilePage> {
                             TextButton.icon(
                               onPressed: _isSavingGoal ? null : () => _editGoal(context, profile),
                               icon: _isSavingGoal
-                                  ? const SizedBox(
-                                      width: 16,
-                                      height: 16,
-                                      child: CircularProgressIndicator(strokeWidth: 2),
-                                    )
+                                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
                                   : const Icon(Icons.edit),
                               label: const Text("Edit"),
                             ),
@@ -255,19 +363,55 @@ class _ProfilePageState extends State<ProfilePage> {
                       ),
                     ),
 
-                    const SizedBox(height: 16),
+                    const SizedBox(height: 12),
+
+                    // -------- Reset Stats --------
                     SizedBox(
                       width: double.infinity,
-                      child: ElevatedButton.icon(
-                        onPressed: () {
-                          
-                          // Navigator.push(context, MaterialPageRoute(builder: (_) => const GymListPage()));
-                        },
-                        icon: const Icon(Icons.list),
-                        label: const Text("My Gyms"),
+                      child: OutlinedButton.icon(
+                        icon: _isResettingStats
+                            ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                            : const Icon(Icons.restart_alt),
+                        label: const Text("Reset Stats"),
+                        onPressed: _isResettingStats ? null : () => _resetStats(context),
                       ),
                     ),
-                    const SizedBox(height: 20),
+
+                    const SizedBox(height: 16),
+
+                    // -------- Friends: Add by username --------
+                    Card(
+                      elevation: 2,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      child: Padding(
+                        padding: const EdgeInsets.all(14),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text("Friends", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                            const SizedBox(height: 10),
+                            TextField(
+                              controller: _friendUsernameController,
+                              decoration: InputDecoration(
+                                labelText: "Add friend by username",
+                                hintText: "e.g. john123",
+                                border: const OutlineInputBorder(),
+                                suffixIcon: IconButton(
+                                  icon: _isSendingRequest
+                                      ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                                      : const Icon(Icons.person_add),
+                                  onPressed: _isSendingRequest ? null : () => _sendFriendRequest(context),
+                                ),
+                              ),
+                              onSubmitted: (_) => _isSendingRequest ? null : _sendFriendRequest(context),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+
+                    const SizedBox(height: 16),
+
                     SizedBox(
                       width: double.infinity,
                       child: OutlinedButton.icon(
@@ -279,18 +423,75 @@ class _ProfilePageState extends State<ProfilePage> {
                         },
                       ),
                     ),
+
                     const SizedBox(height: 20),
                   ],
                 ),
               ),
 
-              const SizedBox(height: 10),
-              const Text(
-                "Muscle Group Volume",
-                style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
-              ),
+              // -------- Incoming friend requests --------
+              if (incomingRequests.isNotEmpty) ...[
+                const Text("Friend Requests", style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 12),
+                ...incomingRequests.map((r) {
+                  final reqId = (r['request_id'] ?? '').toString();
+                  final fromUsername = (r['from_username'] ?? 'Unknown').toString();
+
+                  return Card(
+                    child: ListTile(
+                      title: Text(fromUsername),
+                      subtitle: const Text("Wants to add you"),
+                      trailing: Wrap(
+                        spacing: 8,
+                        children: [
+                          IconButton(
+                            icon: const Icon(Icons.close),
+                            onPressed: () => _respondToRequest(context, reqId, 'declined'),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.check),
+                            onPressed: () => _respondToRequest(context, reqId, 'accepted'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                }),
+                const SizedBox(height: 20),
+              ],
+
+              // -------- Accepted friends --------
+              const Text("Friends", style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 12),
+              if (acceptedFriends.isEmpty)
+                const Text("No friends yet. Add someone by username above.")
+              else
+                ...acceptedFriends.map((f) {
+                  final uname = (f['username'] ?? 'Friend').toString();
+                  return Card(
+                    child: ListTile(
+                      title: Text(uname),
+                      trailing: const Icon(Icons.chevron_right),
+                      onTap: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => FriendProfilePage(
+                              friendUserId: f['friend_id'].toString(),
+                              friendUsername: (f['username'] ?? '').toString(),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  );
+                }),
+
               const SizedBox(height: 20),
 
+              // -------- Muscle bars --------
+              const Text("Muscle Group Volume", style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 20),
               _volumeBar("Back", back),
               _volumeBar("Chest", chest),
               _volumeBar("Shoulders", shoulders),
