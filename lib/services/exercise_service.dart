@@ -38,6 +38,17 @@ class ExerciseService {
         .eq('id', exerciseId);
   }
 
+  /// ✅ Move an exercise to a different piece of equipment
+  Future<void> moveExerciseToEquipment({
+    required String exerciseId,
+    required String equipmentId,
+  }) async {
+    await supabase
+        .from('exercises')
+        .update({'equipment_id': equipmentId})
+        .eq('id', exerciseId);
+  }
+
   Future<void> deleteExercise(String exerciseId) async {
     await supabase.from('exercises').delete().eq('id', exerciseId);
   }
