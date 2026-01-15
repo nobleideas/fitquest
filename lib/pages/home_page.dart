@@ -228,7 +228,6 @@ class HomePageState extends State<HomePage> {
   String _formatDate(DateTime d) => '${d.month}/${d.day}/${d.year}';
 
   List<MapEntry<DateTime, _DayWorkoutSummary>> _filteredEntries() {
-    // Keep stable ordering (most recent first) based on the DateTime key
     final list = summaryByDay.entries.where((e) => _matchesFilter(e.value)).toList()
       ..sort((a, b) => b.key.compareTo(a.key));
     return list;
@@ -280,12 +279,11 @@ class HomePageState extends State<HomePage> {
     );
   }
 
-  // ✅ NEW: share dialog that lets user select one or more displayed workouts
+  // ✅ share dialog that lets user select one or more displayed workouts
   Future<void> _openSharePicker() async {
     final entries = _filteredEntries();
     if (entries.isEmpty) return;
 
-    // Local selection state (keys are DateTime day values)
     final selected = <DateTime>{};
 
     await showDialog<void>(
@@ -295,9 +293,7 @@ class HomePageState extends State<HomePage> {
           void toggleAll(bool select) {
             setLocal(() {
               selected.clear();
-              if (select) {
-                selected.addAll(entries.map((e) => e.key));
-              }
+              if (select) selected.addAll(entries.map((e) => e.key));
             });
           }
 
@@ -352,9 +348,7 @@ class HomePageState extends State<HomePage> {
                         final isChecked = selected.contains(day);
 
                         final subtitleParts = <String>[];
-                        if (s.exerciseNames.isNotEmpty) {
-                          subtitleParts.add('${s.exerciseNames.length} exercises');
-                        }
+                        if (s.exerciseNames.isNotEmpty) subtitleParts.add('${s.exerciseNames.length} exercises');
                         subtitleParts.add(s.dayTypeLabel);
 
                         return CheckboxListTile(
@@ -384,7 +378,6 @@ class HomePageState extends State<HomePage> {
                 child: const Text('Cancel'),
               ),
               TextButton(
-                // keep your old behavior available
                 onPressed: () async {
                   Navigator.pop(context);
                   await _shareEntries(
@@ -396,7 +389,7 @@ class HomePageState extends State<HomePage> {
               ),
               ElevatedButton.icon(
                 icon: const Icon(Icons.share),
-                label: Text(allSelected ? 'Share selected' : 'Share selected'),
+                label: const Text('Share selected'),
                 onPressed: selected.isEmpty
                     ? null
                     : () async {
@@ -452,6 +445,20 @@ class HomePageState extends State<HomePage> {
     );
   }
 
+  // --- helpers for volume math (numeric can come back as int/double/String) ---
+  double _numToDouble(dynamic v) {
+    if (v == null) return 0.0;
+    if (v is num) return v.toDouble();
+    return double.tryParse(v.toString()) ?? 0.0;
+  }
+
+  int _numToInt(dynamic v) {
+    if (v == null) return 0;
+    if (v is int) return v;
+    if (v is num) return v.toInt();
+    return int.tryParse(v.toString()) ?? 0;
+  }
+
   Future<void> _loadRecentExercises() async {
     if (!mounted) return;
     setState(() => isLoading = true);
@@ -463,19 +470,30 @@ class HomePageState extends State<HomePage> {
         return;
       }
 
+      // ✅ UPDATED: include weight/reps so we can tie-break Legs vs Core by volume
       final sessions = await supabase
           .from('exercise_sessions')
-          .select('created_at, exercises!inner(id, name, type, primary_muscle_group)')
+          .select('created_at, weight, reps, exercises!inner(id, name, type, primary_muscle_group)')
           .eq('user_id', user.id)
           .order('created_at', ascending: false);
 
       final List<DateTime> workoutDays = [];
+
+      // For listing unique exercise names + muscle counts
       final Map<DateTime, Map<String, Map<String, dynamic>>> uniqueExercisesByDay = {};
+
+      // For tie-break logic legs/core by VOLUME (sum of weight*reps for sessions)
+      final Map<DateTime, double> legsVolumeByDay = {};
+      final Map<DateTime, double> coreVolumeByDay = {};
 
       for (final row in sessions) {
         final local = DateTime.parse(row['created_at']).toLocal();
         final day = DateTime(local.year, local.month, local.day);
         workoutDays.add(day);
+
+        final w = _numToDouble(row['weight']);
+        final r = _numToInt(row['reps']);
+        final sessionVolume = w * r;
 
         final exJoined = row['exercises'];
         final List<Map<String, dynamic>> list = exJoined is List
@@ -483,8 +501,21 @@ class HomePageState extends State<HomePage> {
             : [Map<String, dynamic>.from(exJoined)];
 
         uniqueExercisesByDay.putIfAbsent(day, () => {});
+        legsVolumeByDay.putIfAbsent(day, () => 0.0);
+        coreVolumeByDay.putIfAbsent(day, () => 0.0);
+
+        // A session maps to ONE exercise_id, but your join may come back as list;
+        // if it does, we’ll attribute the session volume to each (usually just one).
         for (final ex in list) {
           uniqueExercisesByDay[day]![ex['id'].toString()] = ex;
+
+          final mg = (ex['primary_muscle_group'] ?? '').toString();
+          if (_isLegsGroup(mg)) {
+            legsVolumeByDay[day] = (legsVolumeByDay[day] ?? 0.0) + sessionVolume;
+          }
+          if (_isCoreGroup(mg)) {
+            coreVolumeByDay[day] = (coreVolumeByDay[day] ?? 0.0) + sessionVolume;
+          }
         }
       }
 
@@ -522,15 +553,32 @@ class HomePageState extends State<HomePage> {
           if (type == 'pull') pull++;
         }
 
-        final total = uniqueExercises.length;
+        // ✅ FIXED: if ANY legs/core exist, show Legs/Core (whichever has more).
+        // tie-break uses total VOLUME for legs vs core (sum of weight*reps per session)
+        String label;
+        if (legs > 0 || core > 0) {
+          if (legs > core) {
+            label = 'Legs';
+          } else if (core > legs) {
+            label = 'Core';
+          } else {
+            final legsVol = legsVolumeByDay[day] ?? 0.0;
+            final coreVol = coreVolumeByDay[day] ?? 0.0;
 
-        final label = (legs > total / 2)
-            ? 'Legs'
-            : (core > total / 2)
-                ? 'Core'
-                : (pull > push)
-                    ? 'Pull'
-                    : 'Push';
+            if (legsVol > coreVol) {
+              label = 'Legs';
+            } else if (coreVol > legsVol) {
+              label = 'Core';
+            } else {
+              // perfectly tied: pick a consistent default
+              label = 'Legs';
+            }
+          }
+        } else if (pull > push) {
+          label = 'Pull';
+        } else {
+          label = 'Push';
+        }
 
         result[day] = _DayWorkoutSummary(
           day: day,
@@ -584,7 +632,7 @@ class HomePageState extends State<HomePage> {
                 icon: const Icon(Icons.bug_report_outlined),
               ),
 
-              // ✅ UPDATED: opens picker instead of sharing everything immediately
+              // share picker
               IconButton(
                 tooltip: 'Share',
                 onPressed: entries.isEmpty ? null : _openSharePicker,
