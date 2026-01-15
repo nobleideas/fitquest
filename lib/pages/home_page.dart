@@ -25,7 +25,7 @@ class _DayWorkoutSummary {
 
 enum _WorkoutFilter { all, push, pull, legs, core }
 
-// ✅ CHANGED: made public so MainShell can reference it in GlobalKey<HomePageState>
+// ✅ public so MainShell can reference it in GlobalKey<HomePageState>
 class HomePageState extends State<HomePage> {
   final supabase = Supabase.instance.client;
 
@@ -34,7 +34,12 @@ class HomePageState extends State<HomePage> {
 
   _WorkoutFilter _selectedFilter = _WorkoutFilter.all;
 
-  // ✅ NEW: allow MainShell to refresh Home tab on selection
+  // --- Bug/Suggestion Report UI state ---
+  bool _isSubmittingReport = false;
+  final TextEditingController _reportController = TextEditingController();
+  String _reportType = 'bug'; // 'bug' | 'suggestion'
+
+  // ✅ allow MainShell to refresh Home tab on selection
   Future<void> refresh() async {
     await _loadRecentExercises();
   }
@@ -44,6 +49,125 @@ class HomePageState extends State<HomePage> {
     super.initState();
     _loadRecentExercises();
   }
+
+  @override
+  void dispose() {
+    _reportController.dispose();
+    super.dispose();
+  }
+
+  // ---------------- Bug/Suggestion report system ----------------
+
+  Future<void> _openReportDialog() async {
+    _reportController.clear();
+    _reportType = 'bug';
+
+    await showDialog<void>(
+      context: context,
+      builder: (_) => StatefulBuilder(
+        builder: (context, setLocal) {
+          return AlertDialog(
+            title: const Text('Report a bug / suggestion'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                DropdownButtonFormField<String>(
+                  value: _reportType,
+                  items: const [
+                    DropdownMenuItem(value: 'bug', child: Text('Bug')),
+                    DropdownMenuItem(value: 'suggestion', child: Text('Suggestion')),
+                  ],
+                  onChanged: (v) {
+                    if (v == null) return;
+                    setLocal(() => _reportType = v);
+                  },
+                  decoration: const InputDecoration(
+                    labelText: 'Type',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _reportController,
+                  minLines: 3,
+                  maxLines: 6,
+                  decoration: const InputDecoration(
+                    labelText: 'Describe it',
+                    hintText: 'What happened? What did you expect?',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: _isSubmittingReport ? null : () => Navigator.pop(context),
+                child: const Text('Cancel'),
+              ),
+              ElevatedButton.icon(
+                icon: _isSubmittingReport
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.send),
+                label: const Text('Submit'),
+                onPressed: _isSubmittingReport
+                    ? null
+                    : () async {
+                        await _submitReport();
+                        if (mounted) Navigator.pop(context);
+                      },
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Future<void> _submitReport() async {
+    final user = supabase.auth.currentUser;
+    if (user == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('You must be logged in to submit a report.')),
+      );
+      return;
+    }
+
+    final msg = _reportController.text.trim();
+    if (msg.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please enter a message.')),
+      );
+      return;
+    }
+
+    setState(() => _isSubmittingReport = true);
+
+    try {
+      await supabase.from('user_reports').insert({
+        'user_id': user.id,
+        'type': _reportType, // 'bug' or 'suggestion'
+        'message': msg,
+      });
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Thanks! Your report was sent.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to submit report: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _isSubmittingReport = false);
+    }
+  }
+
+  // ---------------- Existing workout summary logic ----------------
 
   bool _isLegsGroup(String group) {
     final g = group.trim().toLowerCase();
@@ -321,6 +445,14 @@ class HomePageState extends State<HomePage> {
                   style: Theme.of(context).textTheme.headlineSmall,
                 ),
               ),
+
+              // ✅ NEW: bug/suggestion report icon next to title
+              IconButton(
+                tooltip: 'Report a bug / suggestion',
+                onPressed: _isSubmittingReport ? null : _openReportDialog,
+                icon: const Icon(Icons.bug_report_outlined),
+              ),
+
               IconButton(
                 tooltip: 'Share',
                 onPressed: entries.isEmpty ? null : _shareFilteredWorkouts,
