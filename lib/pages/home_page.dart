@@ -228,14 +228,18 @@ class HomePageState extends State<HomePage> {
   String _formatDate(DateTime d) => '${d.month}/${d.day}/${d.year}';
 
   List<MapEntry<DateTime, _DayWorkoutSummary>> _filteredEntries() {
-    return summaryByDay.entries.where((e) => _matchesFilter(e.value)).toList();
+    // Keep stable ordering (most recent first) based on the DateTime key
+    final list = summaryByDay.entries.where((e) => _matchesFilter(e.value)).toList()
+      ..sort((a, b) => b.key.compareTo(a.key));
+    return list;
   }
 
-  String _buildShareText(List<MapEntry<DateTime, _DayWorkoutSummary>> entries) {
+  String _buildShareText(List<MapEntry<DateTime, _DayWorkoutSummary>> entries, {String? titleOverride}) {
     final filterName = _filterLabel(_selectedFilter);
     final b = StringBuffer();
 
-    b.writeln('Fit Quest — Workout Summary ($filterName)');
+    final title = titleOverride ?? 'Fit Quest — Workout Summary ($filterName)';
+    b.writeln(title);
     b.writeln('');
 
     if (entries.isEmpty) {
@@ -252,9 +256,7 @@ class HomePageState extends State<HomePage> {
       final muscles = s.muscleGroupCounts.entries.toList()
         ..sort((a, b) => b.value.compareTo(a.value));
       if (muscles.isNotEmpty) {
-        b.writeln(
-          'Muscles: ${muscles.map((e) => '${e.key}(${e.value})').join(', ')}',
-        );
+        b.writeln('Muscles: ${muscles.map((e) => '${e.key}(${e.value})').join(', ')}');
       }
 
       if (s.exerciseNames.isNotEmpty) {
@@ -270,13 +272,146 @@ class HomePageState extends State<HomePage> {
     return b.toString().trim();
   }
 
-  Future<void> _shareFilteredWorkouts() async {
-    final entries = _filteredEntries();
+  Future<void> _shareEntries(List<MapEntry<DateTime, _DayWorkoutSummary>> entries, {String? subject}) async {
     final text = _buildShareText(entries);
-
     await Share.share(
       text,
-      subject: 'Workout Summary (${_filterLabel(_selectedFilter)})',
+      subject: subject ?? 'Workout Summary',
+    );
+  }
+
+  // ✅ NEW: share dialog that lets user select one or more displayed workouts
+  Future<void> _openSharePicker() async {
+    final entries = _filteredEntries();
+    if (entries.isEmpty) return;
+
+    // Local selection state (keys are DateTime day values)
+    final selected = <DateTime>{};
+
+    await showDialog<void>(
+      context: context,
+      builder: (_) => StatefulBuilder(
+        builder: (context, setLocal) {
+          void toggleAll(bool select) {
+            setLocal(() {
+              selected.clear();
+              if (select) {
+                selected.addAll(entries.map((e) => e.key));
+              }
+            });
+          }
+
+          final allSelected = selected.length == entries.length && entries.isNotEmpty;
+
+          return AlertDialog(
+            title: Text('Share workouts (${_filterLabel(_selectedFilter)})'),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          'Select one or more days to share.',
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      TextButton(
+                        onPressed: () => toggleAll(true),
+                        child: const Text('Select all'),
+                      ),
+                      const SizedBox(width: 8),
+                      TextButton(
+                        onPressed: () => toggleAll(false),
+                        child: const Text('Clear'),
+                      ),
+                      const Spacer(),
+                      Text(
+                        '${selected.length}/${entries.length}',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ],
+                  ),
+                  const Divider(height: 16),
+                  Flexible(
+                    child: ListView.builder(
+                      shrinkWrap: true,
+                      itemCount: entries.length,
+                      itemBuilder: (context, i) {
+                        final e = entries[i];
+                        final day = e.key;
+                        final s = e.value;
+
+                        final isChecked = selected.contains(day);
+
+                        final subtitleParts = <String>[];
+                        if (s.exerciseNames.isNotEmpty) {
+                          subtitleParts.add('${s.exerciseNames.length} exercises');
+                        }
+                        subtitleParts.add(s.dayTypeLabel);
+
+                        return CheckboxListTile(
+                          value: isChecked,
+                          controlAffinity: ListTileControlAffinity.leading,
+                          title: Text(_formatDate(day)),
+                          subtitle: Text(subtitleParts.join(' • ')),
+                          onChanged: (v) {
+                            setLocal(() {
+                              if (v == true) {
+                                selected.add(day);
+                              } else {
+                                selected.remove(day);
+                              }
+                            });
+                          },
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Cancel'),
+              ),
+              TextButton(
+                // keep your old behavior available
+                onPressed: () async {
+                  Navigator.pop(context);
+                  await _shareEntries(
+                    entries,
+                    subject: 'Workout Summary (${_filterLabel(_selectedFilter)})',
+                  );
+                },
+                child: const Text('Share all shown'),
+              ),
+              ElevatedButton.icon(
+                icon: const Icon(Icons.share),
+                label: Text(allSelected ? 'Share selected' : 'Share selected'),
+                onPressed: selected.isEmpty
+                    ? null
+                    : () async {
+                        final picked = entries.where((e) => selected.contains(e.key)).toList();
+                        Navigator.pop(context);
+                        await _shareEntries(
+                          picked,
+                          subject: 'Workout Summary (${_filterLabel(_selectedFilter)})',
+                        );
+                      },
+              ),
+            ],
+          );
+        },
+      ),
     );
   }
 
@@ -291,13 +426,9 @@ class HomePageState extends State<HomePage> {
             child: OutlinedButton(
               style: OutlinedButton.styleFrom(
                 padding: const EdgeInsets.symmetric(vertical: 10),
-                backgroundColor: isSelected
-                    ? Theme.of(context).colorScheme.primary.withOpacity(0.15)
-                    : null,
+                backgroundColor: isSelected ? Theme.of(context).colorScheme.primary.withOpacity(0.15) : null,
                 side: BorderSide(
-                  color: isSelected
-                      ? Theme.of(context).colorScheme.primary
-                      : Theme.of(context).dividerColor,
+                  color: isSelected ? Theme.of(context).colorScheme.primary : Theme.of(context).dividerColor,
                 ),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(8),
@@ -446,16 +577,17 @@ class HomePageState extends State<HomePage> {
                 ),
               ),
 
-              // ✅ NEW: bug/suggestion report icon next to title
+              // bug/suggestion report
               IconButton(
                 tooltip: 'Report a bug / suggestion',
                 onPressed: _isSubmittingReport ? null : _openReportDialog,
                 icon: const Icon(Icons.bug_report_outlined),
               ),
 
+              // ✅ UPDATED: opens picker instead of sharing everything immediately
               IconButton(
                 tooltip: 'Share',
-                onPressed: entries.isEmpty ? null : _shareFilteredWorkouts,
+                onPressed: entries.isEmpty ? null : _openSharePicker,
                 icon: const Icon(Icons.share),
               ),
             ],
