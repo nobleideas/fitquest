@@ -32,13 +32,10 @@ class ExerciseService {
     required String exerciseId,
     required String name,
   }) async {
-    await supabase
-        .from('exercises')
-        .update({'name': name})
-        .eq('id', exerciseId);
+    await supabase.from('exercises').update({'name': name}).eq('id', exerciseId);
   }
 
-  /// ✅ Move an exercise to a different piece of equipment
+  /// ✅ Move an exercise to another equipment
   Future<void> moveExerciseToEquipment({
     required String exerciseId,
     required String equipmentId,
@@ -55,7 +52,6 @@ class ExerciseService {
 
   // ✅ Count how many sessions exist for an exercise
   Future<int> getSessionCountForExercise(String exerciseId) async {
-    // We only need a count, not all rows
     final res = await supabase
         .from('exercise_sessions')
         .select('id')
@@ -66,10 +62,7 @@ class ExerciseService {
 
   // ✅ Delete all sessions for an exercise (cascade behavior)
   Future<void> deleteSessionsForExercise(String exerciseId) async {
-    await supabase
-        .from('exercise_sessions')
-        .delete()
-        .eq('exercise_id', exerciseId);
+    await supabase.from('exercise_sessions').delete().eq('exercise_id', exerciseId);
   }
 
   // ✅ Cascade: delete sessions first, then exercise

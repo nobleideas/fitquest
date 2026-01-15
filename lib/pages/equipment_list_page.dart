@@ -12,6 +12,7 @@ class EquipmentListPage extends StatefulWidget {
 
 class _EquipmentListPageState extends State<EquipmentListPage> {
   final supabase = Supabase.instance.client;
+  final _equipmentService = EquipmentService();
 
   List<Map<String, dynamic>> equipmentList = [];
   bool isLoading = true;
@@ -29,7 +30,7 @@ class _EquipmentListPageState extends State<EquipmentListPage> {
     setState(() => isLoading = true);
 
     try {
-      final list = await EquipmentService().getAllEquipment();
+      final list = await _equipmentService.getAllEquipment();
 
       final sorted = List<Map<String, dynamic>>.from(list)
         ..sort((a, b) => (a['name'] as String)
@@ -91,7 +92,6 @@ class _EquipmentListPageState extends State<EquipmentListPage> {
         final eqId = exJoined['equipment_id'];
         if (eqId != null) ids.add(eqId.toString());
       } else if (exJoined is List) {
-        // In case the join comes back as a list
         for (final item in exJoined) {
           if (item is Map) {
             final eqId = item['equipment_id'];
@@ -127,16 +127,384 @@ class _EquipmentListPageState extends State<EquipmentListPage> {
               final name = controller.text.trim();
               if (name.isEmpty) return;
 
-              await EquipmentService().insertEquipment(name);
+              await _equipmentService.insertEquipment(name);
 
+              if (!mounted) return;
               Navigator.pop(context);
+
               await _loadEquipment(); // reload list + today's highlights
+              if (!mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('Added equipment: $name'),
+                  behavior: SnackBarBehavior.floating,
+                  duration: const Duration(seconds: 2),
+                ),
+              );
             },
             child: const Text("Add"),
           ),
         ],
       ),
     );
+  }
+
+  // ---------- EDIT EQUIPMENT NAME ----------
+  Future<void> _editEquipmentName(Map<String, dynamic> equipment) async {
+    final equipmentId = equipment['id']?.toString() ?? '';
+    final currentName = (equipment['name'] ?? '').toString();
+    final controller = TextEditingController(text: currentName);
+
+    await showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text("Edit Equipment Name"),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(labelText: "Equipment Name"),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text("Cancel"),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              final newName = controller.text.trim();
+              if (newName.isEmpty) return;
+
+              await _equipmentService.updateEquipmentName(
+                equipmentId: equipmentId,
+                name: newName,
+              );
+
+              if (!mounted) return;
+              Navigator.pop(context);
+
+              await _loadEquipment();
+              if (!mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('Renamed to: $newName'),
+                  behavior: SnackBarBehavior.floating,
+                  duration: const Duration(seconds: 2),
+                ),
+              );
+            },
+            child: const Text("Save"),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ---------- DELETE EQUIPMENT FLOW ----------
+  Future<void> _deleteEquipmentFlow(Map<String, dynamic> equipment) async {
+    final equipmentId = equipment['id']?.toString() ?? '';
+    final equipmentName = (equipment['name'] ?? 'this equipment').toString();
+
+    final exerciseCount =
+        await _equipmentService.getExerciseCountForEquipment(equipmentId);
+
+    // If no exercises attached: simple confirm delete
+    if (exerciseCount == 0) {
+      final confirm = await showDialog<bool>(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: const Text("Delete Equipment?"),
+          content: Text('Are you sure you want to delete “$equipmentName”?'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text("Cancel"),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(context, true),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Theme.of(context).colorScheme.error,
+                foregroundColor: Theme.of(context).colorScheme.onError,
+              ),
+              child: const Text("Delete"),
+            ),
+          ],
+        ),
+      );
+
+      if (confirm != true) return;
+
+      await _equipmentService.deleteEquipment(equipmentId);
+
+      if (!mounted) return;
+      await _loadEquipment();
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Deleted equipment: $equipmentName'),
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+
+    // If exercises attached: offer move OR delete anyway
+    final action = await showDialog<String>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text("Exercises Attached"),
+        content: Text(
+          '“$equipmentName” has $exerciseCount exercise${exerciseCount == 1 ? '' : 's'} attached.\n\n'
+          'You can move those exercise${exerciseCount == 1 ? '' : 's'} to another equipment, or delete everything anyway.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, 'cancel'),
+            child: const Text("Cancel"),
+          ),
+          // Destructive-looking button
+          TextButton(
+            onPressed: () => Navigator.pop(context, 'delete_anyway'),
+            style: TextButton.styleFrom(
+              foregroundColor: Theme.of(context).colorScheme.error,
+            ),
+            child: const Text("Delete anyway"),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, 'move'),
+            child: const Text("Move exercises…"),
+          ),
+        ],
+      ),
+    );
+
+    if (action == null || action == 'cancel') return;
+
+    if (action == 'move') {
+      await _moveAllExercisesThenDeleteEquipment(
+        fromEquipmentId: equipmentId,
+        fromEquipmentName: equipmentName,
+        exerciseCount: exerciseCount,
+      );
+      return;
+    }
+
+    if (action == 'delete_anyway') {
+      final confirm = await showDialog<bool>(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: const Text("Delete Everything?"),
+          content: Text(
+            'This will delete:\n'
+            '• $exerciseCount exercise${exerciseCount == 1 ? '' : 's'}\n'
+            '• All recorded sessions for those exercise${exerciseCount == 1 ? '' : 's'}\n\n'
+            'This cannot be undone. Continue?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text("Cancel"),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(context, true),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Theme.of(context).colorScheme.error,
+                foregroundColor: Theme.of(context).colorScheme.onError,
+              ),
+              child: const Text("Delete"),
+            ),
+          ],
+        ),
+      );
+
+      if (confirm != true) return;
+
+      await _equipmentService.deleteEquipmentCascade(equipmentId);
+
+      if (!mounted) return;
+      await _loadEquipment();
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Deleted “$equipmentName” and its exercises/sessions.'),
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    }
+  }
+
+  // ---------- MOVE ALL EXERCISES THEN DELETE ----------
+  Future<void> _moveAllExercisesThenDeleteEquipment({
+    required String fromEquipmentId,
+    required String fromEquipmentName,
+    required int exerciseCount,
+  }) async {
+    // Load equipment list for dropdown (exclude the one being deleted)
+    final equipmentListDynamic = await _equipmentService.getAllEquipment();
+    final equipmentOptions = equipmentListDynamic
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .where((e) => e['id'].toString() != fromEquipmentId)
+        .toList()
+      ..sort((a, b) => (a['name'] as String)
+          .toLowerCase()
+          .compareTo((b['name'] as String).toLowerCase()));
+
+    String? selectedEquipmentId;
+    String? targetEquipmentName;
+    final newEquipmentController = TextEditingController();
+
+    final moved = await showDialog<bool>(
+      context: context,
+      builder: (_) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            final typedName = newEquipmentController.text.trim();
+
+            final canMove =
+                (selectedEquipmentId != null && selectedEquipmentId!.isNotEmpty) ||
+                    typedName.isNotEmpty;
+
+            return AlertDialog(
+              title: Text(
+                'Move $exerciseCount exercise${exerciseCount == 1 ? '' : 's'}',
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const Text('Move to existing equipment:'),
+                  const SizedBox(height: 8),
+
+                  DropdownButtonFormField<String>(
+                    value: selectedEquipmentId,
+                    isExpanded: true,
+                    items: [
+                      for (final e in equipmentOptions)
+                        DropdownMenuItem(
+                          value: e['id'].toString(),
+                          child: Text(e['name'].toString()),
+                        ),
+                    ],
+                    // 🔒 Disable dropdown while typing new equipment name
+                    onChanged: newEquipmentController.text.isNotEmpty
+                        ? null
+                        : (val) {
+                            setDialogState(() {
+                              selectedEquipmentId = val;
+                              if (val != null) {
+                                newEquipmentController.text = '';
+                              }
+                            });
+                          },
+                    decoration: const InputDecoration(
+                      border: OutlineInputBorder(),
+                      hintText: 'Select equipment',
+                    ),
+                  ),
+
+                  const SizedBox(height: 16),
+                  const Divider(),
+                  const SizedBox(height: 8),
+
+                  const Text('Or create a new equipment:'),
+                  const SizedBox(height: 8),
+
+                  TextField(
+                    controller: newEquipmentController,
+                    // 🔒 Disable text field if dropdown selected
+                    enabled: selectedEquipmentId == null,
+                    decoration: const InputDecoration(
+                      border: OutlineInputBorder(),
+                      labelText: 'New equipment name',
+                    ),
+                    onChanged: (_) {
+                      setDialogState(() {
+                        if (newEquipmentController.text.isNotEmpty) {
+                          selectedEquipmentId = null;
+                        }
+                      });
+                    },
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  child: const Text('Cancel'),
+                ),
+                ElevatedButton(
+                  onPressed: canMove
+                      ? () async {
+                          String targetEquipmentId;
+
+                          final typed = newEquipmentController.text.trim();
+
+                          if (typed.isNotEmpty) {
+                            // Create new equipment and move
+                            final created =
+                                await _equipmentService.insertEquipment(typed);
+                            targetEquipmentId = created['id'].toString();
+                            targetEquipmentName = created['name'].toString();
+                          } else {
+                            targetEquipmentId = selectedEquipmentId!;
+                            targetEquipmentName = equipmentOptions
+                                .firstWhere((e) =>
+                                    e['id'].toString() == selectedEquipmentId)['name']
+                                .toString();
+                          }
+
+                          await _equipmentService.moveAllExercisesToEquipment(
+                            fromEquipmentId: fromEquipmentId,
+                            toEquipmentId: targetEquipmentId,
+                          );
+
+                          await _equipmentService.deleteEquipment(fromEquipmentId);
+
+                          if (!mounted) return;
+
+                          Navigator.pop(context, true);
+
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                'Moved $exerciseCount exercise${exerciseCount == 1 ? '' : 's'} to $targetEquipmentName, then deleted “$fromEquipmentName”.',
+                              ),
+                              behavior: SnackBarBehavior.floating,
+                              duration: const Duration(seconds: 3),
+                            ),
+                          );
+                        }
+                      : null,
+                  child: const Text('Move & Delete'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    if (moved != true) return;
+
+    // Refresh list + today's highlights after successful operation
+    if (!mounted) return;
+    await _loadEquipment();
+  }
+
+  // ---------- MENU HANDLER ----------
+  Future<void> _onMenuSelected(
+      String value, Map<String, dynamic> equipment) async {
+    switch (value) {
+      case 'edit':
+        await _editEquipmentName(equipment);
+        break;
+      case 'delete':
+        await _deleteEquipmentFlow(equipment);
+        break;
+    }
   }
 
   @override
@@ -167,9 +535,31 @@ class _EquipmentListPageState extends State<EquipmentListPage> {
                             : null,
                       ),
                       subtitle: Text("QR: ${equipment['qr_code'] ?? 'N/A'}"),
-                      trailing: hasSessionToday
-                          ? const Icon(Icons.check_circle)
-                          : const Icon(Icons.chevron_right),
+                      trailing: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            hasSessionToday
+                                ? Icons.check_circle
+                                : Icons.chevron_right,
+                          ),
+                          const SizedBox(width: 8),
+                          PopupMenuButton<String>(
+                            onSelected: (value) =>
+                                _onMenuSelected(value, equipment),
+                            itemBuilder: (context) => const [
+                              PopupMenuItem(
+                                value: 'edit',
+                                child: Text('Edit name'),
+                              ),
+                              PopupMenuItem(
+                                value: 'delete',
+                                child: Text('Delete'),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
                       onTap: () async {
                         await Navigator.push(
                           context,
