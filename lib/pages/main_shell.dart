@@ -13,13 +13,16 @@ class MainShell extends StatefulWidget {
 class _MainShellState extends State<MainShell> {
   int _index = 0;
 
-  // ✅ NEW: key uses the PUBLIC HomePageState type
+  // ✅ Existing
   final GlobalKey<HomePageState> _homeKey = GlobalKey<HomePageState>();
+
+  // ✅ NEW: Profile key (must use the PUBLIC state type)
+  final GlobalKey<ProfilePageState> _profileKey = GlobalKey<ProfilePageState>();
 
   late final List<Widget> _pages = [
     HomePage(key: _homeKey),
     const EquipmentListPage(),
-    const ProfilePage(),
+    ProfilePage(key: _profileKey), // ✅ was const ProfilePage()
   ];
 
   String get _title {
@@ -38,6 +41,9 @@ class _MainShellState extends State<MainShell> {
   void _onTap(int i) {
     if (i == 0) {
       _homeKey.currentState?.refresh();
+    }
+    if (i == 2) {
+      _profileKey.currentState?.refresh(); // ✅ refresh stats when Profile tab clicked
     }
     setState(() => _index = i);
   }

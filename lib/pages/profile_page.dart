@@ -7,11 +7,15 @@ class ProfilePage extends StatefulWidget {
   const ProfilePage({super.key});
 
   @override
-  State<ProfilePage> createState() => _ProfilePageState();
+  State<ProfilePage> createState() => ProfilePageState();
 }
 
-class _ProfilePageState extends State<ProfilePage> {
+// ✅ PUBLIC state type so MainShell can use GlobalKey<ProfilePageState>
+class ProfilePageState extends State<ProfilePage> {
   final supabase = Supabase.instance.client;
+
+  // ✅ store the future so we can force a refetch on demand
+  late Future<Map<String, dynamic>> _dataFuture;
 
   // Goal editing state
   bool _isSavingGoal = false;
@@ -55,6 +59,19 @@ class _ProfilePageState extends State<ProfilePage> {
     if (v == null) return 0.0;
     if (v is num) return v.toDouble();
     return double.tryParse(v.toString()) ?? 0.0;
+  }
+
+  // ✅ called by MainShell when Profile tab is tapped
+  void refresh() {
+    setState(() {
+      _dataFuture = _loadData();
+    });
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _dataFuture = _loadData();
   }
 
   Future<Map<String, dynamic>> _loadData() async {
@@ -155,7 +172,7 @@ class _ProfilePageState extends State<ProfilePage> {
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Goal updated')));
-      setState(() {}); // refetch
+      refresh(); // ✅ refetch
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Update failed: $e')));
@@ -192,7 +209,7 @@ class _ProfilePageState extends State<ProfilePage> {
 
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Stats reset")));
-      setState(() {}); // refetch
+      refresh(); // ✅ refetch
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("Reset failed: $e")));
@@ -217,7 +234,7 @@ class _ProfilePageState extends State<ProfilePage> {
         SnackBar(content: Text("Friend request sent to $username")),
       );
       _friendUsernameController.clear();
-      setState(() {}); // refetch
+      refresh(); // ✅ refetch
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -239,7 +256,7 @@ class _ProfilePageState extends State<ProfilePage> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(newStatus == 'accepted' ? "Request accepted" : "Request declined")),
       );
-      setState(() {}); // refetch
+      refresh(); // ✅ refetch
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -274,7 +291,7 @@ class _ProfilePageState extends State<ProfilePage> {
   @override
   Widget build(BuildContext context) {
     return FutureBuilder<Map<String, dynamic>>(
-      future: _loadData(),
+      future: _dataFuture, // ✅ uses stored future
       builder: (context, snapshot) {
         if (!snapshot.hasData) {
           return const Center(child: CircularProgressIndicator());
@@ -474,7 +491,7 @@ class _ProfilePageState extends State<ProfilePage> {
               _volumeBar("Legs", legs),
               _volumeBar("Core", core),
 
-              // ✅ MOVED HERE: Reset Stats after stats
+              // Reset Stats after stats
               const SizedBox(height: 8),
               SizedBox(
                 width: double.infinity,
@@ -487,7 +504,7 @@ class _ProfilePageState extends State<ProfilePage> {
                 ),
               ),
 
-              // ✅ MOVED HERE: Log Out after Reset Stats
+              // Log Out after Reset Stats
               const SizedBox(height: 12),
               SizedBox(
                 width: double.infinity,
