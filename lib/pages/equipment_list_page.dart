@@ -32,6 +32,7 @@ class _EquipmentListPageState extends State<EquipmentListPage> {
     try {
       final list = await _equipmentService.getAllEquipment();
 
+      // Keep alphabetical sorting, but show "used today" equipment first (also alphabetical).
       final sorted = List<Map<String, dynamic>>.from(list)
         ..sort((a, b) => (a['name'] as String)
             .toLowerCase()
@@ -39,9 +40,22 @@ class _EquipmentListPageState extends State<EquipmentListPage> {
 
       final todaySet = await _loadEquipmentIdsWithSessionsToday();
 
+      // Reorder: used today (alpha) first, then the rest (alpha)
+      final usedToday = <Map<String, dynamic>>[];
+      final notUsedToday = <Map<String, dynamic>>[];
+
+      for (final e in sorted) {
+        final id = e['id']?.toString() ?? '';
+        if (todaySet.contains(id)) {
+          usedToday.add(e);
+        } else {
+          notUsedToday.add(e);
+        }
+      }
+
       if (!mounted) return;
       setState(() {
-        equipmentList = sorted;
+        equipmentList = [...usedToday, ...notUsedToday];
         equipmentWithSessionsToday = todaySet;
         isLoading = false;
       });
