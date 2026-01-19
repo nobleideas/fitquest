@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../services/exercise_service.dart';
 import '../services/equipment_service.dart';
 import 'exercise_session_page.dart';
@@ -18,11 +19,16 @@ class ExerciseListPage extends StatefulWidget {
 }
 
 class _ExerciseListPageState extends State<ExerciseListPage> {
+  final supabase = Supabase.instance.client;
+
   List<Map<String, dynamic>> exercises = [];
   bool isLoading = true;
 
   final _exerciseService = ExerciseService();
   final _equipmentService = EquipmentService();
+
+  /// Exercise IDs that have at least one session today (for this equipment)
+  Set<String> exercisesWithSessionsToday = {};
 
   @override
   void initState() {
@@ -32,21 +38,87 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
 
   Future<void> _loadExercises() async {
     setState(() => isLoading = true);
-    final list = await _exerciseService.getExercisesForEquipment(
-      widget.equipmentId,
-    );
 
-    final sorted = List<Map<String, dynamic>>.from(list)
-      ..sort(
-        (a, b) => (a['name'] as String).toLowerCase().compareTo(
-          (b['name'] as String).toLowerCase(),
-        ),
+    try {
+      final list = await _exerciseService.getExercisesForEquipment(
+        widget.equipmentId,
       );
 
-    setState(() {
-      exercises = sorted;
-      isLoading = false;
-    });
+      // Base alphabetical sort (case-insensitive)
+      final sorted = List<Map<String, dynamic>>.from(list)
+        ..sort(
+          (a, b) => (a['name'] as String).toLowerCase().compareTo(
+            (b['name'] as String).toLowerCase(),
+          ),
+        );
+
+      final todaySet = await _loadExerciseIdsWithSessionsToday();
+
+      // Reorder: used today (alpha) first, then the rest (alpha)
+      final usedToday = <Map<String, dynamic>>[];
+      final notUsedToday = <Map<String, dynamic>>[];
+
+      for (final ex in sorted) {
+        final id = ex['id']?.toString() ?? '';
+        if (todaySet.contains(id)) {
+          usedToday.add(ex);
+        } else {
+          notUsedToday.add(ex);
+        }
+      }
+
+      if (!mounted) return;
+      setState(() {
+        exercises = [...usedToday, ...notUsedToday];
+        exercisesWithSessionsToday = todaySet;
+        isLoading = false;
+      });
+    } catch (e, st) {
+      debugPrint('Error loading exercises: $e');
+      debugPrint('$st');
+
+      if (!mounted) return;
+      setState(() {
+        exercises = [];
+        exercisesWithSessionsToday = {};
+        isLoading = false;
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to load exercises: $e')),
+      );
+    }
+  }
+
+  /// Load exercise IDs (for this equipment) that have at least one session today.
+  Future<Set<String>> _loadExerciseIdsWithSessionsToday() async {
+    final user = supabase.auth.currentUser;
+    if (user == null) return {};
+
+    final nowLocal = DateTime.now();
+    final startLocal = DateTime(nowLocal.year, nowLocal.month, nowLocal.day);
+    final endLocal = startLocal.add(const Duration(days: 1));
+
+    // Convert to UTC for consistent filtering with timestamptz
+    final startUtc = startLocal.toUtc().toIso8601String();
+    final endUtc = endLocal.toUtc().toIso8601String();
+
+    // exercise_sessions has exercise_id, so we can filter by exercise.equipment_id via join
+    final rows = await supabase
+        .from('exercise_sessions')
+        .select('exercise_id, created_at, exercises!inner(id, equipment_id)')
+        .eq('user_id', user.id)
+        .eq('exercises.equipment_id', widget.equipmentId)
+        .gte('created_at', startUtc)
+        .lt('created_at', endUtc);
+
+    final ids = <String>{};
+    for (final row in rows) {
+      final exId = row['exercise_id'];
+      if (exId != null) ids.add(exId.toString());
+    }
+
+    return ids;
   }
 
   // ---------- ADD EXERCISE ----------
@@ -94,8 +166,9 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
                           DropdownMenuItem(value: 'core', child: Text('Core')),
                         ],
                         onChanged: (val) {
-                          if (val != null)
+                          if (val != null) {
                             setDialogState(() => primaryMuscleGroup = val);
+                          }
                         },
                       ),
                     ],
@@ -138,7 +211,7 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
 
                     if (!mounted) return;
                     Navigator.pop(context);
-                    await _loadExercises();
+                    await _loadExercises(); // refresh list + today's highlights
                   },
                   child: const Text("Add"),
                 ),
@@ -302,8 +375,10 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
 
                           if (typedName.isNotEmpty) {
                             // Create new equipment then move
-                            final created = await _equipmentService
-                                .insertEquipment(typedName);
+                            final created =
+                                await _equipmentService.insertEquipment(
+                                  typedName,
+                                );
                             targetEquipmentId = created['id'].toString();
                             targetEquipmentName = created['name'].toString();
                           } else {
@@ -335,7 +410,7 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
                             ),
                           );
 
-                          // If moved off this equipment, refresh list
+                          // If moved off this equipment, refresh list + highlights
                           await _loadExercises();
                         }
                       : null,
@@ -415,51 +490,78 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
       body: isLoading
           ? const Center(child: CircularProgressIndicator())
           : exercises.isEmpty
-          ? const Center(
-              child: Text("No exercises available for this equipment."),
-            )
-          : ListView.builder(
-              itemCount: exercises.length,
-              itemBuilder: (context, index) {
-                final exercise = exercises[index];
+              ? const Center(
+                  child: Text("No exercises available for this equipment."),
+                )
+              : RefreshIndicator(
+                  onRefresh: _loadExercises,
+                  child: ListView.builder(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    itemCount: exercises.length,
+                    itemBuilder: (context, index) {
+                      final exercise = exercises[index];
+                      final exerciseId = exercise['id']?.toString() ?? '';
+                      final hasSessionToday =
+                          exercisesWithSessionsToday.contains(exerciseId);
 
-                return ListTile(
-                  title: Text(exercise['name']),
-                  subtitle: Text(
-                    "${exercise['primary_muscle_group']} • ${exercise['type']}",
+                      return ListTile(
+                        title: Text(
+                          exercise['name'],
+                          style: hasSessionToday
+                              ? TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  color: Theme.of(context).colorScheme.primary,
+                                )
+                              : null,
+                        ),
+                        subtitle: Text(
+                          "${exercise['primary_muscle_group']} • ${exercise['type']}",
+                        ),
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              hasSessionToday
+                                  ? Icons.check_circle
+                                  : Icons.fitness_center,
+                            ),
+                            const SizedBox(width: 8),
+                            PopupMenuButton<String>(
+                              onSelected: (value) =>
+                                  _onMenuSelected(value, exercise),
+                              itemBuilder: (context) => const [
+                                PopupMenuItem(
+                                  value: 'edit',
+                                  child: Text('Edit name'),
+                                ),
+                                PopupMenuItem(
+                                  value: 'move',
+                                  child: Text('Move to equipment…'),
+                                ),
+                                PopupMenuItem(
+                                  value: 'delete',
+                                  child: Text('Delete'),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                        onTap: () async {
+                          await Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) =>
+                                  ExerciseSessionPage(exercise: exercise),
+                            ),
+                          );
+
+                          // Refresh on return so highlight + ordering updates immediately
+                          await _loadExercises();
+                        },
+                      );
+                    },
                   ),
-                  trailing: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(Icons.fitness_center),
-                      const SizedBox(width: 8),
-                      PopupMenuButton<String>(
-                        onSelected: (value) => _onMenuSelected(value, exercise),
-                        itemBuilder: (context) => const [
-                          PopupMenuItem(
-                            value: 'edit',
-                            child: Text('Edit name'),
-                          ),
-                          PopupMenuItem(
-                            value: 'move',
-                            child: Text('Move to equipment…'),
-                          ),
-                          PopupMenuItem(value: 'delete', child: Text('Delete')),
-                        ],
-                      ),
-                    ],
-                  ),
-                  onTap: () {
-                    Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => ExerciseSessionPage(exercise: exercise),
-                      ),
-                    );
-                  },
-                );
-              },
-            ),
+                ),
       floatingActionButton: FloatingActionButton(
         onPressed: _addExercise,
         child: const Icon(Icons.add),
