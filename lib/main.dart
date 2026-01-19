@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'firebase_options.dart'; // ✅ MUST be here
 
 import 'auth_page.dart';
 import 'pages/main_shell.dart';
@@ -9,6 +11,11 @@ import 'services/profile_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // ✅ Web REQUIRES options; mobile uses native config
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
 
   await Supabase.initialize(
     url: 'https://innhkmqtrdxpsggxutxw.supabase.co',

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'home_page.dart';
 import 'equipment_list_page.dart';
 import 'profile_page.dart';
+import '../services/push_token_service.dart';
 
 class MainShell extends StatefulWidget {
   const MainShell({super.key});
@@ -15,7 +16,7 @@ class _MainShellState extends State<MainShell> {
 
   final GlobalKey<HomePageState> _homeKey = GlobalKey<HomePageState>();
 
-  // ✅ NEW: Equipment key
+  // ✅ Equipment key
   final GlobalKey<EquipmentListPageState> _equipmentKey =
       GlobalKey<EquipmentListPageState>();
 
@@ -23,9 +24,17 @@ class _MainShellState extends State<MainShell> {
 
   late final List<Widget> _pages = [
     HomePage(key: _homeKey),
-    EquipmentListPage(key: _equipmentKey), // ✅ was const EquipmentListPage()
+    EquipmentListPage(key: _equipmentKey),
     ProfilePage(key: _profileKey),
   ];
+
+  @override
+  void initState() {
+    super.initState();
+
+    // ✅ register push token once when the app shell starts
+    PushTokenService.instance.initAndRegister();
+  }
 
   String get _title {
     switch (_index) {
@@ -45,7 +54,7 @@ class _MainShellState extends State<MainShell> {
       _homeKey.currentState?.refresh();
     }
     if (i == 1) {
-      _equipmentKey.currentState?.refresh(); // ✅ refresh Equipment when tapped
+      _equipmentKey.currentState?.refresh();
     }
     if (i == 2) {
       _profileKey.currentState?.refresh();
@@ -68,7 +77,9 @@ class _MainShellState extends State<MainShell> {
         items: const [
           BottomNavigationBarItem(icon: Icon(Icons.home), label: 'Home'),
           BottomNavigationBarItem(
-              icon: Icon(Icons.fitness_center), label: 'Equipment'),
+            icon: Icon(Icons.fitness_center),
+            label: 'Equipment',
+          ),
           BottomNavigationBarItem(icon: Icon(Icons.person), label: 'Profile'),
         ],
       ),
