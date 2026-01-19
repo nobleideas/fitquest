@@ -7,10 +7,11 @@ class EquipmentListPage extends StatefulWidget {
   const EquipmentListPage({super.key});
 
   @override
-  State<EquipmentListPage> createState() => _EquipmentListPageState();
+  State<EquipmentListPage> createState() => EquipmentListPageState();
 }
 
-class _EquipmentListPageState extends State<EquipmentListPage> {
+// ✅ PUBLIC so MainShell can use GlobalKey<EquipmentListPageState>
+class EquipmentListPageState extends State<EquipmentListPage> {
   final supabase = Supabase.instance.client;
   final _equipmentService = EquipmentService();
 
@@ -20,6 +21,11 @@ class _EquipmentListPageState extends State<EquipmentListPage> {
   /// Equipment IDs that have at least one exercise session today
   Set<String> equipmentWithSessionsToday = {};
 
+  // ✅ allow MainShell to refresh Equipment tab on selection
+  Future<void> refresh() async {
+    await _loadEquipment();
+  }
+
   @override
   void initState() {
     super.initState();
@@ -27,6 +33,7 @@ class _EquipmentListPageState extends State<EquipmentListPage> {
   }
 
   Future<void> _loadEquipment() async {
+    if (!mounted) return;
     setState(() => isLoading = true);
 
     try {
@@ -377,9 +384,9 @@ class _EquipmentListPageState extends State<EquipmentListPage> {
           builder: (context, setDialogState) {
             final typedName = newEquipmentController.text.trim();
 
-            final canMove =
-                (selectedEquipmentId != null && selectedEquipmentId!.isNotEmpty) ||
-                    typedName.isNotEmpty;
+            final canMove = (selectedEquipmentId != null &&
+                    selectedEquipmentId!.isNotEmpty) ||
+                typedName.isNotEmpty;
 
             return AlertDialog(
               title: Text(
@@ -391,7 +398,6 @@ class _EquipmentListPageState extends State<EquipmentListPage> {
                 children: [
                   const Text('Move to existing equipment:'),
                   const SizedBox(height: 8),
-
                   DropdownButtonFormField<String>(
                     value: selectedEquipmentId,
                     isExpanded: true,
@@ -418,14 +424,11 @@ class _EquipmentListPageState extends State<EquipmentListPage> {
                       hintText: 'Select equipment',
                     ),
                   ),
-
                   const SizedBox(height: 16),
                   const Divider(),
                   const SizedBox(height: 8),
-
                   const Text('Or create a new equipment:'),
                   const SizedBox(height: 8),
-
                   TextField(
                     controller: newEquipmentController,
                     // 🔒 Disable text field if dropdown selected
@@ -466,7 +469,8 @@ class _EquipmentListPageState extends State<EquipmentListPage> {
                             targetEquipmentId = selectedEquipmentId!;
                             targetEquipmentName = equipmentOptions
                                 .firstWhere((e) =>
-                                    e['id'].toString() == selectedEquipmentId)['name']
+                                    e['id'].toString() == selectedEquipmentId)[
+                                    'name']
                                 .toString();
                           }
 
@@ -510,7 +514,9 @@ class _EquipmentListPageState extends State<EquipmentListPage> {
 
   // ---------- MENU HANDLER ----------
   Future<void> _onMenuSelected(
-      String value, Map<String, dynamic> equipment) async {
+    String value,
+    Map<String, dynamic> equipment,
+  ) async {
     switch (value) {
       case 'edit':
         await _editEquipmentName(equipment);

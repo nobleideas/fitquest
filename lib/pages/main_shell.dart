@@ -13,16 +13,18 @@ class MainShell extends StatefulWidget {
 class _MainShellState extends State<MainShell> {
   int _index = 0;
 
-  // ✅ Existing
   final GlobalKey<HomePageState> _homeKey = GlobalKey<HomePageState>();
 
-  // ✅ NEW: Profile key (must use the PUBLIC state type)
+  // ✅ NEW: Equipment key
+  final GlobalKey<EquipmentListPageState> _equipmentKey =
+      GlobalKey<EquipmentListPageState>();
+
   final GlobalKey<ProfilePageState> _profileKey = GlobalKey<ProfilePageState>();
 
   late final List<Widget> _pages = [
     HomePage(key: _homeKey),
-    const EquipmentListPage(),
-    ProfilePage(key: _profileKey), // ✅ was const ProfilePage()
+    EquipmentListPage(key: _equipmentKey), // ✅ was const EquipmentListPage()
+    ProfilePage(key: _profileKey),
   ];
 
   String get _title {
@@ -42,9 +44,13 @@ class _MainShellState extends State<MainShell> {
     if (i == 0) {
       _homeKey.currentState?.refresh();
     }
-    if (i == 2) {
-      _profileKey.currentState?.refresh(); // ✅ refresh stats when Profile tab clicked
+    if (i == 1) {
+      _equipmentKey.currentState?.refresh(); // ✅ refresh Equipment when tapped
     }
+    if (i == 2) {
+      _profileKey.currentState?.refresh();
+    }
+
     setState(() => _index = i);
   }
 
@@ -61,7 +67,8 @@ class _MainShellState extends State<MainShell> {
         onTap: _onTap,
         items: const [
           BottomNavigationBarItem(icon: Icon(Icons.home), label: 'Home'),
-          BottomNavigationBarItem(icon: Icon(Icons.fitness_center), label: 'Equipment'),
+          BottomNavigationBarItem(
+              icon: Icon(Icons.fitness_center), label: 'Equipment'),
           BottomNavigationBarItem(icon: Icon(Icons.person), label: 'Profile'),
         ],
       ),
