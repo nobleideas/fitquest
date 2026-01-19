@@ -11,15 +11,27 @@ class HomePage extends StatefulWidget {
 
 class _DayWorkoutSummary {
   final DateTime day;
+
+  /// Unique exercise names (sorted A→Z) for display
   final List<String> exerciseNames;
+
+  /// Sets (sessions) completed per exercise name for that day
+  /// (A "set" == a row in exercise_sessions)
+  final Map<String, int> exerciseSetCountsByName;
+
   final Map<String, int> muscleGroupCounts;
   final String dayTypeLabel;
+
+  /// Workout duration in minutes for the day (last session time - first session time)
+  final int workoutDurationMinutes;
 
   _DayWorkoutSummary({
     required this.day,
     required this.exerciseNames,
+    required this.exerciseSetCountsByName,
     required this.muscleGroupCounts,
     required this.dayTypeLabel,
+    required this.workoutDurationMinutes,
   });
 }
 
@@ -38,6 +50,9 @@ class HomePageState extends State<HomePage> {
   bool _isSubmittingReport = false;
   final TextEditingController _reportController = TextEditingController();
   String _reportType = 'bug'; // 'bug' | 'suggestion'
+
+  // --- Username for share title ---
+  String? _username;
 
   // ✅ allow MainShell to refresh Home tab on selection
   Future<void> refresh() async {
@@ -75,7 +90,10 @@ class HomePageState extends State<HomePage> {
                   value: _reportType,
                   items: const [
                     DropdownMenuItem(value: 'bug', child: Text('Bug')),
-                    DropdownMenuItem(value: 'suggestion', child: Text('Suggestion')),
+                    DropdownMenuItem(
+                      value: 'suggestion',
+                      child: Text('Suggestion'),
+                    ),
                   ],
                   onChanged: (v) {
                     if (v == null) return;
@@ -101,7 +119,8 @@ class HomePageState extends State<HomePage> {
             ),
             actions: [
               TextButton(
-                onPressed: _isSubmittingReport ? null : () => Navigator.pop(context),
+                onPressed:
+                    _isSubmittingReport ? null : () => Navigator.pop(context),
                 child: const Text('Cancel'),
               ),
               ElevatedButton.icon(
@@ -131,7 +150,9 @@ class HomePageState extends State<HomePage> {
     final user = supabase.auth.currentUser;
     if (user == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('You must be logged in to submit a report.')),
+        const SnackBar(
+          content: Text('You must be logged in to submit a report.'),
+        ),
       );
       return;
     }
@@ -165,6 +186,36 @@ class HomePageState extends State<HomePage> {
     } finally {
       if (mounted) setState(() => _isSubmittingReport = false);
     }
+  }
+
+  // ---------------- Username loading for share title ----------------
+
+  Future<void> _loadUsernameIfNeeded() async {
+    if (_username != null && _username!.trim().isNotEmpty) return;
+
+    final user = supabase.auth.currentUser;
+    if (user == null) return;
+
+    try {
+      final row = await supabase
+          .from('profiles')
+          .select('username')
+          .eq('id', user.id)
+          .maybeSingle();
+
+      final name = (row?['username'] ?? '').toString().trim();
+      if (name.isNotEmpty) {
+        _username = name;
+      }
+    } catch (_) {
+      // silently ignore if profiles/username isn't available
+    }
+  }
+
+  String _shareHandle() {
+    final u = (_username ?? '').trim();
+    if (u.isEmpty) return '@user';
+    return u.startsWith('@') ? u : '@$u';
   }
 
   // ---------------- Existing workout summary logic ----------------
@@ -233,11 +284,16 @@ class HomePageState extends State<HomePage> {
     return list;
   }
 
-  String _buildShareText(List<MapEntry<DateTime, _DayWorkoutSummary>> entries, {String? titleOverride}) {
+  String _buildShareText(
+    List<MapEntry<DateTime, _DayWorkoutSummary>> entries, {
+    String? titleOverride,
+  }) {
     final filterName = _filterLabel(_selectedFilter);
     final b = StringBuffer();
 
-    final title = titleOverride ?? 'Fit Quest — Workout Summary ($filterName)';
+    // ✅ UPDATED title: include username
+    final title = titleOverride ??
+        'Fit Quest — Workout Summary for ${_shareHandle()} ($filterName)';
     b.writeln(title);
     b.writeln('');
 
@@ -250,18 +306,23 @@ class HomePageState extends State<HomePage> {
       final date = entry.key;
       final s = entry.value;
 
-      b.writeln('${_formatDate(date)} — ${s.dayTypeLabel}');
+      final durationText = ' • ${s.workoutDurationMinutes} min';
+
+      b.writeln('${_formatDate(date)}$durationText — ${s.dayTypeLabel}');
 
       final muscles = s.muscleGroupCounts.entries.toList()
         ..sort((a, b) => b.value.compareTo(a.value));
       if (muscles.isNotEmpty) {
-        b.writeln('Muscles: ${muscles.map((e) => '${e.key}(${e.value})').join(', ')}');
+        b.writeln(
+          'Muscles: ${muscles.map((e) => '${e.key}(${e.value})').join(', ')}',
+        );
       }
 
       if (s.exerciseNames.isNotEmpty) {
         b.writeln('Exercises:');
         for (final name in s.exerciseNames) {
-          b.writeln('• $name');
+          final sets = s.exerciseSetCountsByName[name] ?? 0;
+          b.writeln('• $name ${sets}x');
         }
       }
 
@@ -271,7 +332,13 @@ class HomePageState extends State<HomePage> {
     return b.toString().trim();
   }
 
-  Future<void> _shareEntries(List<MapEntry<DateTime, _DayWorkoutSummary>> entries, {String? subject}) async {
+  Future<void> _shareEntries(
+    List<MapEntry<DateTime, _DayWorkoutSummary>> entries, {
+    String? subject,
+  }) async {
+    // Ensure username is loaded before building share text
+    await _loadUsernameIfNeeded();
+
     final text = _buildShareText(entries);
     await Share.share(
       text,
@@ -297,7 +364,8 @@ class HomePageState extends State<HomePage> {
             });
           }
 
-          final allSelected = selected.length == entries.length && entries.isNotEmpty;
+          final allSelected =
+              selected.length == entries.length && entries.isNotEmpty;
 
           return AlertDialog(
             title: Text('Share workouts (${_filterLabel(_selectedFilter)})'),
@@ -348,7 +416,10 @@ class HomePageState extends State<HomePage> {
                         final isChecked = selected.contains(day);
 
                         final subtitleParts = <String>[];
-                        if (s.exerciseNames.isNotEmpty) subtitleParts.add('${s.exerciseNames.length} exercises');
+                        if (s.exerciseNames.isNotEmpty) {
+                          subtitleParts.add('${s.exerciseNames.length} exercises');
+                        }
+                        subtitleParts.add('${s.workoutDurationMinutes} min');
                         subtitleParts.add(s.dayTypeLabel);
 
                         return CheckboxListTile(
@@ -393,7 +464,8 @@ class HomePageState extends State<HomePage> {
                 onPressed: selected.isEmpty
                     ? null
                     : () async {
-                        final picked = entries.where((e) => selected.contains(e.key)).toList();
+                        final picked =
+                            entries.where((e) => selected.contains(e.key)).toList();
                         Navigator.pop(context);
                         await _shareEntries(
                           picked,
@@ -419,9 +491,13 @@ class HomePageState extends State<HomePage> {
             child: OutlinedButton(
               style: OutlinedButton.styleFrom(
                 padding: const EdgeInsets.symmetric(vertical: 10),
-                backgroundColor: isSelected ? Theme.of(context).colorScheme.primary.withOpacity(0.15) : null,
+                backgroundColor: isSelected
+                    ? Theme.of(context).colorScheme.primary.withOpacity(0.15)
+                    : null,
                 side: BorderSide(
-                  color: isSelected ? Theme.of(context).colorScheme.primary : Theme.of(context).dividerColor,
+                  color: isSelected
+                      ? Theme.of(context).colorScheme.primary
+                      : Theme.of(context).dividerColor,
                 ),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(8),
@@ -434,7 +510,9 @@ class HomePageState extends State<HomePage> {
                   _filterLabel(f),
                   style: TextStyle(
                     fontWeight: isSelected ? FontWeight.bold : FontWeight.w600,
-                    color: isSelected ? Theme.of(context).colorScheme.primary : null,
+                    color: isSelected
+                        ? Theme.of(context).colorScheme.primary
+                        : null,
                   ),
                 ),
               ),
@@ -470,19 +548,32 @@ class HomePageState extends State<HomePage> {
         return;
       }
 
-      // ✅ UPDATED: include weight/reps so we can tie-break Legs vs Core by volume
+      // ✅ load username from profiles.username (used in share title)
+      await _loadUsernameIfNeeded();
+
+      // include weight/reps so we can tie-break Legs vs Core by volume
       final sessions = await supabase
           .from('exercise_sessions')
-          .select('created_at, weight, reps, exercises!inner(id, name, type, primary_muscle_group)')
+          .select(
+            'created_at, weight, reps, exercises!inner(id, name, type, primary_muscle_group)',
+          )
           .eq('user_id', user.id)
           .order('created_at', ascending: false);
 
       final List<DateTime> workoutDays = [];
 
-      // For listing unique exercise names + muscle counts
-      final Map<DateTime, Map<String, Map<String, dynamic>>> uniqueExercisesByDay = {};
+      // unique exercise objects per day (by id)
+      final Map<DateTime, Map<String, Map<String, dynamic>>> uniqueExercisesByDay =
+          {};
 
-      // For tie-break logic legs/core by VOLUME (sum of weight*reps for sessions)
+      // count sets (sessions) per exercise NAME per day
+      final Map<DateTime, Map<String, int>> setCountsByDayByName = {};
+
+      // track first/last timestamps per day for duration
+      final Map<DateTime, DateTime> firstSessionLocalByDay = {};
+      final Map<DateTime, DateTime> lastSessionLocalByDay = {};
+
+      // legs/core tie-break by volume (sum of weight*reps)
       final Map<DateTime, double> legsVolumeByDay = {};
       final Map<DateTime, double> coreVolumeByDay = {};
 
@@ -490,6 +581,16 @@ class HomePageState extends State<HomePage> {
         final local = DateTime.parse(row['created_at']).toLocal();
         final day = DateTime(local.year, local.month, local.day);
         workoutDays.add(day);
+
+        // duration tracking
+        final currentFirst = firstSessionLocalByDay[day];
+        final currentLast = lastSessionLocalByDay[day];
+        if (currentFirst == null || local.isBefore(currentFirst)) {
+          firstSessionLocalByDay[day] = local;
+        }
+        if (currentLast == null || local.isAfter(currentLast)) {
+          lastSessionLocalByDay[day] = local;
+        }
 
         final w = _numToDouble(row['weight']);
         final r = _numToInt(row['reps']);
@@ -501,20 +602,28 @@ class HomePageState extends State<HomePage> {
             : [Map<String, dynamic>.from(exJoined)];
 
         uniqueExercisesByDay.putIfAbsent(day, () => {});
+        setCountsByDayByName.putIfAbsent(day, () => {});
         legsVolumeByDay.putIfAbsent(day, () => 0.0);
         coreVolumeByDay.putIfAbsent(day, () => 0.0);
 
-        // A session maps to ONE exercise_id, but your join may come back as list;
-        // if it does, we’ll attribute the session volume to each (usually just one).
+        // A session maps to ONE exercise_id, but join might come back as list.
         for (final ex in list) {
           uniqueExercisesByDay[day]![ex['id'].toString()] = ex;
 
+          final exName = (ex['name'] ?? '').toString().trim();
+          if (exName.isNotEmpty) {
+            setCountsByDayByName[day]![exName] =
+                (setCountsByDayByName[day]![exName] ?? 0) + 1;
+          }
+
           final mg = (ex['primary_muscle_group'] ?? '').toString();
           if (_isLegsGroup(mg)) {
-            legsVolumeByDay[day] = (legsVolumeByDay[day] ?? 0.0) + sessionVolume;
+            legsVolumeByDay[day] =
+                (legsVolumeByDay[day] ?? 0.0) + sessionVolume;
           }
           if (_isCoreGroup(mg)) {
-            coreVolumeByDay[day] = (coreVolumeByDay[day] ?? 0.0) + sessionVolume;
+            coreVolumeByDay[day] =
+                (coreVolumeByDay[day] ?? 0.0) + sessionVolume;
           }
         }
       }
@@ -553,8 +662,8 @@ class HomePageState extends State<HomePage> {
           if (type == 'pull') pull++;
         }
 
-        // ✅ FIXED: if ANY legs/core exist, show Legs/Core (whichever has more).
-        // tie-break uses total VOLUME for legs vs core (sum of weight*reps per session)
+        // if ANY legs/core exist, show Legs/Core (whichever has more).
+        // tie-break uses total VOLUME for legs vs core
         String label;
         if (legs > 0 || core > 0) {
           if (legs > core) {
@@ -570,7 +679,6 @@ class HomePageState extends State<HomePage> {
             } else if (coreVol > legsVol) {
               label = 'Core';
             } else {
-              // perfectly tied: pick a consistent default
               label = 'Legs';
             }
           }
@@ -580,11 +688,23 @@ class HomePageState extends State<HomePage> {
           label = 'Push';
         }
 
+        // duration in minutes
+        int durationMin = 0;
+        final first = firstSessionLocalByDay[day];
+        final last = lastSessionLocalByDay[day];
+        if (first != null && last != null) {
+          durationMin = last.difference(first).inMinutes;
+          if (durationMin < 0) durationMin = 0;
+        }
+
         result[day] = _DayWorkoutSummary(
           day: day,
           exerciseNames: names,
+          exerciseSetCountsByName:
+              Map<String, int>.from(setCountsByDayByName[day] ?? const {}),
           muscleGroupCounts: muscleCounts,
           dayTypeLabel: label,
+          workoutDurationMinutes: durationMin,
         );
       }
 
@@ -664,16 +784,32 @@ class HomePageState extends State<HomePage> {
                   children: [
                     Row(
                       children: [
+                        // Date + duration (minutes) to the right of date
                         Expanded(
-                          child: Text(
-                            _formatDate(date),
-                            style: const TextStyle(fontWeight: FontWeight.bold),
+                          child: Row(
+                            children: [
+                              Text(
+                                _formatDate(date),
+                                style:
+                                    const TextStyle(fontWeight: FontWeight.bold),
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                '${s.workoutDurationMinutes} min',
+                                style: Theme.of(context).textTheme.bodySmall,
+                              ),
+                            ],
                           ),
                         ),
                         Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 4,
+                          ),
                           decoration: BoxDecoration(
-                            border: Border.all(color: Theme.of(context).dividerColor),
+                            border: Border.all(
+                              color: Theme.of(context).dividerColor,
+                            ),
                             borderRadius: BorderRadius.circular(16),
                           ),
                           child: Text(
@@ -690,9 +826,14 @@ class HomePageState extends State<HomePage> {
                         runSpacing: 8,
                         children: muscleEntries.map((e) {
                           return Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 6,
+                            ),
                             decoration: BoxDecoration(
-                              color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .surfaceContainerHighest,
                               borderRadius: BorderRadius.circular(16),
                             ),
                             child: Text('${e.key}: ${e.value}'),
@@ -700,7 +841,13 @@ class HomePageState extends State<HomePage> {
                         }).toList(),
                       ),
                     const SizedBox(height: 8),
-                    ...s.exerciseNames.map((name) => Text('• $name')),
+
+                    // Exercise list with set counts (e.g., "Bench Press 5x")
+                    ...s.exerciseNames.map((name) {
+                      final sets = s.exerciseSetCountsByName[name] ?? 0;
+                      return Text('• $name ${sets}x');
+                    }),
+
                     const Divider(height: 24),
                   ],
                 ),
