@@ -6,8 +6,7 @@ import '../services/equipment_service.dart';
 
 class FriendProfilePage extends StatefulWidget {
   final String friendUserId;
-  final String
-  friendUsername; // passed from list; can be refreshed via RPC if you want
+  final String friendUsername;
 
   const FriendProfilePage({
     super.key,
@@ -25,7 +24,6 @@ class _FriendProfilePageState extends State<FriendProfilePage>
 
   late final TabController _tabController;
 
-  // Data
   bool _loading = true;
   String? _error;
 
@@ -50,18 +48,16 @@ class _FriendProfilePageState extends State<FriendProfilePage>
       final friendId = widget.friendUserId;
 
       final results = await Future.wait<dynamic>([
-        supabase.rpc(
-          'get_friend_workout_history',
-          params: {'friend_user_id': friendId, 'max_rows': 250},
-        ),
-        supabase.rpc(
-          'get_friend_equipment',
-          params: {'friend_user_id': friendId},
-        ),
-        supabase.rpc(
-          'get_friend_exercises',
-          params: {'friend_user_id': friendId},
-        ),
+        supabase.rpc('get_friend_workout_history', params: {
+          'friend_user_id': friendId,
+          'max_rows': 250,
+        }),
+        supabase.rpc('get_friend_equipment', params: {
+          'friend_user_id': friendId,
+        }),
+        supabase.rpc('get_friend_exercises', params: {
+          'friend_user_id': friendId,
+        }),
       ]);
 
       final historyRaw = results[0];
@@ -78,12 +74,7 @@ class _FriendProfilePageState extends State<FriendProfilePage>
           ? List<Map<String, dynamic>>.from(exercisesRaw)
           : <Map<String, dynamic>>[];
 
-      // ✅ ONLY CHANGE: sort friend's exercises alphabetically by name
-      exercises.sort((a, b) {
-        final an = (a['name'] ?? '').toString().toLowerCase();
-        final bn = (b['name'] ?? '').toString().toLowerCase();
-        return an.compareTo(bn);
-      });
+      // (Your RPC already orders by eq.name then ex.name, but we keep it as-is.)
 
       setState(() {
         _history = history;
@@ -107,10 +98,8 @@ class _FriendProfilePageState extends State<FriendProfilePage>
     final m = local.month.toString().padLeft(2, '0');
     final d = local.day.toString().padLeft(2, '0');
     final y = local.year.toString();
-    final hh = (local.hour % 12 == 0 ? 12 : local.hour % 12).toString().padLeft(
-      2,
-      '0',
-    );
+    final hh =
+        (local.hour % 12 == 0 ? 12 : local.hour % 12).toString().padLeft(2, '0');
     final mm = local.minute.toString().padLeft(2, '0');
     final ap = local.hour >= 12 ? 'PM' : 'AM';
     return "$m/$d/$y • $hh:$mm $ap";
@@ -124,9 +113,8 @@ class _FriendProfilePageState extends State<FriendProfilePage>
 
   @override
   Widget build(BuildContext context) {
-    final title = widget.friendUsername.isNotEmpty
-        ? "@${widget.friendUsername}"
-        : "Friend";
+    final title =
+        widget.friendUsername.isNotEmpty ? "@${widget.friendUsername}" : "Friend";
 
     return Scaffold(
       appBar: AppBar(
@@ -149,22 +137,26 @@ class _FriendProfilePageState extends State<FriendProfilePage>
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _error != null
-          ? _BlockedOrErrorView(
-              message:
-                  "Couldn't load friend data.\n\nThis usually means you aren't accepted friends yet (or an RPC error occurred).\n\n$_error",
-              onRetry: _loadAll,
-            )
-          : TabBarView(
-              controller: _tabController,
-              children: [
-                _HistoryTab(history: _history, fmtDateTime: _fmtDateTime),
-                _EquipmentTab(
-                  equipment: _equipment,
-                  friendUsername: widget.friendUsername,
+              ? _BlockedOrErrorView(
+                  message:
+                      "Couldn't load friend data.\n\nThis usually means you aren't accepted friends yet (or an RPC error occurred).\n\n$_error",
+                  onRetry: _loadAll,
+                )
+              : TabBarView(
+                  controller: _tabController,
+                  children: [
+                    _HistoryTab(history: _history, fmtDateTime: _fmtDateTime),
+                    _EquipmentTab(
+                      equipment: _equipment,
+                      friendExercises: _exercises,
+                      friendUsername: widget.friendUsername,
+                    ),
+                    _ExercisesTab(
+                      exercises: _exercises,
+                      friendEquipment: _equipment,
+                    ),
+                  ],
                 ),
-                _ExercisesTab(exercises: _exercises),
-              ],
-            ),
     );
   }
 }
@@ -203,11 +195,10 @@ enum _FriendHistoryView { summary, detailed }
 
 class _FriendDayWorkoutSummary {
   final DateTime day;
-  final List<String> exerciseNames; // unique, sorted
-  final Map<String, int>
-  exerciseSetCountsByName; // sets per unique exercise name
-  final Map<String, int> muscleGroupCounts; // based on unique exercises
-  final String dayTypeLabel; // Push/Pull/Legs/Core
+  final List<String> exerciseNames;
+  final Map<String, int> exerciseSetCountsByName;
+  final Map<String, int> muscleGroupCounts;
+  final String dayTypeLabel;
   final int workoutDurationMinutes;
 
   _FriendDayWorkoutSummary({
@@ -271,10 +262,8 @@ class _HistoryTabState extends State<_HistoryTab> {
 
   String _formatDate(DateTime d) => '${d.month}/${d.day}/${d.year}';
 
-  // Tries multiple likely keys returned by your RPC
   String _rowMuscleGroup(Map<String, dynamic> row) {
-    final v =
-        row['primary_muscle_group'] ??
+    final v = row['primary_muscle_group'] ??
         row['muscle_group'] ??
         row['exercise_primary_muscle_group'] ??
         row['exercise_muscle_group'];
@@ -466,9 +455,8 @@ class _HistoryTabState extends State<_HistoryTab> {
               'Detailed Sets',
               style: TextStyle(
                 fontWeight: FontWeight.w700,
-                color: isDetailed
-                    ? Theme.of(context).colorScheme.primary
-                    : null,
+                color:
+                    isDetailed ? Theme.of(context).colorScheme.primary : null,
               ),
             ),
           ),
@@ -543,9 +531,9 @@ class _HistoryTabState extends State<_HistoryTab> {
                         vertical: 6,
                       ),
                       decoration: BoxDecoration(
-                        color: Theme.of(
-                          context,
-                        ).colorScheme.surfaceContainerHighest,
+                        color: Theme.of(context)
+                            .colorScheme
+                            .surfaceContainerHighest,
                         borderRadius: BorderRadius.circular(16),
                       ),
                       child: Text('${e.key}: ${e.value}'),
@@ -617,13 +605,20 @@ class _HistoryTabState extends State<_HistoryTab> {
   }
 }
 
-// ---------------- EQUIPMENT TAB (long-press multi-select + add-to-my-list) ----------------
+// ---------------- EQUIPMENT TAB (select all + copy mode + optionally copy exercises) ----------------
+
+enum _CopyMode { equipmentOnly, equipmentAndExercises }
 
 class _EquipmentTab extends StatefulWidget {
   final List<Map<String, dynamic>> equipment;
+  final List<Map<String, dynamic>> friendExercises;
   final String friendUsername;
 
-  const _EquipmentTab({required this.equipment, required this.friendUsername});
+  const _EquipmentTab({
+    required this.equipment,
+    required this.friendExercises,
+    required this.friendUsername,
+  });
 
   @override
   State<_EquipmentTab> createState() => _EquipmentTabState();
@@ -631,8 +626,8 @@ class _EquipmentTab extends StatefulWidget {
 
 class _EquipmentTabState extends State<_EquipmentTab> {
   final _equipmentService = EquipmentService();
+  final supabase = Supabase.instance.client;
 
-  // selection mode
   bool _selectMode = false;
   final Set<int> _selectedIndexes = {};
   bool _isAdding = false;
@@ -655,15 +650,70 @@ class _EquipmentTabState extends State<_EquipmentTab> {
     });
   }
 
-  void _cancelSelection() {
+  void _selectAll() {
     setState(() {
-      _selectMode = false;
-      _selectedIndexes.clear();
+      _selectMode = true;
+      _selectedIndexes
+        ..clear()
+        ..addAll(List.generate(widget.equipment.length, (i) => i));
     });
+  }
+
+  void _clearSelection() {
+    setState(() {
+      _selectedIndexes.clear();
+      _selectMode = false;
+    });
+  }
+
+  String? _friendEqId(Map<String, dynamic> eq) {
+    final s = (eq['id'] ?? '').toString().trim();
+    return s.isEmpty ? null : s;
+  }
+
+  String? _exerciseFriendEquipmentId(Map<String, dynamic> ex) {
+    final s = (ex['equipment_id'] ?? '').toString().trim();
+    return s.isEmpty ? null : s;
+  }
+
+  String? _exerciseVideoUrl(Map<String, dynamic> ex) {
+    final s = (ex['video_url'] ?? '').toString().trim();
+    return s.isEmpty ? null : s;
+  }
+
+  Future<_CopyMode?> _askCopyMode(BuildContext context, int count) async {
+    return showDialog<_CopyMode>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: Text('Add $count equipment'),
+        content: const Text(
+          'Do you want to copy only the equipment, or also copy all exercises tied to the selected equipment?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context, _CopyMode.equipmentOnly),
+            child: const Text('Equipment only'),
+          ),
+          ElevatedButton(
+            onPressed: () =>
+                Navigator.pop(context, _CopyMode.equipmentAndExercises),
+            child: const Text('Equipment + Exercises'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _addSelectedToMyEquipment() async {
     if (_selectedIndexes.isEmpty || _isAdding) return;
+
+    final mode =
+        await _askCopyMode(context, _selectedIndexes.length);
+    if (mode == null) return;
 
     final orderedIndexes = _selectedIndexes.toList()
       ..sort((a, b) {
@@ -674,40 +724,82 @@ class _EquipmentTabState extends State<_EquipmentTab> {
 
     setState(() => _isAdding = true);
 
-    int added = 0;
-    int skipped = 0;
+    int addedEquipment = 0;
+    int skippedEquipment = 0;
+    int addedExercises = 0;
+    int skippedExercises = 0;
 
     try {
       for (final idx in orderedIndexes) {
-        final name = (widget.equipment[idx]['name'] ?? '').toString().trim();
-        if (name.isEmpty) {
-          skipped++;
+        final friendEq = widget.equipment[idx];
+        final eqName = (friendEq['name'] ?? '').toString().trim();
+        if (eqName.isEmpty) {
+          skippedEquipment++;
           continue;
         }
 
+        Map<String, dynamic>? createdEq;
         try {
-          await _equipmentService.insertEquipment(name);
-          added++;
+          createdEq = await _equipmentService.insertEquipment(eqName);
+          addedEquipment++;
         } catch (_) {
-          skipped++;
+          skippedEquipment++;
+          // If equipment already exists, we skip copying exercises too (safe default)
+          createdEq = null;
+        }
+
+        if (mode == _CopyMode.equipmentAndExercises && createdEq != null) {
+          final friendEqId = _friendEqId(friendEq);
+          final myEqId = createdEq['id']?.toString();
+
+          if (friendEqId == null || myEqId == null || myEqId.isEmpty) continue;
+
+          final matches = widget.friendExercises.where((ex) {
+            final exEqId = _exerciseFriendEquipmentId(ex);
+            return exEqId != null && exEqId == friendEqId;
+          }).toList();
+
+          for (final ex in matches) {
+            final exName = (ex['name'] ?? '').toString().trim();
+            if (exName.isEmpty) {
+              skippedExercises++;
+              continue;
+            }
+
+            try {
+              await supabase.from('exercises').insert({
+                'name': exName,
+                'primary_muscle_group': (ex['primary_muscle_group'] ?? '').toString(),
+                'type': (ex['type'] ?? '').toString(),
+                'equipment_id': myEqId,
+                'video_url': _exerciseVideoUrl(ex),
+              });
+              addedExercises++;
+            } catch (_) {
+              skippedExercises++;
+            }
+          }
         }
       }
 
       if (!mounted) return;
 
+      final msg = mode == _CopyMode.equipmentOnly
+          ? (skippedEquipment > 0
+              ? "Added $addedEquipment equipment • Skipped $skippedEquipment (already exists)"
+              : "Added $addedEquipment equipment")
+          : "Added $addedEquipment equipment ($addedExercises exercises)"
+              "${(skippedEquipment + skippedExercises) > 0 ? " • Skipped ${skippedEquipment + skippedExercises}" : ""}";
+
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           behavior: SnackBarBehavior.floating,
           duration: const Duration(seconds: 3),
-          content: Text(
-            skipped > 0
-                ? "Added $added equipment • Skipped $skipped (already exists)"
-                : "Added $added equipment",
-          ),
+          content: Text(msg),
         ),
       );
 
-      _cancelSelection();
+      _clearSelection();
     } finally {
       if (mounted) setState(() => _isAdding = false);
     }
@@ -716,7 +808,6 @@ class _EquipmentTabState extends State<_EquipmentTab> {
   @override
   Widget build(BuildContext context) {
     final equipment = widget.equipment;
-
     if (equipment.isEmpty) {
       return const Center(child: Text("No equipment found."));
     }
@@ -727,7 +818,7 @@ class _EquipmentTabState extends State<_EquipmentTab> {
       children: [
         ListView.separated(
           padding: const EdgeInsets.fromLTRB(12, 12, 12, 90),
-          itemCount: equipment.length + 1, // +1 for tip banner
+          itemCount: equipment.length + 1,
           separatorBuilder: (_, __) => const Divider(height: 1),
           itemBuilder: (context, i) {
             if (i == 0) {
@@ -759,11 +850,9 @@ class _EquipmentTabState extends State<_EquipmentTab> {
 
             return ListTile(
               leading: _selectMode
-                  ? Icon(
-                      isSelected
-                          ? Icons.check_circle
-                          : Icons.radio_button_unchecked,
-                    )
+                  ? Icon(isSelected
+                      ? Icons.check_circle
+                      : Icons.radio_button_unchecked)
                   : const Icon(Icons.fitness_center),
               title: Text(name),
               trailing: _selectMode ? null : const Icon(Icons.chevron_right),
@@ -799,11 +888,17 @@ class _EquipmentTabState extends State<_EquipmentTab> {
                         style: const TextStyle(fontWeight: FontWeight.w600),
                       ),
                       const Spacer(),
+
                       TextButton(
-                        onPressed: _isAdding ? null : _cancelSelection,
-                        child: const Text("Cancel"),
+                        onPressed: _isAdding ? null : _selectAll,
+                        child: const Text("Select all"),
+                      ),
+                      TextButton(
+                        onPressed: _isAdding ? null : _clearSelection,
+                        child: const Text("Clear"),
                       ),
                       const SizedBox(width: 8),
+
                       ElevatedButton.icon(
                         onPressed: (selectedCount == 0 || _isAdding)
                             ? null
@@ -812,14 +907,10 @@ class _EquipmentTabState extends State<_EquipmentTab> {
                             ? const SizedBox(
                                 width: 16,
                                 height: 16,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                ),
+                                child: CircularProgressIndicator(strokeWidth: 2),
                               )
                             : const Icon(Icons.download_done),
-                        label: Text(
-                          _isAdding ? "Adding..." : "Add to My Equipment",
-                        ),
+                        label: Text(_isAdding ? "Adding..." : "Add"),
                       ),
                     ],
                   ),
@@ -832,79 +923,372 @@ class _EquipmentTabState extends State<_EquipmentTab> {
   }
 }
 
-// ---------------- EXERCISES TAB (tap -> form video screen) ----------------
+// ---------------- EXERCISES TAB (long-press multi-select -> add to new/existing equipment) ----------------
 
-class _ExercisesTab extends StatelessWidget {
+class _ExercisesTab extends StatefulWidget {
   final List<Map<String, dynamic>> exercises;
+  final List<Map<String, dynamic>> friendEquipment;
 
-  const _ExercisesTab({required this.exercises});
+  const _ExercisesTab({
+    required this.exercises,
+    required this.friendEquipment,
+  });
 
-  String? _pickVideoUrl(Map<String, dynamic> ex) {
-    // Adjust this to match whatever your RPC returns
-    final candidates = [
-      ex['form_video_url'],
-      ex['video_url'],
-      ex['form_video'],
-      ex['video'],
-    ];
+  @override
+  State<_ExercisesTab> createState() => _ExercisesTabState();
+}
 
-    for (final c in candidates) {
-      final s = (c ?? '').toString().trim();
-      if (s.isNotEmpty) return s;
+class _ExercisesTabState extends State<_ExercisesTab> {
+  final supabase = Supabase.instance.client;
+  final _equipmentService = EquipmentService();
+
+  bool _selectMode = false;
+  final Set<int> _selectedIndexes = {};
+  bool _isAdding = false;
+
+  void _enterSelectMode(int index) {
+    setState(() {
+      _selectMode = true;
+      _selectedIndexes.add(index);
+    });
+  }
+
+  void _toggleSelect(int index) {
+    setState(() {
+      if (_selectedIndexes.contains(index)) {
+        _selectedIndexes.remove(index);
+        if (_selectedIndexes.isEmpty) _selectMode = false;
+      } else {
+        _selectedIndexes.add(index);
+      }
+    });
+  }
+
+  void _cancelSelection() {
+    setState(() {
+      _selectMode = false;
+      _selectedIndexes.clear();
+    });
+  }
+
+  String? _videoUrl(Map<String, dynamic> ex) {
+    final s = (ex['video_url'] ?? '').toString().trim();
+    return s.isEmpty ? null : s;
+  }
+
+  Future<void> _addSelectedExercisesToEquipment() async {
+    if (_selectedIndexes.isEmpty || _isAdding) return;
+
+    // Load MY equipment options
+    final myEquipmentDynamic = await _equipmentService.getAllEquipment();
+    final myEquipment = myEquipmentDynamic
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .toList()
+      ..sort((a, b) {
+        final an = (a['name'] ?? '').toString().toLowerCase();
+        final bn = (b['name'] ?? '').toString().toLowerCase();
+        return an.compareTo(bn);
+      });
+
+    String? selectedEquipmentId;
+    String? selectedEquipmentName;
+    final newEquipmentController = TextEditingController();
+
+    final picked = await showDialog<bool>(
+      context: context,
+      builder: (_) {
+        return StatefulBuilder(
+          builder: (context, setLocal) {
+            final typed = newEquipmentController.text.trim();
+            final canAdd =
+                (selectedEquipmentId != null && selectedEquipmentId!.isNotEmpty) ||
+                    typed.isNotEmpty;
+
+            return AlertDialog(
+              title: Text("Add ${_selectedIndexes.length} exercise(s)"),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const Text("Add to existing equipment:"),
+                  const SizedBox(height: 8),
+                  DropdownButtonFormField<String>(
+                    value: selectedEquipmentId,
+                    isExpanded: true,
+                    items: [
+                      for (final e in myEquipment)
+                        DropdownMenuItem(
+                          value: e['id'].toString(),
+                          child: Text(e['name'].toString()),
+                        ),
+                    ],
+                    onChanged: newEquipmentController.text.isNotEmpty
+                        ? null
+                        : (val) {
+                            setLocal(() {
+                              selectedEquipmentId = val;
+                              if (val != null) newEquipmentController.text = '';
+                            });
+                          },
+                    decoration: const InputDecoration(
+                      border: OutlineInputBorder(),
+                      hintText: "Select equipment",
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  const Divider(),
+                  const SizedBox(height: 8),
+                  const Text("Or create new equipment:"),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: newEquipmentController,
+                    enabled: selectedEquipmentId == null,
+                    decoration: const InputDecoration(
+                      border: OutlineInputBorder(),
+                      labelText: "New equipment name",
+                    ),
+                    onChanged: (_) {
+                      setLocal(() {
+                        if (newEquipmentController.text.isNotEmpty) {
+                          selectedEquipmentId = null;
+                        }
+                      });
+                    },
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  child: const Text("Cancel"),
+                ),
+                ElevatedButton(
+                  onPressed: canAdd
+                      ? () => Navigator.pop(context, true)
+                      : null,
+                  child: const Text("Add"),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    if (picked != true) return;
+
+    setState(() => _isAdding = true);
+
+    int added = 0;
+    int skipped = 0;
+
+    try {
+      String targetEquipmentId;
+      final typed = newEquipmentController.text.trim();
+
+      if (typed.isNotEmpty) {
+        final created = await _equipmentService.insertEquipment(typed);
+        targetEquipmentId = created['id'].toString();
+        selectedEquipmentName = created['name'].toString();
+      } else {
+        targetEquipmentId = selectedEquipmentId!;
+        selectedEquipmentName = myEquipment
+            .firstWhere((e) => e['id'].toString() == selectedEquipmentId)['name']
+            .toString();
+      }
+
+      final ordered = _selectedIndexes.toList()
+        ..sort((a, b) {
+          final an = (widget.exercises[a]['name'] ?? '').toString().toLowerCase();
+          final bn = (widget.exercises[b]['name'] ?? '').toString().toLowerCase();
+          return an.compareTo(bn);
+        });
+
+      for (final idx in ordered) {
+        final ex = widget.exercises[idx];
+        final name = (ex['name'] ?? '').toString().trim();
+        if (name.isEmpty) {
+          skipped++;
+          continue;
+        }
+
+        try {
+          await supabase.from('exercises').insert({
+            'name': name,
+            'primary_muscle_group': (ex['primary_muscle_group'] ?? '').toString(),
+            'type': (ex['type'] ?? '').toString(),
+            'equipment_id': targetEquipmentId,
+            'video_url': _videoUrl(ex),
+          });
+          added++;
+        } catch (_) {
+          skipped++;
+        }
+      }
+
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 3),
+          content: Text(
+            skipped > 0
+                ? "Added $added exercises to $selectedEquipmentName • Skipped $skipped"
+                : "Added $added exercises to $selectedEquipmentName",
+          ),
+        ),
+      );
+
+      _cancelSelection();
+    } finally {
+      if (mounted) setState(() => _isAdding = false);
     }
-    return null;
   }
 
   @override
   Widget build(BuildContext context) {
-    if (exercises.isEmpty) {
+    if (widget.exercises.isEmpty) {
       return const Center(child: Text("No exercises found."));
     }
 
-    return ListView.separated(
-      padding: const EdgeInsets.all(12),
-      itemCount: exercises.length,
-      separatorBuilder: (_, __) => const SizedBox(height: 8),
-      itemBuilder: (context, i) {
-        final ex = exercises[i];
-        final name = (ex['name'] ?? '').toString();
-        final equipName = (ex['equipment_name'] ?? '').toString();
-        final mg = (ex['primary_muscle_group'] ?? '').toString();
-        final type = (ex['type'] ?? '').toString();
+    final selectedCount = _selectedIndexes.length;
 
-        final url = _pickVideoUrl(ex);
-        final hasVideo = url != null && url.trim().isNotEmpty;
-
-        return Card(
-          child: ListTile(
-            title: Text(name),
-            subtitle: Text("$equipName • $mg • $type"),
-
-            // ✅ clean at-a-glance indicator
-            trailing: Tooltip(
-              message: hasVideo ? 'Form video available' : 'No form video',
-              child: Icon(
-                hasVideo ? Icons.play_circle_fill : Icons.videocam_off,
-                color: hasVideo
-                    ? Theme.of(context).colorScheme.primary
-                    : Theme.of(context).disabledColor,
-              ),
-            ),
-
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => FriendExerciseFormVideoPage(
-                    exerciseName: name,
-                    videoUrl: url,
+    return Stack(
+      children: [
+        ListView.separated(
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 90),
+          itemCount: widget.exercises.length + 1,
+          separatorBuilder: (_, __) => const SizedBox(height: 8),
+          itemBuilder: (context, i) {
+            if (i == 0) {
+              return Card(
+                elevation: 0,
+                color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.info_outline),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          "Tip: Long-press exercises to select them, then add them to your equipment.",
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               );
-            },
+            }
+
+            final index = i - 1;
+            final ex = widget.exercises[index];
+
+            final name = (ex['name'] ?? '').toString();
+            final equipName = (ex['equipment_name'] ?? '').toString();
+            final mg = (ex['primary_muscle_group'] ?? '').toString();
+            final type = (ex['type'] ?? '').toString();
+
+            final url = _videoUrl(ex);
+            final hasVideo = url != null && url.isNotEmpty;
+
+            final isSelected = _selectedIndexes.contains(index);
+
+            return Card(
+              child: ListTile(
+                leading: _selectMode
+                    ? Icon(isSelected
+                        ? Icons.check_circle
+                        : Icons.radio_button_unchecked)
+                    : null,
+                title: Text(name),
+                subtitle: Text("$equipName • $mg • $type"),
+
+                trailing: Tooltip(
+                  message: hasVideo ? 'Form video available' : 'No form video',
+                  child: Icon(
+                    hasVideo ? Icons.play_circle_fill : Icons.videocam_off,
+                    color: hasVideo
+                        ? Theme.of(context).colorScheme.primary
+                        : Theme.of(context).disabledColor,
+                  ),
+                ),
+
+                selected: isSelected,
+
+                onTap: _selectMode
+                    ? () => _toggleSelect(index)
+                    : () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => FriendExerciseFormVideoPage(
+                              exerciseName: name,
+                              videoUrl: url,
+                            ),
+                          ),
+                        );
+                      },
+
+                onLongPress: () {
+                  if (_selectMode) {
+                    _toggleSelect(index);
+                  } else {
+                    _enterSelectMode(index);
+                  }
+                },
+              ),
+            );
+          },
+        ),
+
+        if (_selectMode)
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: SafeArea(
+              top: false,
+              child: Material(
+                elevation: 8,
+                color: Theme.of(context).colorScheme.surface,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+                  child: Row(
+                    children: [
+                      Text(
+                        "$selectedCount selected",
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
+                      const Spacer(),
+                      TextButton(
+                        onPressed: _isAdding ? null : _cancelSelection,
+                        child: const Text("Cancel"),
+                      ),
+                      const SizedBox(width: 8),
+                      ElevatedButton.icon(
+                        onPressed: (selectedCount == 0 || _isAdding)
+                            ? null
+                            : _addSelectedExercisesToEquipment,
+                        icon: _isAdding
+                            ? const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child:
+                                    CircularProgressIndicator(strokeWidth: 2),
+                              )
+                            : const Icon(Icons.playlist_add),
+                        label: Text(_isAdding ? "Adding..." : "Add to equipment"),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
           ),
-        );
-      },
+      ],
     );
   }
 }
@@ -926,8 +1310,7 @@ class FriendExerciseFormVideoPage extends StatefulWidget {
       _FriendExerciseFormVideoPageState();
 }
 
-class _FriendExerciseFormVideoPageState
-    extends State<FriendExerciseFormVideoPage> {
+class _FriendExerciseFormVideoPageState extends State<FriendExerciseFormVideoPage> {
   VideoPlayerController? _controller;
   bool _loading = true;
   String? _error;
@@ -986,55 +1369,55 @@ class _FriendExerciseFormVideoPageState
         child: _loading
             ? const Center(child: CircularProgressIndicator())
             : urlMissing
-            ? const Center(child: Text("No form video uploaded."))
-            : _error != null
-            ? Center(
-                child: Text(
-                  "Couldn't load video.\n\n$_error",
-                  textAlign: TextAlign.center,
-                ),
-              )
-            : Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  AspectRatio(
-                    aspectRatio: _controller!.value.aspectRatio,
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(12),
-                      child: VideoPlayer(_controller!),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      IconButton(
-                        iconSize: 42,
-                        icon: Icon(
-                          _controller!.value.isPlaying
-                              ? Icons.pause_circle_filled
-                              : Icons.play_circle_filled,
+                ? const Center(child: Text("No form video uploaded."))
+                : _error != null
+                    ? Center(
+                        child: Text(
+                          "Couldn't load video.\n\n$_error",
+                          textAlign: TextAlign.center,
                         ),
-                        onPressed: () {
-                          setState(() {
-                            if (_controller!.value.isPlaying) {
-                              _controller!.pause();
-                            } else {
-                              _controller!.play();
-                            }
-                          });
-                        },
+                      )
+                    : Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          AspectRatio(
+                            aspectRatio: _controller!.value.aspectRatio,
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(12),
+                              child: VideoPlayer(_controller!),
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              IconButton(
+                                iconSize: 42,
+                                icon: Icon(
+                                  _controller!.value.isPlaying
+                                      ? Icons.pause_circle_filled
+                                      : Icons.play_circle_filled,
+                                ),
+                                onPressed: () {
+                                  setState(() {
+                                    if (_controller!.value.isPlaying) {
+                                      _controller!.pause();
+                                    } else {
+                                      _controller!.play();
+                                    }
+                                  });
+                                },
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            "Form video",
+                            textAlign: TextAlign.center,
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ],
                       ),
-                    ],
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    "Form video",
-                    textAlign: TextAlign.center,
-                    style: Theme.of(context).textTheme.bodySmall,
-                  ),
-                ],
-              ),
       ),
     );
   }

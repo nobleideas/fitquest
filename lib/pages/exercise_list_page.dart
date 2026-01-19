@@ -36,6 +36,11 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
     _loadExercises();
   }
 
+  bool _hasFormVideo(Map<String, dynamic> ex) {
+    final s = (ex['video_url'] ?? '').toString().trim();
+    return s.isNotEmpty && s.toLowerCase() != 'null';
+  }
+
   Future<void> _loadExercises() async {
     setState(() => isLoading = true);
 
@@ -48,8 +53,8 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
       final sorted = List<Map<String, dynamic>>.from(list)
         ..sort(
           (a, b) => (a['name'] as String).toLowerCase().compareTo(
-            (b['name'] as String).toLowerCase(),
-          ),
+                (b['name'] as String).toLowerCase(),
+              ),
         );
 
       final todaySet = await _loadExerciseIdsWithSessionsToday();
@@ -279,8 +284,8 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
             .toList()
           ..sort(
             (a, b) => (a['name'] as String).toLowerCase().compareTo(
-              (b['name'] as String).toLowerCase(),
-            ),
+                  (b['name'] as String).toLowerCase(),
+                ),
           );
 
     String? selectedEquipmentId;
@@ -343,9 +348,7 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
                   // ---------- NEW EQUIPMENT TEXT FIELD ----------
                   TextField(
                     controller: newEquipmentController,
-                    enabled:
-                        selectedEquipmentId ==
-                        null, // 🔒 disabled if dropdown selected
+                    enabled: selectedEquipmentId == null,
                     decoration: const InputDecoration(
                       border: OutlineInputBorder(),
                       labelText: 'New equipment name',
@@ -377,8 +380,8 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
                             // Create new equipment then move
                             final created =
                                 await _equipmentService.insertEquipment(
-                                  typedName,
-                                );
+                              typedName,
+                            );
                             targetEquipmentId = created['id'].toString();
                             targetEquipmentName = created['name'].toString();
                           } else {
@@ -504,6 +507,8 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
                       final hasSessionToday =
                           exercisesWithSessionsToday.contains(exerciseId);
 
+                      final hasVideo = _hasFormVideo(exercise);
+
                       return ListTile(
                         title: Text(
                           exercise['name'],
@@ -520,12 +525,30 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
                         trailing: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
+                            // ✅ Form video indicator (always visible)
+                            Tooltip(
+                              message: hasVideo
+                                  ? 'Form video available'
+                                  : 'No form video',
+                              child: Icon(
+                                hasVideo
+                                    ? Icons.play_circle_fill
+                                    : Icons.videocam_off,
+                                color: hasVideo
+                                    ? Theme.of(context).colorScheme.primary
+                                    : Theme.of(context).disabledColor,
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+
+                            // ✅ "used today" indicator (existing behavior)
                             Icon(
                               hasSessionToday
                                   ? Icons.check_circle
                                   : Icons.fitness_center,
                             ),
                             const SizedBox(width: 8),
+
                             PopupMenuButton<String>(
                               onSelected: (value) =>
                                   _onMenuSelected(value, exercise),
