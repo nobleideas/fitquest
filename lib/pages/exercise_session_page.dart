@@ -416,7 +416,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
               controller: weightController,
               keyboardType: TextInputType.number,
               decoration: const InputDecoration(
-                labelText: "Weight",
+                labelText: "Weight / Bodyweight",
                 border: OutlineInputBorder(),
               ),
             ),
@@ -426,7 +426,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
               controller: repsController,
               keyboardType: TextInputType.number,
               decoration: const InputDecoration(
-                labelText: "Reps",
+                labelText: "Reps / Seconds / Miles",
                 border: OutlineInputBorder(),
               ),
             ),
