@@ -43,7 +43,8 @@ enum _SuggestedDayType { push, pull, legsCore }
 class _SuggestedRoutine {
   final _SuggestedDayType dayType;
   final int minutes;
-  final List<Map<String, dynamic>> exercises; // each: {name, primary_muscle_group, type, id}
+  final List<Map<String, dynamic>>
+  exercises; // each: {name, primary_muscle_group, type, id}
 
   _SuggestedRoutine({
     required this.dayType,
@@ -141,8 +142,9 @@ class HomePageState extends State<HomePage> {
             ),
             actions: [
               TextButton(
-                onPressed:
-                    _isSubmittingReport ? null : () => Navigator.pop(context),
+                onPressed: _isSubmittingReport
+                    ? null
+                    : () => Navigator.pop(context),
                 child: const Text('Cancel'),
               ),
               ElevatedButton.icon(
@@ -181,9 +183,9 @@ class HomePageState extends State<HomePage> {
 
     final msg = _reportController.text.trim();
     if (msg.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please enter a message.')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Please enter a message.')));
       return;
     }
 
@@ -202,9 +204,9 @@ class HomePageState extends State<HomePage> {
       );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to submit report: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed to submit report: $e')));
     } finally {
       if (mounted) setState(() => _isSubmittingReport = false);
     }
@@ -301,8 +303,9 @@ class HomePageState extends State<HomePage> {
   String _formatDate(DateTime d) => '${d.month}/${d.day}/${d.year}';
 
   List<MapEntry<DateTime, _DayWorkoutSummary>> _filteredEntries() {
-    final list = summaryByDay.entries.where((e) => _matchesFilter(e.value)).toList()
-      ..sort((a, b) => b.key.compareTo(a.key));
+    final list =
+        summaryByDay.entries.where((e) => _matchesFilter(e.value)).toList()
+          ..sort((a, b) => b.key.compareTo(a.key));
     return list;
   }
 
@@ -314,7 +317,8 @@ class HomePageState extends State<HomePage> {
     final b = StringBuffer();
 
     // ✅ UPDATED title: include username
-    final title = titleOverride ??
+    final title =
+        titleOverride ??
         'Fit Quest — Workout Summary for ${_shareHandle()} ($filterName)';
     b.writeln(title);
     b.writeln('');
@@ -430,7 +434,9 @@ class HomePageState extends State<HomePage> {
 
                         final subtitleParts = <String>[];
                         if (s.exerciseNames.isNotEmpty) {
-                          subtitleParts.add('${s.exerciseNames.length} exercises');
+                          subtitleParts.add(
+                            '${s.exerciseNames.length} exercises',
+                          );
                         }
                         subtitleParts.add('${s.workoutDurationMinutes} min');
                         subtitleParts.add(s.dayTypeLabel);
@@ -466,7 +472,8 @@ class HomePageState extends State<HomePage> {
                   Navigator.pop(context);
                   await _shareEntries(
                     entries,
-                    subject: 'Workout Summary (${_filterLabel(_selectedFilter)})',
+                    subject:
+                        'Workout Summary (${_filterLabel(_selectedFilter)})',
                   );
                 },
                 child: const Text('Share all shown'),
@@ -477,12 +484,14 @@ class HomePageState extends State<HomePage> {
                 onPressed: selected.isEmpty
                     ? null
                     : () async {
-                        final picked =
-                            entries.where((e) => selected.contains(e.key)).toList();
+                        final picked = entries
+                            .where((e) => selected.contains(e.key))
+                            .toList();
                         Navigator.pop(context);
                         await _shareEntries(
                           picked,
-                          subject: 'Workout Summary (${_filterLabel(_selectedFilter)})',
+                          subject:
+                              'Workout Summary (${_filterLabel(_selectedFilter)})',
                         );
                       },
               ),
@@ -573,8 +582,8 @@ class HomePageState extends State<HomePage> {
 
       final List<DateTime> workoutDays = [];
 
-      final Map<DateTime, Map<String, Map<String, dynamic>>> uniqueExercisesByDay =
-          {};
+      final Map<DateTime, Map<String, Map<String, dynamic>>>
+      uniqueExercisesByDay = {};
 
       final Map<DateTime, Map<String, int>> setCountsByDayByName = {};
 
@@ -623,10 +632,12 @@ class HomePageState extends State<HomePage> {
 
           final mg = (ex['primary_muscle_group'] ?? '').toString();
           if (_isLegsGroup(mg)) {
-            legsVolumeByDay[day] = (legsVolumeByDay[day] ?? 0.0) + sessionVolume;
+            legsVolumeByDay[day] =
+                (legsVolumeByDay[day] ?? 0.0) + sessionVolume;
           }
           if (_isCoreGroup(mg)) {
-            coreVolumeByDay[day] = (coreVolumeByDay[day] ?? 0.0) + sessionVolume;
+            coreVolumeByDay[day] =
+                (coreVolumeByDay[day] ?? 0.0) + sessionVolume;
           }
         }
       }
@@ -639,14 +650,16 @@ class HomePageState extends State<HomePage> {
       final Map<DateTime, _DayWorkoutSummary> result = {};
 
       for (final day in orderedUniqueDays) {
-        final uniqueExercises = (uniqueExercisesByDay[day] ?? {}).values.toList();
+        final uniqueExercises = (uniqueExercisesByDay[day] ?? {}).values
+            .toList();
 
-        final names = uniqueExercises
-            .map((e) => (e['name'] ?? '').toString())
-            .where((s) => s.trim().isNotEmpty)
-            .toSet()
-            .toList()
-          ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+        final names =
+            uniqueExercises
+                .map((e) => (e['name'] ?? '').toString())
+                .where((s) => s.trim().isNotEmpty)
+                .toSet()
+                .toList()
+              ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
 
         final Map<String, int> muscleCounts = {};
         int push = 0, pull = 0, legs = 0, core = 0;
@@ -700,8 +713,9 @@ class HomePageState extends State<HomePage> {
         result[day] = _DayWorkoutSummary(
           day: day,
           exerciseNames: names,
-          exerciseSetCountsByName:
-              Map<String, int>.from(setCountsByDayByName[day] ?? const {}),
+          exerciseSetCountsByName: Map<String, int>.from(
+            setCountsByDayByName[day] ?? const {},
+          ),
           muscleGroupCounts: muscleCounts,
           dayTypeLabel: label,
           workoutDurationMinutes: durationMin,
@@ -716,9 +730,9 @@ class HomePageState extends State<HomePage> {
       if (!mounted) return;
 
       setState(() => summaryByDay = {});
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to load workouts: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed to load workouts: $e')));
     } finally {
       if (mounted) setState(() => isLoading = false);
     }
@@ -735,9 +749,13 @@ class HomePageState extends State<HomePage> {
 
     // common mappings
     if (g.contains('chest') || g.contains('pec')) return 'chest';
-    if (g.contains('back') || g.contains('lat') || g.contains('trap')) return 'back';
+    if (g.contains('back') || g.contains('lat') || g.contains('trap'))
+      return 'back';
     if (g.contains('shoulder') || g.contains('delt')) return 'shoulders';
-    if (g.contains('arm') || g.contains('bicep') || g.contains('tricep') || g.contains('forearm')) {
+    if (g.contains('arm') ||
+        g.contains('bicep') ||
+        g.contains('tricep') ||
+        g.contains('forearm')) {
       return 'arms';
     }
 
@@ -761,7 +779,8 @@ class HomePageState extends State<HomePage> {
       return _SuggestedDayType.push; // default
     }
 
-    final newestDay = summaryByDay.keys.toList()..sort((a, b) => b.compareTo(a));
+    final newestDay = summaryByDay.keys.toList()
+      ..sort((a, b) => b.compareTo(a));
     final last = summaryByDay[newestDay.first];
     final label = (last?.dayTypeLabel ?? '').trim().toLowerCase();
 
@@ -810,7 +829,9 @@ class HomePageState extends State<HomePage> {
 
       final exJoined = row['exercises'];
       final Map<String, dynamic> ex = exJoined is List
-          ? Map<String, dynamic>.from((exJoined.isNotEmpty ? exJoined.first : {}) as Map)
+          ? Map<String, dynamic>.from(
+              (exJoined.isNotEmpty ? exJoined.first : {}) as Map,
+            )
           : Map<String, dynamic>.from(exJoined as Map);
 
       final mgRaw = (ex['primary_muscle_group'] ?? '').toString();
@@ -828,12 +849,27 @@ class HomePageState extends State<HomePage> {
     final user = supabase.auth.currentUser;
     if (user == null) return [];
 
+    // ✅ Join equipment name via equipment_id FK
     final rows = await supabase
         .from('exercises')
-        .select('id, name, type, primary_muscle_group')
+        .select(
+          'id, name, type, primary_muscle_group, equipment:equipment_id(name)',
+        )
         .eq('user_id', user.id);
 
-    final list = rows is List ? List<Map<String, dynamic>>.from(rows) : <Map<String, dynamic>>[];
+    final list = rows is List
+        ? List<Map<String, dynamic>>.from(rows)
+        : <Map<String, dynamic>>[];
+
+    // ✅ Flatten equipment name for easy use later
+    for (final ex in list) {
+      final equipment = ex['equipment'];
+      if (equipment is Map) {
+        ex['equipment_name'] = (equipment['name'] ?? '').toString();
+      } else {
+        ex['equipment_name'] = '';
+      }
+    }
 
     // sort stable (name)
     list.sort((a, b) {
@@ -919,7 +955,9 @@ class HomePageState extends State<HomePage> {
         final name = (ex['name'] ?? '').toString().trim();
         if (name.isEmpty) return false;
 
-        final mg = _canonicalMuscleGroup((ex['primary_muscle_group'] ?? '').toString());
+        final mg = _canonicalMuscleGroup(
+          (ex['primary_muscle_group'] ?? '').toString(),
+        );
         if (!relevantGroups.contains(mg)) return false;
 
         if (suggestedType == _SuggestedDayType.push) {
@@ -947,7 +985,9 @@ class HomePageState extends State<HomePage> {
       // group pool by canonical muscle group
       final Map<String, List<Map<String, dynamic>>> byGroup = {};
       for (final ex in pool) {
-        final mg = _canonicalMuscleGroup((ex['primary_muscle_group'] ?? '').toString());
+        final mg = _canonicalMuscleGroup(
+          (ex['primary_muscle_group'] ?? '').toString(),
+        );
         byGroup.putIfAbsent(mg, () => []).add(ex);
       }
 
@@ -1007,7 +1047,9 @@ class HomePageState extends State<HomePage> {
 
       // If for some reason we didn’t reach target (tiny pools), fill from whole pool round-robin
       if (picked.length < totalExercisesTarget) {
-        final alreadyIds = picked.map((e) => (e['id'] ?? '').toString()).toSet();
+        final alreadyIds = picked
+            .map((e) => (e['id'] ?? '').toString())
+            .toSet();
         for (final ex in pool) {
           if (picked.length >= totalExercisesTarget) break;
           final id = (ex['id'] ?? '').toString();
@@ -1028,9 +1070,9 @@ class HomePageState extends State<HomePage> {
       });
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to build suggestion: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed to build suggestion: $e')));
     } finally {
       if (mounted) setState(() => _isSuggesting = false);
     }
@@ -1059,8 +1101,8 @@ class HomePageState extends State<HomePage> {
                   child: Text(
                     'Suggested Routine',
                     style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.w800,
-                        ),
+                      fontWeight: FontWeight.w800,
+                    ),
                   ),
                 ),
                 IconButton(
@@ -1074,7 +1116,10 @@ class HomePageState extends State<HomePage> {
             Row(
               children: [
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 4,
+                  ),
                   decoration: BoxDecoration(
                     border: Border.all(color: Theme.of(context).dividerColor),
                     borderRadius: BorderRadius.circular(16),
@@ -1097,11 +1142,23 @@ class HomePageState extends State<HomePage> {
             else
               ...s.exercises.map((ex) {
                 final name = (ex['name'] ?? '').toString();
-                final mg = _canonicalMuscleGroup((ex['primary_muscle_group'] ?? '').toString());
-                final mgLabel = mg.isEmpty ? '' : mg[0].toUpperCase() + mg.substring(1);
+                final mg = _canonicalMuscleGroup(
+                  (ex['primary_muscle_group'] ?? '').toString(),
+                );
+                final mgLabel = mg.isEmpty
+                    ? ''
+                    : mg[0].toUpperCase() + mg.substring(1);
+                final equipmentName = (ex['equipment_name'] ?? '')
+                    .toString()
+                    .trim();
+
                 return Padding(
                   padding: const EdgeInsets.symmetric(vertical: 2),
-                  child: Text('• $name (${mgLabel})'),
+                  child: Text(
+                    equipmentName.isEmpty
+                        ? '• $name (${mgLabel})'
+                        : '• $name (${mgLabel})  •  $equipmentName',
+                  ),
                 );
               }),
           ],
@@ -1195,7 +1252,9 @@ class HomePageState extends State<HomePage> {
                             children: [
                               Text(
                                 _formatDate(date),
-                                style: const TextStyle(fontWeight: FontWeight.bold),
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                ),
                               ),
                               const SizedBox(width: 8),
                               Text(
@@ -1235,9 +1294,9 @@ class HomePageState extends State<HomePage> {
                               vertical: 6,
                             ),
                             decoration: BoxDecoration(
-                              color: Theme.of(context)
-                                  .colorScheme
-                                  .surfaceContainerHighest,
+                              color: Theme.of(
+                                context,
+                              ).colorScheme.surfaceContainerHighest,
                               borderRadius: BorderRadius.circular(16),
                             ),
                             child: Text('${e.key}: ${e.value}'),
