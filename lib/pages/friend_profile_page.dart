@@ -48,16 +48,18 @@ class _FriendProfilePageState extends State<FriendProfilePage>
       final friendId = widget.friendUserId;
 
       final results = await Future.wait<dynamic>([
-        supabase.rpc('get_friend_workout_history', params: {
-          'friend_user_id': friendId,
-          'max_rows': 250,
-        }),
-        supabase.rpc('get_friend_equipment', params: {
-          'friend_user_id': friendId,
-        }),
-        supabase.rpc('get_friend_exercises', params: {
-          'friend_user_id': friendId,
-        }),
+        supabase.rpc(
+          'get_friend_workout_history',
+          params: {'friend_user_id': friendId, 'max_rows': 250},
+        ),
+        supabase.rpc(
+          'get_friend_equipment',
+          params: {'friend_user_id': friendId},
+        ),
+        supabase.rpc(
+          'get_friend_exercises',
+          params: {'friend_user_id': friendId},
+        ),
       ]);
 
       final historyRaw = results[0];
@@ -98,8 +100,10 @@ class _FriendProfilePageState extends State<FriendProfilePage>
     final m = local.month.toString().padLeft(2, '0');
     final d = local.day.toString().padLeft(2, '0');
     final y = local.year.toString();
-    final hh =
-        (local.hour % 12 == 0 ? 12 : local.hour % 12).toString().padLeft(2, '0');
+    final hh = (local.hour % 12 == 0 ? 12 : local.hour % 12).toString().padLeft(
+      2,
+      '0',
+    );
     final mm = local.minute.toString().padLeft(2, '0');
     final ap = local.hour >= 12 ? 'PM' : 'AM';
     return "$m/$d/$y • $hh:$mm $ap";
@@ -113,8 +117,9 @@ class _FriendProfilePageState extends State<FriendProfilePage>
 
   @override
   Widget build(BuildContext context) {
-    final title =
-        widget.friendUsername.isNotEmpty ? "@${widget.friendUsername}" : "Friend";
+    final title = widget.friendUsername.isNotEmpty
+        ? "@${widget.friendUsername}"
+        : "Friend";
 
     return Scaffold(
       appBar: AppBar(
@@ -137,26 +142,26 @@ class _FriendProfilePageState extends State<FriendProfilePage>
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _error != null
-              ? _BlockedOrErrorView(
-                  message:
-                      "Couldn't load friend data.\n\nThis usually means you aren't accepted friends yet (or an RPC error occurred).\n\n$_error",
-                  onRetry: _loadAll,
-                )
-              : TabBarView(
-                  controller: _tabController,
-                  children: [
-                    _HistoryTab(history: _history, fmtDateTime: _fmtDateTime),
-                    _EquipmentTab(
-                      equipment: _equipment,
-                      friendExercises: _exercises,
-                      friendUsername: widget.friendUsername,
-                    ),
-                    _ExercisesTab(
-                      exercises: _exercises,
-                      friendEquipment: _equipment,
-                    ),
-                  ],
+          ? _BlockedOrErrorView(
+              message:
+                  "Couldn't load friend data.\n\nThis usually means you aren't accepted friends yet (or an RPC error occurred).\n\n$_error",
+              onRetry: _loadAll,
+            )
+          : TabBarView(
+              controller: _tabController,
+              children: [
+                _HistoryTab(history: _history, fmtDateTime: _fmtDateTime),
+                _EquipmentTab(
+                  equipment: _equipment,
+                  friendExercises: _exercises,
+                  friendUsername: widget.friendUsername,
                 ),
+                _ExercisesTab(
+                  exercises: _exercises,
+                  friendEquipment: _equipment,
+                ),
+              ],
+            ),
     );
   }
 }
@@ -263,7 +268,8 @@ class _HistoryTabState extends State<_HistoryTab> {
   String _formatDate(DateTime d) => '${d.month}/${d.day}/${d.year}';
 
   String _rowMuscleGroup(Map<String, dynamic> row) {
-    final v = row['primary_muscle_group'] ??
+    final v =
+        row['primary_muscle_group'] ??
         row['muscle_group'] ??
         row['exercise_primary_muscle_group'] ??
         row['exercise_muscle_group'];
@@ -455,8 +461,9 @@ class _HistoryTabState extends State<_HistoryTab> {
               'Detailed Sets',
               style: TextStyle(
                 fontWeight: FontWeight.w700,
-                color:
-                    isDetailed ? Theme.of(context).colorScheme.primary : null,
+                color: isDetailed
+                    ? Theme.of(context).colorScheme.primary
+                    : null,
               ),
             ),
           ),
@@ -531,9 +538,9 @@ class _HistoryTabState extends State<_HistoryTab> {
                         vertical: 6,
                       ),
                       decoration: BoxDecoration(
-                        color: Theme.of(context)
-                            .colorScheme
-                            .surfaceContainerHighest,
+                        color: Theme.of(
+                          context,
+                        ).colorScheme.surfaceContainerHighest,
                         borderRadius: BorderRadius.circular(16),
                       ),
                       child: Text('${e.key}: ${e.value}'),
@@ -632,6 +639,126 @@ class _EquipmentTabState extends State<_EquipmentTab> {
   final Set<int> _selectedIndexes = {};
   bool _isAdding = false;
 
+  // ---------- PRIMARY MUSCLE GROUP FILTER ----------
+  static const List<String> _muscleFilters = [
+    'All',
+    'Chest',
+    'Shoulders',
+    'Back',
+    'Arms',
+    'Legs',
+    'Core',
+  ];
+
+  String _selectedMuscle = 'All';
+
+  /// equipmentId -> set of muscle keys (lowercase normalized)
+  final Map<String, Set<String>> _equipmentMuscleGroups = {};
+
+  @override
+  void initState() {
+    super.initState();
+    _buildEquipmentMuscleMap();
+  }
+
+  @override
+  void didUpdateWidget(covariant _EquipmentTab oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.friendExercises != widget.friendExercises ||
+        oldWidget.equipment != widget.equipment) {
+      _buildEquipmentMuscleMap();
+      // If currently selected filter yields nothing because data changed,
+      // we keep the selection (user intent), but mapping will update.
+    }
+  }
+
+  String _normalizeMuscle(dynamic value) {
+    final v = (value ?? '').toString().trim().toLowerCase();
+
+    switch (v) {
+      case 'shoulder':
+      case 'shoulders':
+        return 'shoulders';
+      case 'arm':
+      case 'arms':
+        return 'arms';
+      case 'leg':
+      case 'legs':
+        return 'legs';
+      case 'chest':
+        return 'chest';
+      case 'back':
+        return 'back';
+      case 'core':
+      case 'abs':
+      case 'abdominals':
+        return 'core';
+      default:
+        return v;
+    }
+  }
+
+  String _selectedMuscleKey() => _normalizeMuscle(_selectedMuscle);
+
+  String? _friendEqId(Map<String, dynamic> eq) {
+    final s = (eq['id'] ?? '').toString().trim();
+    return s.isEmpty ? null : s;
+  }
+
+  String? _exerciseFriendEquipmentId(Map<String, dynamic> ex) {
+    final s = (ex['equipment_id'] ?? '').toString().trim();
+    return s.isEmpty ? null : s;
+  }
+
+  String? _exerciseVideoUrl(Map<String, dynamic> ex) {
+    final s = (ex['video_url'] ?? '').toString().trim();
+    return s.isEmpty ? null : s;
+  }
+
+  void _buildEquipmentMuscleMap() {
+    final map = <String, Set<String>>{};
+
+    for (final ex in widget.friendExercises) {
+      final eqId = _exerciseFriendEquipmentId(ex);
+      if (eqId == null) continue;
+
+      final mgRaw = ex['primary_muscle_group'];
+      final mg = _normalizeMuscle(mgRaw);
+      if (mg.isEmpty) continue;
+
+      map.putIfAbsent(eqId, () => <String>{}).add(mg);
+    }
+
+    setState(() {
+      _equipmentMuscleGroups
+        ..clear()
+        ..addAll(map);
+    });
+  }
+
+  List<int> get _visibleIndexes {
+    // If "All", show everything.
+    if (_selectedMuscle == 'All') {
+      return List.generate(widget.equipment.length, (i) => i);
+    }
+
+    final key = _selectedMuscleKey();
+    final visible = <int>[];
+
+    for (int i = 0; i < widget.equipment.length; i++) {
+      final eq = widget.equipment[i];
+      final id = _friendEqId(eq);
+      if (id == null) continue;
+
+      final groups = _equipmentMuscleGroups[id];
+      if (groups != null && groups.contains(key)) {
+        visible.add(i);
+      }
+    }
+
+    return visible;
+  }
+
   void _enterSelectMode(int index) {
     setState(() {
       _selectMode = true;
@@ -650,12 +777,13 @@ class _EquipmentTabState extends State<_EquipmentTab> {
     });
   }
 
-  void _selectAll() {
+  void _selectAllVisible() {
+    final visible = _visibleIndexes;
     setState(() {
       _selectMode = true;
       _selectedIndexes
         ..clear()
-        ..addAll(List.generate(widget.equipment.length, (i) => i));
+        ..addAll(visible);
     });
   }
 
@@ -664,21 +792,6 @@ class _EquipmentTabState extends State<_EquipmentTab> {
       _selectedIndexes.clear();
       _selectMode = false;
     });
-  }
-
-  String? _friendEqId(Map<String, dynamic> eq) {
-    final s = (eq['id'] ?? '').toString().trim();
-    return s.isEmpty ? null : s;
-  }
-
-  String? _exerciseFriendEquipmentId(Map<String, dynamic> ex) {
-    final s = (ex['equipment_id'] ?? '').toString().trim();
-    return s.isEmpty ? null : s;
-  }
-
-  String? _exerciseVideoUrl(Map<String, dynamic> ex) {
-    final s = (ex['video_url'] ?? '').toString().trim();
-    return s.isEmpty ? null : s;
   }
 
   Future<_CopyMode?> _askCopyMode(BuildContext context, int count) async {
@@ -711,8 +824,7 @@ class _EquipmentTabState extends State<_EquipmentTab> {
   Future<void> _addSelectedToMyEquipment() async {
     if (_selectedIndexes.isEmpty || _isAdding) return;
 
-    final mode =
-        await _askCopyMode(context, _selectedIndexes.length);
+    final mode = await _askCopyMode(context, _selectedIndexes.length);
     if (mode == null) return;
 
     final orderedIndexes = _selectedIndexes.toList()
@@ -769,7 +881,8 @@ class _EquipmentTabState extends State<_EquipmentTab> {
             try {
               await supabase.from('exercises').insert({
                 'name': exName,
-                'primary_muscle_group': (ex['primary_muscle_group'] ?? '').toString(),
+                'primary_muscle_group': (ex['primary_muscle_group'] ?? '')
+                    .toString(),
                 'type': (ex['type'] ?? '').toString(),
                 'equipment_id': myEqId,
                 'video_url': _exerciseVideoUrl(ex),
@@ -786,10 +899,10 @@ class _EquipmentTabState extends State<_EquipmentTab> {
 
       final msg = mode == _CopyMode.equipmentOnly
           ? (skippedEquipment > 0
-              ? "Added $addedEquipment equipment • Skipped $skippedEquipment (already exists)"
-              : "Added $addedEquipment equipment")
+                ? "Added $addedEquipment equipment • Skipped $skippedEquipment (already exists)"
+                : "Added $addedEquipment equipment")
           : "Added $addedEquipment equipment ($addedExercises exercises)"
-              "${(skippedEquipment + skippedExercises) > 0 ? " • Skipped ${skippedEquipment + skippedExercises}" : ""}";
+                "${(skippedEquipment + skippedExercises) > 0 ? " • Skipped ${skippedEquipment + skippedExercises}" : ""}";
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -805,6 +918,39 @@ class _EquipmentTabState extends State<_EquipmentTab> {
     }
   }
 
+  Widget _buildMuscleFilterBar() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 6),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: [
+            for (final label in _muscleFilters) ...[
+              ChoiceChip(
+                label: Text(label),
+                selected: _selectedMuscle == label,
+                onSelected: (_) {
+                  setState(() {
+                    _selectedMuscle = label;
+
+                    // Optional: if selection mode is active, keep only selections
+                    // that are still visible under the filter (prevents "ghost" selections).
+                    if (_selectMode) {
+                      final visible = _visibleIndexes.toSet();
+                      _selectedIndexes.removeWhere((i) => !visible.contains(i));
+                      if (_selectedIndexes.isEmpty) _selectMode = false;
+                    }
+                  });
+                },
+              ),
+              const SizedBox(width: 8),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final equipment = widget.equipment;
@@ -812,16 +958,24 @@ class _EquipmentTabState extends State<_EquipmentTab> {
       return const Center(child: Text("No equipment found."));
     }
 
+    final visibleIndexes = _visibleIndexes;
     final selectedCount = _selectedIndexes.length;
 
     return Stack(
       children: [
         ListView.separated(
           padding: const EdgeInsets.fromLTRB(12, 12, 12, 90),
-          itemCount: equipment.length + 1,
+          itemCount:
+              visibleIndexes.length + 2, // +1 for filter bar, +1 for tip card
           separatorBuilder: (_, __) => const Divider(height: 1),
           itemBuilder: (context, i) {
             if (i == 0) {
+              // ✅ Filter bar at very top
+              return _buildMuscleFilterBar();
+            }
+
+            if (i == 1) {
+              // Tip card
               return Card(
                 elevation: 0,
                 color: Theme.of(context).colorScheme.surfaceContainerHighest,
@@ -843,26 +997,28 @@ class _EquipmentTabState extends State<_EquipmentTab> {
               );
             }
 
-            final index = i - 1;
-            final e = equipment[index];
+            final visibleIndex = visibleIndexes[i - 2];
+            final e = equipment[visibleIndex];
             final name = (e['name'] ?? '').toString();
-            final isSelected = _selectedIndexes.contains(index);
+            final isSelected = _selectedIndexes.contains(visibleIndex);
 
             return ListTile(
               leading: _selectMode
-                  ? Icon(isSelected
-                      ? Icons.check_circle
-                      : Icons.radio_button_unchecked)
+                  ? Icon(
+                      isSelected
+                          ? Icons.check_circle
+                          : Icons.radio_button_unchecked,
+                    )
                   : const Icon(Icons.fitness_center),
               title: Text(name),
               trailing: _selectMode ? null : const Icon(Icons.chevron_right),
               selected: isSelected,
-              onTap: _selectMode ? () => _toggleSelect(index) : null,
+              onTap: _selectMode ? () => _toggleSelect(visibleIndex) : null,
               onLongPress: () {
                 if (_selectMode) {
-                  _toggleSelect(index);
+                  _toggleSelect(visibleIndex);
                 } else {
-                  _enterSelectMode(index);
+                  _enterSelectMode(visibleIndex);
                 }
               },
             );
@@ -888,9 +1044,8 @@ class _EquipmentTabState extends State<_EquipmentTab> {
                         style: const TextStyle(fontWeight: FontWeight.w600),
                       ),
                       const Spacer(),
-
                       TextButton(
-                        onPressed: _isAdding ? null : _selectAll,
+                        onPressed: _isAdding ? null : _selectAllVisible,
                         child: const Text("Select all"),
                       ),
                       TextButton(
@@ -898,7 +1053,6 @@ class _EquipmentTabState extends State<_EquipmentTab> {
                         child: const Text("Clear"),
                       ),
                       const SizedBox(width: 8),
-
                       ElevatedButton.icon(
                         onPressed: (selectedCount == 0 || _isAdding)
                             ? null
@@ -907,7 +1061,9 @@ class _EquipmentTabState extends State<_EquipmentTab> {
                             ? const SizedBox(
                                 width: 16,
                                 height: 16,
-                                child: CircularProgressIndicator(strokeWidth: 2),
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
                               )
                             : const Icon(Icons.download_done),
                         label: Text(_isAdding ? "Adding..." : "Add"),
@@ -929,10 +1085,7 @@ class _ExercisesTab extends StatefulWidget {
   final List<Map<String, dynamic>> exercises;
   final List<Map<String, dynamic>> friendEquipment;
 
-  const _ExercisesTab({
-    required this.exercises,
-    required this.friendEquipment,
-  });
+  const _ExercisesTab({required this.exercises, required this.friendEquipment});
 
   @override
   State<_ExercisesTab> createState() => _ExercisesTabState();
@@ -981,14 +1134,15 @@ class _ExercisesTabState extends State<_ExercisesTab> {
 
     // Load MY equipment options
     final myEquipmentDynamic = await _equipmentService.getAllEquipment();
-    final myEquipment = myEquipmentDynamic
-        .map((e) => Map<String, dynamic>.from(e as Map))
-        .toList()
-      ..sort((a, b) {
-        final an = (a['name'] ?? '').toString().toLowerCase();
-        final bn = (b['name'] ?? '').toString().toLowerCase();
-        return an.compareTo(bn);
-      });
+    final myEquipment =
+        myEquipmentDynamic
+            .map((e) => Map<String, dynamic>.from(e as Map))
+            .toList()
+          ..sort((a, b) {
+            final an = (a['name'] ?? '').toString().toLowerCase();
+            final bn = (b['name'] ?? '').toString().toLowerCase();
+            return an.compareTo(bn);
+          });
 
     String? selectedEquipmentId;
     String? selectedEquipmentName;
@@ -1001,8 +1155,9 @@ class _ExercisesTabState extends State<_ExercisesTab> {
           builder: (context, setLocal) {
             final typed = newEquipmentController.text.trim();
             final canAdd =
-                (selectedEquipmentId != null && selectedEquipmentId!.isNotEmpty) ||
-                    typed.isNotEmpty;
+                (selectedEquipmentId != null &&
+                    selectedEquipmentId!.isNotEmpty) ||
+                typed.isNotEmpty;
 
             return AlertDialog(
               title: Text("Add ${_selectedIndexes.length} exercise(s)"),
@@ -1063,9 +1218,7 @@ class _ExercisesTabState extends State<_ExercisesTab> {
                   child: const Text("Cancel"),
                 ),
                 ElevatedButton(
-                  onPressed: canAdd
-                      ? () => Navigator.pop(context, true)
-                      : null,
+                  onPressed: canAdd ? () => Navigator.pop(context, true) : null,
                   child: const Text("Add"),
                 ),
               ],
@@ -1093,14 +1246,20 @@ class _ExercisesTabState extends State<_ExercisesTab> {
       } else {
         targetEquipmentId = selectedEquipmentId!;
         selectedEquipmentName = myEquipment
-            .firstWhere((e) => e['id'].toString() == selectedEquipmentId)['name']
+            .firstWhere(
+              (e) => e['id'].toString() == selectedEquipmentId,
+            )['name']
             .toString();
       }
 
       final ordered = _selectedIndexes.toList()
         ..sort((a, b) {
-          final an = (widget.exercises[a]['name'] ?? '').toString().toLowerCase();
-          final bn = (widget.exercises[b]['name'] ?? '').toString().toLowerCase();
+          final an = (widget.exercises[a]['name'] ?? '')
+              .toString()
+              .toLowerCase();
+          final bn = (widget.exercises[b]['name'] ?? '')
+              .toString()
+              .toLowerCase();
           return an.compareTo(bn);
         });
 
@@ -1115,7 +1274,8 @@ class _ExercisesTabState extends State<_ExercisesTab> {
         try {
           await supabase.from('exercises').insert({
             'name': name,
-            'primary_muscle_group': (ex['primary_muscle_group'] ?? '').toString(),
+            'primary_muscle_group': (ex['primary_muscle_group'] ?? '')
+                .toString(),
             'type': (ex['type'] ?? '').toString(),
             'equipment_id': targetEquipmentId,
             'video_url': _videoUrl(ex),
@@ -1199,9 +1359,11 @@ class _ExercisesTabState extends State<_ExercisesTab> {
             return Card(
               child: ListTile(
                 leading: _selectMode
-                    ? Icon(isSelected
-                        ? Icons.check_circle
-                        : Icons.radio_button_unchecked)
+                    ? Icon(
+                        isSelected
+                            ? Icons.check_circle
+                            : Icons.radio_button_unchecked,
+                      )
                     : null,
                 title: Text(name),
                 subtitle: Text("$equipName • $mg • $type"),
@@ -1276,11 +1438,14 @@ class _ExercisesTabState extends State<_ExercisesTab> {
                             ? const SizedBox(
                                 width: 16,
                                 height: 16,
-                                child:
-                                    CircularProgressIndicator(strokeWidth: 2),
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
                               )
                             : const Icon(Icons.playlist_add),
-                        label: Text(_isAdding ? "Adding..." : "Add to equipment"),
+                        label: Text(
+                          _isAdding ? "Adding..." : "Add to equipment",
+                        ),
                       ),
                     ],
                   ),
@@ -1310,7 +1475,8 @@ class FriendExerciseFormVideoPage extends StatefulWidget {
       _FriendExerciseFormVideoPageState();
 }
 
-class _FriendExerciseFormVideoPageState extends State<FriendExerciseFormVideoPage> {
+class _FriendExerciseFormVideoPageState
+    extends State<FriendExerciseFormVideoPage> {
   VideoPlayerController? _controller;
   bool _loading = true;
   String? _error;
@@ -1369,55 +1535,55 @@ class _FriendExerciseFormVideoPageState extends State<FriendExerciseFormVideoPag
         child: _loading
             ? const Center(child: CircularProgressIndicator())
             : urlMissing
-                ? const Center(child: Text("No form video uploaded."))
-                : _error != null
-                    ? Center(
-                        child: Text(
-                          "Couldn't load video.\n\n$_error",
-                          textAlign: TextAlign.center,
+            ? const Center(child: Text("No form video uploaded."))
+            : _error != null
+            ? Center(
+                child: Text(
+                  "Couldn't load video.\n\n$_error",
+                  textAlign: TextAlign.center,
+                ),
+              )
+            : Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  AspectRatio(
+                    aspectRatio: _controller!.value.aspectRatio,
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(12),
+                      child: VideoPlayer(_controller!),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      IconButton(
+                        iconSize: 42,
+                        icon: Icon(
+                          _controller!.value.isPlaying
+                              ? Icons.pause_circle_filled
+                              : Icons.play_circle_filled,
                         ),
-                      )
-                    : Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          AspectRatio(
-                            aspectRatio: _controller!.value.aspectRatio,
-                            child: ClipRRect(
-                              borderRadius: BorderRadius.circular(12),
-                              child: VideoPlayer(_controller!),
-                            ),
-                          ),
-                          const SizedBox(height: 12),
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              IconButton(
-                                iconSize: 42,
-                                icon: Icon(
-                                  _controller!.value.isPlaying
-                                      ? Icons.pause_circle_filled
-                                      : Icons.play_circle_filled,
-                                ),
-                                onPressed: () {
-                                  setState(() {
-                                    if (_controller!.value.isPlaying) {
-                                      _controller!.pause();
-                                    } else {
-                                      _controller!.play();
-                                    }
-                                  });
-                                },
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 6),
-                          Text(
-                            "Form video",
-                            textAlign: TextAlign.center,
-                            style: Theme.of(context).textTheme.bodySmall,
-                          ),
-                        ],
+                        onPressed: () {
+                          setState(() {
+                            if (_controller!.value.isPlaying) {
+                              _controller!.pause();
+                            } else {
+                              _controller!.play();
+                            }
+                          });
+                        },
                       ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    "Form video",
+                    textAlign: TextAlign.center,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
+              ),
       ),
     );
   }

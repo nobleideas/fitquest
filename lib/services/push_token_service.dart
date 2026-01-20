@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:flutter/foundation.dart';
 
 class PushTokenService {
   PushTokenService._();
@@ -13,6 +14,8 @@ class PushTokenService {
 
   /// Call ONCE (e.g., in MainShell.initState()).
   Future<void> initAndRegister() async {
+    debugPrint("✅ PushTokenService.initAndRegister() called");
+
     if (_initialized) return;
     _initialized = true;
 
@@ -63,10 +66,21 @@ class PushTokenService {
     if (token == null || token.trim().isEmpty) return;
 
     // 3) Store token in Supabase
+    // 3) Store token in Supabase (dedupe by token)
     await _supabase.from('user_push_tokens').upsert({
       'user_id': user.id,
       'token': token,
       'platform': 'web',
+      'last_seen_at': DateTime.now().toUtc().toIso8601String(),
+      'disabled_at': null,
     }, onConflict: 'token');
+
+    final check = await _supabase
+        .from('user_push_tokens')
+        .select('id,user_id,token,platform,last_seen_at,disabled_at')
+        .eq('token', token)
+        .maybeSingle();
+
+    debugPrint('Saved token row: $check');
   }
 }

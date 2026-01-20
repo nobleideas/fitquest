@@ -21,6 +21,22 @@ class EquipmentListPageState extends State<EquipmentListPage> {
   /// Equipment IDs that have at least one exercise session today
   Set<String> equipmentWithSessionsToday = {};
 
+  // ---------- PRIMARY MUSCLE GROUP FILTER ----------
+  static const List<String> _muscleFilters = [
+    'All',
+    'Chest',
+    'Shoulders',
+    'Back',
+    'Arms',
+    'Legs',
+    'Core',
+  ];
+
+  String _selectedMuscle = 'All';
+
+  /// Map equipmentId -> set of muscle group keys (lowercase normalized)
+  final Map<String, Set<String>> _equipmentMuscleGroups = {};
+
   // ✅ allow MainShell to refresh Equipment tab on selection
   Future<void> refresh() async {
     await _loadEquipment();
@@ -30,6 +46,46 @@ class EquipmentListPageState extends State<EquipmentListPage> {
   void initState() {
     super.initState();
     _loadEquipment();
+  }
+
+  String _normalizeMuscle(dynamic value) {
+    final v = (value ?? '').toString().trim().toLowerCase();
+
+    // Normalize common variants
+    switch (v) {
+      case 'shoulder':
+      case 'shoulders':
+        return 'shoulders';
+      case 'arm':
+      case 'arms':
+        return 'arms';
+      case 'leg':
+      case 'legs':
+        return 'legs';
+      case 'chest':
+        return 'chest';
+      case 'back':
+        return 'back';
+      case 'core':
+      case 'abs':
+      case 'abdominals':
+        return 'core';
+      default:
+        return v; // unknown values still stored, but won't match your filters
+    }
+  }
+
+  String _selectedMuscleKey() => _normalizeMuscle(_selectedMuscle);
+
+  List<Map<String, dynamic>> get _filteredEquipment {
+    if (_selectedMuscle == 'All') return equipmentList;
+
+    final key = _selectedMuscleKey();
+    return equipmentList.where((e) {
+      final id = e['id']?.toString() ?? '';
+      final groups = _equipmentMuscleGroups[id];
+      return groups != null && groups.contains(key);
+    }).toList();
   }
 
   Future<void> _loadEquipment() async {
@@ -60,10 +116,19 @@ class EquipmentListPageState extends State<EquipmentListPage> {
         }
       }
 
+      final ordered = [...usedToday, ...notUsedToday];
+
+      // ✅ Load equipment -> muscle groups mapping based on exercises assigned to equipment
+      final ids = ordered.map((e) => e['id']?.toString() ?? '').where((id) => id.isNotEmpty).toList();
+      final muscleMap = await _loadEquipmentMuscleGroups(ids);
+
       if (!mounted) return;
       setState(() {
-        equipmentList = [...usedToday, ...notUsedToday];
+        equipmentList = ordered;
         equipmentWithSessionsToday = todaySet;
+        _equipmentMuscleGroups
+          ..clear()
+          ..addAll(muscleMap);
         isLoading = false;
       });
     } catch (e, st) {
@@ -74,6 +139,7 @@ class EquipmentListPageState extends State<EquipmentListPage> {
       setState(() {
         equipmentList = [];
         equipmentWithSessionsToday = {};
+        _equipmentMuscleGroups.clear();
         isLoading = false;
       });
 
@@ -81,6 +147,33 @@ class EquipmentListPageState extends State<EquipmentListPage> {
         SnackBar(content: Text('Failed to load equipment: $e')),
       );
     }
+  }
+
+  /// Build mapping: equipment_id -> {primary_muscle_group...}
+  Future<Map<String, Set<String>>> _loadEquipmentMuscleGroups(List<String> equipmentIds) async {
+    if (equipmentIds.isEmpty) return {};
+
+    // NOTE: Assumes exercises has columns: equipment_id, primary_muscle_group
+    final rows = await supabase
+        .from('exercises')
+        .select('equipment_id, primary_muscle_group')
+        .inFilter('equipment_id', equipmentIds);
+
+    final map = <String, Set<String>>{};
+
+    for (final row in rows) {
+      if (row is! Map) continue;
+
+      final eqId = row['equipment_id']?.toString();
+      if (eqId == null || eqId.isEmpty) continue;
+
+      final muscle = _normalizeMuscle(row['primary_muscle_group']);
+      if (muscle.isEmpty) continue;
+
+      map.putIfAbsent(eqId, () => <String>{}).add(muscle);
+    }
+
+    return map;
   }
 
   /// Because exercise_sessions references exercise_id,
@@ -153,7 +246,7 @@ class EquipmentListPageState extends State<EquipmentListPage> {
               if (!mounted) return;
               Navigator.pop(context);
 
-              await _loadEquipment(); // reload list + today's highlights
+              await _loadEquipment(); // reload list + today's highlights + muscle map
               if (!mounted) return;
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(
@@ -527,76 +620,107 @@ class EquipmentListPageState extends State<EquipmentListPage> {
     }
   }
 
+  Widget _buildMuscleFilterBar() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 6),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: [
+            for (final label in _muscleFilters) ...[
+              ChoiceChip(
+                label: Text(label),
+                selected: _selectedMuscle == label,
+                onSelected: (_) {
+                  setState(() => _selectedMuscle = label);
+                },
+              ),
+              const SizedBox(width: 8),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Stack(
       children: [
         isLoading
             ? const Center(child: CircularProgressIndicator())
-            : RefreshIndicator(
-                onRefresh: _loadEquipment,
-                child: ListView.builder(
-                  physics: const AlwaysScrollableScrollPhysics(),
-                  itemCount: equipmentList.length,
-                  itemBuilder: (context, index) {
-                    final equipment = equipmentList[index];
-                    final equipmentId = equipment['id']?.toString() ?? '';
-                    final hasSessionToday =
-                        equipmentWithSessionsToday.contains(equipmentId);
+            : Column(
+                children: [
+                  _buildMuscleFilterBar(),
+                  Expanded(
+                    child: RefreshIndicator(
+                      onRefresh: _loadEquipment,
+                      child: ListView.builder(
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        itemCount: _filteredEquipment.length,
+                        itemBuilder: (context, index) {
+                          final equipment = _filteredEquipment[index];
+                          final equipmentId = equipment['id']?.toString() ?? '';
+                          final hasSessionToday =
+                              equipmentWithSessionsToday.contains(equipmentId);
 
-                    return ListTile(
-                      title: Text(
-                        equipment['name'],
-                        style: hasSessionToday
-                            ? TextStyle(
-                                fontWeight: FontWeight.bold,
-                                color: Theme.of(context).colorScheme.primary,
-                              )
-                            : null,
-                      ),
-                      subtitle: Text("QR: ${equipment['qr_code'] ?? 'N/A'}"),
-                      trailing: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            hasSessionToday
-                                ? Icons.check_circle
-                                : Icons.chevron_right,
-                          ),
-                          const SizedBox(width: 8),
-                          PopupMenuButton<String>(
-                            onSelected: (value) =>
-                                _onMenuSelected(value, equipment),
-                            itemBuilder: (context) => const [
-                              PopupMenuItem(
-                                value: 'edit',
-                                child: Text('Edit name'),
-                              ),
-                              PopupMenuItem(
-                                value: 'delete',
-                                child: Text('Delete'),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                      onTap: () async {
-                        await Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => ExerciseListPage(
-                              equipmentId: equipment['id'],
-                              equipmentName: equipment['name'],
+                          return ListTile(
+                            title: Text(
+                              equipment['name'],
+                              style: hasSessionToday
+                                  ? TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      color:
+                                          Theme.of(context).colorScheme.primary,
+                                    )
+                                  : null,
                             ),
-                          ),
-                        );
+                            subtitle: Text("QR: ${equipment['qr_code'] ?? 'N/A'}"),
+                            trailing: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  hasSessionToday
+                                      ? Icons.check_circle
+                                      : Icons.chevron_right,
+                                ),
+                                const SizedBox(width: 8),
+                                PopupMenuButton<String>(
+                                  onSelected: (value) =>
+                                      _onMenuSelected(value, equipment),
+                                  itemBuilder: (context) => const [
+                                    PopupMenuItem(
+                                      value: 'edit',
+                                      child: Text('Edit name'),
+                                    ),
+                                    PopupMenuItem(
+                                      value: 'delete',
+                                      child: Text('Delete'),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                            onTap: () async {
+                              await Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => ExerciseListPage(
+                                    equipmentId: equipment['id'],
+                                    equipmentName: equipment['name'],
+                                  ),
+                                ),
+                              );
 
-                        // Refresh on return so highlight updates immediately
-                        await _loadEquipment();
-                      },
-                    );
-                  },
-                ),
+                              // Refresh on return so highlight updates immediately
+                              await _loadEquipment();
+                            },
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                ],
               ),
         Positioned(
           right: 16,
