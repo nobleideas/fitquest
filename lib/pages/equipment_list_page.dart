@@ -22,14 +22,16 @@ class EquipmentListPageState extends State<EquipmentListPage> {
   Set<String> equipmentWithSessionsToday = {};
 
   // ---------- PRIMARY MUSCLE GROUP FILTER ----------
-  static const List<String> _muscleFilters = [
+  static const List<String?> _muscleFilters = [
     'All',
     'Chest',
     'Shoulders',
     'Back',
     'Arms',
     'Legs',
-    'Core',
+    null, // empty cell (row 3, col 1)
+    'Core', // row 3, col 2 ✅
+    null, // empty cell (row 3, col 3)
   ];
 
   String _selectedMuscle = 'All';
@@ -97,9 +99,11 @@ class EquipmentListPageState extends State<EquipmentListPage> {
 
       // Keep alphabetical sorting, but show "used today" equipment first (also alphabetical).
       final sorted = List<Map<String, dynamic>>.from(list)
-        ..sort((a, b) => (a['name'] as String)
-            .toLowerCase()
-            .compareTo((b['name'] as String).toLowerCase()));
+        ..sort(
+          (a, b) => (a['name'] as String).toLowerCase().compareTo(
+            (b['name'] as String).toLowerCase(),
+          ),
+        );
 
       final todaySet = await _loadEquipmentIdsWithSessionsToday();
 
@@ -146,15 +150,16 @@ class EquipmentListPageState extends State<EquipmentListPage> {
         isLoading = false;
       });
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to load equipment: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed to load equipment: $e')));
     }
   }
 
   /// Build mapping: equipment_id -> {primary_muscle_group...}
   Future<Map<String, Set<String>>> _loadEquipmentMuscleGroups(
-      List<String> equipmentIds) async {
+    List<String> equipmentIds,
+  ) async {
     if (equipmentIds.isEmpty) return {};
 
     // NOTE: Assumes exercises has columns: equipment_id, primary_muscle_group
@@ -231,9 +236,7 @@ class EquipmentListPageState extends State<EquipmentListPage> {
         title: const Text("Add New Equipment"),
         content: TextField(
           controller: controller,
-          decoration: const InputDecoration(
-            labelText: "Equipment Name",
-          ),
+          decoration: const InputDecoration(labelText: "Equipment Name"),
         ),
         actions: [
           TextButton(
@@ -322,8 +325,9 @@ class EquipmentListPageState extends State<EquipmentListPage> {
     final equipmentId = equipment['id']?.toString() ?? '';
     final equipmentName = (equipment['name'] ?? 'this equipment').toString();
 
-    final exerciseCount =
-        await _equipmentService.getExerciseCountForEquipment(equipmentId);
+    final exerciseCount = await _equipmentService.getExerciseCountForEquipment(
+      equipmentId,
+    );
 
     // If no exercises attached: simple confirm delete
     if (exerciseCount == 0) {
@@ -462,13 +466,16 @@ class EquipmentListPageState extends State<EquipmentListPage> {
   }) async {
     // Load equipment list for dropdown (exclude the one being deleted)
     final equipmentListDynamic = await _equipmentService.getAllEquipment();
-    final equipmentOptions = equipmentListDynamic
-        .map((e) => Map<String, dynamic>.from(e as Map))
-        .where((e) => e['id'].toString() != fromEquipmentId)
-        .toList()
-      ..sort((a, b) => (a['name'] as String)
-          .toLowerCase()
-          .compareTo((b['name'] as String).toLowerCase()));
+    final equipmentOptions =
+        equipmentListDynamic
+            .map((e) => Map<String, dynamic>.from(e as Map))
+            .where((e) => e['id'].toString() != fromEquipmentId)
+            .toList()
+          ..sort(
+            (a, b) => (a['name'] as String).toLowerCase().compareTo(
+              (b['name'] as String).toLowerCase(),
+            ),
+          );
 
     String? selectedEquipmentId;
     String? targetEquipmentName;
@@ -481,7 +488,8 @@ class EquipmentListPageState extends State<EquipmentListPage> {
           builder: (context, setDialogState) {
             final typedName = newEquipmentController.text.trim();
 
-            final canMove = (selectedEquipmentId != null &&
+            final canMove =
+                (selectedEquipmentId != null &&
                     selectedEquipmentId!.isNotEmpty) ||
                 typedName.isNotEmpty;
 
@@ -558,16 +566,17 @@ class EquipmentListPageState extends State<EquipmentListPage> {
 
                           if (typed.isNotEmpty) {
                             // Create new equipment and move
-                            final created =
-                                await _equipmentService.insertEquipment(typed);
+                            final created = await _equipmentService
+                                .insertEquipment(typed);
                             targetEquipmentId = created['id'].toString();
                             targetEquipmentName = created['name'].toString();
                           } else {
                             targetEquipmentId = selectedEquipmentId!;
                             targetEquipmentName = equipmentOptions
-                                .firstWhere((e) =>
-                                    e['id'].toString() == selectedEquipmentId)[
-                                    'name']
+                                .firstWhere(
+                                  (e) =>
+                                      e['id'].toString() == selectedEquipmentId,
+                                )['name']
                                 .toString();
                           }
 
@@ -576,7 +585,9 @@ class EquipmentListPageState extends State<EquipmentListPage> {
                             toEquipmentId: targetEquipmentId,
                           );
 
-                          await _equipmentService.deleteEquipment(fromEquipmentId);
+                          await _equipmentService.deleteEquipment(
+                            fromEquipmentId,
+                          );
 
                           if (!mounted) return;
 
@@ -641,18 +652,16 @@ class EquipmentListPageState extends State<EquipmentListPage> {
             spacing: gap,
             runSpacing: gap,
             children: _muscleFilters.map((label) {
+              if (label == null) {
+                return const SizedBox(); // empty grid cell
+              }
+
               final selected = _selectedMuscle == label;
 
               return SizedBox(
                 width: chipWidth,
                 child: ChoiceChip(
-                  label: Center(
-                    child: Text(
-                      label,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
+                  label: Center(child: Text(label)),
                   selected: selected,
                   onSelected: (_) => setState(() => _selectedMuscle = label),
                 ),
@@ -682,8 +691,8 @@ class EquipmentListPageState extends State<EquipmentListPage> {
                         itemBuilder: (context, index) {
                           final equipment = _filteredEquipment[index];
                           final equipmentId = equipment['id']?.toString() ?? '';
-                          final hasSessionToday =
-                              equipmentWithSessionsToday.contains(equipmentId);
+                          final hasSessionToday = equipmentWithSessionsToday
+                              .contains(equipmentId);
 
                           return ListTile(
                             title: Text(
@@ -691,13 +700,15 @@ class EquipmentListPageState extends State<EquipmentListPage> {
                               style: hasSessionToday
                                   ? TextStyle(
                                       fontWeight: FontWeight.bold,
-                                      color:
-                                          Theme.of(context).colorScheme.primary,
+                                      color: Theme.of(
+                                        context,
+                                      ).colorScheme.primary,
                                     )
                                   : null,
                             ),
-                            subtitle:
-                                Text("QR: ${equipment['qr_code'] ?? 'N/A'}"),
+                            subtitle: Text(
+                              "QR: ${equipment['qr_code'] ?? 'N/A'}",
+                            ),
                             trailing: Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [

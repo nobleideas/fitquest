@@ -614,6 +614,8 @@ class _HistoryTabState extends State<_HistoryTab> {
 
 // ---------------- EQUIPMENT TAB (select all + copy mode + optionally copy exercises) ----------------
 
+// ---------------- EQUIPMENT TAB (select all + copy mode + optionally copy exercises) ----------------
+
 enum _CopyMode { equipmentOnly, equipmentAndExercises }
 
 class _EquipmentTab extends StatefulWidget {
@@ -640,14 +642,18 @@ class _EquipmentTabState extends State<_EquipmentTab> {
   bool _isAdding = false;
 
   // ---------- PRIMARY MUSCLE GROUP FILTER ----------
-  static const List<String> _muscleFilters = [
+  // 3 columns x 3 rows visual grid.
+  // Core forced to column 2 row 3 using null placeholders.
+  static const List<String?> _muscleFiltersGrid = [
     'All',
     'Chest',
     'Shoulders',
     'Back',
     'Arms',
     'Legs',
-    'Core',
+    null, // row 3 col 1
+    'Core', // row 3 col 2 ✅
+    null, // row 3 col 3
   ];
 
   String _selectedMuscle = 'All';
@@ -667,8 +673,6 @@ class _EquipmentTabState extends State<_EquipmentTab> {
     if (oldWidget.friendExercises != widget.friendExercises ||
         oldWidget.equipment != widget.equipment) {
       _buildEquipmentMuscleMap();
-      // If currently selected filter yields nothing because data changed,
-      // we keep the selection (user intent), but mapping will update.
     }
   }
 
@@ -729,6 +733,7 @@ class _EquipmentTabState extends State<_EquipmentTab> {
       map.putIfAbsent(eqId, () => <String>{}).add(mg);
     }
 
+    if (!mounted) return;
     setState(() {
       _equipmentMuscleGroups
         ..clear()
@@ -737,7 +742,6 @@ class _EquipmentTabState extends State<_EquipmentTab> {
   }
 
   List<int> get _visibleIndexes {
-    // If "All", show everything.
     if (_selectedMuscle == 'All') {
       return List.generate(widget.equipment.length, (i) => i);
     }
@@ -856,7 +860,6 @@ class _EquipmentTabState extends State<_EquipmentTab> {
           addedEquipment++;
         } catch (_) {
           skippedEquipment++;
-          // If equipment already exists, we skip copying exercises too (safe default)
           createdEq = null;
         }
 
@@ -918,13 +921,13 @@ class _EquipmentTabState extends State<_EquipmentTab> {
     }
   }
 
+  // ✅ 3 columns x 3 rows, always visible, Core forced to col 2 row 3.
   Widget _buildMuscleFilterBar() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
       child: LayoutBuilder(
         builder: (context, constraints) {
-          // 4 columns -> with 7 chips, this becomes 2 rows (4 + 3)
-          const cols = 4;
+          const cols = 3;
           const gap = 8.0;
 
           final totalGap = gap * (cols - 1);
@@ -933,7 +936,12 @@ class _EquipmentTabState extends State<_EquipmentTab> {
           return Wrap(
             spacing: gap,
             runSpacing: gap,
-            children: _muscleFilters.map((label) {
+            children: _muscleFiltersGrid.map((label) {
+              if (label == null) {
+                // Empty cell to force grid placement
+                return SizedBox(width: chipWidth, height: 32);
+              }
+
               final selected = _selectedMuscle == label;
 
               return SizedBox(
@@ -984,17 +992,12 @@ class _EquipmentTabState extends State<_EquipmentTab> {
       children: [
         ListView.separated(
           padding: const EdgeInsets.fromLTRB(12, 12, 12, 90),
-          itemCount:
-              visibleIndexes.length + 2, // +1 for filter bar, +1 for tip card
+          itemCount: visibleIndexes.length + 2, // filter bar + tip card
           separatorBuilder: (_, __) => const Divider(height: 1),
           itemBuilder: (context, i) {
-            if (i == 0) {
-              // ✅ Filter bar at very top
-              return _buildMuscleFilterBar();
-            }
+            if (i == 0) return _buildMuscleFilterBar();
 
             if (i == 1) {
-              // Tip card
               return Card(
                 elevation: 0,
                 color: Theme.of(context).colorScheme.surfaceContainerHighest,
