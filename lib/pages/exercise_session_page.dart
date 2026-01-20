@@ -436,7 +436,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
               width: double.infinity,
               child: ElevatedButton.icon(
                 icon: const Icon(Icons.save),
-                label: const Text("Save Session"),
+                label: const Text("Save Set"),
                 onPressed: () async {
                   final weight = double.tryParse(weightController.text);
                   final reps = int.tryParse(repsController.text);
