@@ -920,33 +920,52 @@ class _EquipmentTabState extends State<_EquipmentTab> {
 
   Widget _buildMuscleFilterBar() {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 6),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Row(
-          children: [
-            for (final label in _muscleFilters) ...[
-              ChoiceChip(
-                label: Text(label),
-                selected: _selectedMuscle == label,
-                onSelected: (_) {
-                  setState(() {
-                    _selectedMuscle = label;
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          // 4 columns -> with 7 chips, this becomes 2 rows (4 + 3)
+          const cols = 4;
+          const gap = 8.0;
 
-                    // Optional: if selection mode is active, keep only selections
-                    // that are still visible under the filter (prevents "ghost" selections).
-                    if (_selectMode) {
-                      final visible = _visibleIndexes.toSet();
-                      _selectedIndexes.removeWhere((i) => !visible.contains(i));
-                      if (_selectedIndexes.isEmpty) _selectMode = false;
-                    }
-                  });
-                },
-              ),
-              const SizedBox(width: 8),
-            ],
-          ],
-        ),
+          final totalGap = gap * (cols - 1);
+          final chipWidth = (constraints.maxWidth - totalGap) / cols;
+
+          return Wrap(
+            spacing: gap,
+            runSpacing: gap,
+            children: _muscleFilters.map((label) {
+              final selected = _selectedMuscle == label;
+
+              return SizedBox(
+                width: chipWidth,
+                child: ChoiceChip(
+                  label: Center(
+                    child: Text(
+                      label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  selected: selected,
+                  onSelected: (_) {
+                    setState(() {
+                      _selectedMuscle = label;
+
+                      // Keep selection list sane if filter changes during select mode
+                      if (_selectMode) {
+                        final visible = _visibleIndexes.toSet();
+                        _selectedIndexes.removeWhere(
+                          (i) => !visible.contains(i),
+                        );
+                        if (_selectedIndexes.isEmpty) _selectMode = false;
+                      }
+                    });
+                  },
+                ),
+              );
+            }).toList(),
+          );
+        },
       ),
     );
   }

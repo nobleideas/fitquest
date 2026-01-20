@@ -119,7 +119,10 @@ class EquipmentListPageState extends State<EquipmentListPage> {
       final ordered = [...usedToday, ...notUsedToday];
 
       // ✅ Load equipment -> muscle groups mapping based on exercises assigned to equipment
-      final ids = ordered.map((e) => e['id']?.toString() ?? '').where((id) => id.isNotEmpty).toList();
+      final ids = ordered
+          .map((e) => e['id']?.toString() ?? '')
+          .where((id) => id.isNotEmpty)
+          .toList();
       final muscleMap = await _loadEquipmentMuscleGroups(ids);
 
       if (!mounted) return;
@@ -150,7 +153,8 @@ class EquipmentListPageState extends State<EquipmentListPage> {
   }
 
   /// Build mapping: equipment_id -> {primary_muscle_group...}
-  Future<Map<String, Set<String>>> _loadEquipmentMuscleGroups(List<String> equipmentIds) async {
+  Future<Map<String, Set<String>>> _loadEquipmentMuscleGroups(
+      List<String> equipmentIds) async {
     if (equipmentIds.isEmpty) return {};
 
     // NOTE: Assumes exercises has columns: equipment_id, primary_muscle_group
@@ -620,25 +624,42 @@ class EquipmentListPageState extends State<EquipmentListPage> {
     }
   }
 
+  // ✅ Two-row, always-visible filter bar (no horizontal scrolling)
   Widget _buildMuscleFilterBar() {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 12, 12, 6),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Row(
-          children: [
-            for (final label in _muscleFilters) ...[
-              ChoiceChip(
-                label: Text(label),
-                selected: _selectedMuscle == label,
-                onSelected: (_) {
-                  setState(() => _selectedMuscle = label);
-                },
-              ),
-              const SizedBox(width: 8),
-            ],
-          ],
-        ),
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          // 4 columns -> naturally becomes 2 rows for 7 chips
+          const cols = 4;
+          const gap = 8.0;
+
+          final totalGap = gap * (cols - 1);
+          final chipWidth = (constraints.maxWidth - totalGap) / cols;
+
+          return Wrap(
+            spacing: gap,
+            runSpacing: gap,
+            children: _muscleFilters.map((label) {
+              final selected = _selectedMuscle == label;
+
+              return SizedBox(
+                width: chipWidth,
+                child: ChoiceChip(
+                  label: Center(
+                    child: Text(
+                      label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  selected: selected,
+                  onSelected: (_) => setState(() => _selectedMuscle = label),
+                ),
+              );
+            }).toList(),
+          );
+        },
       ),
     );
   }
@@ -675,7 +696,8 @@ class EquipmentListPageState extends State<EquipmentListPage> {
                                     )
                                   : null,
                             ),
-                            subtitle: Text("QR: ${equipment['qr_code'] ?? 'N/A'}"),
+                            subtitle:
+                                Text("QR: ${equipment['qr_code'] ?? 'N/A'}"),
                             trailing: Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
