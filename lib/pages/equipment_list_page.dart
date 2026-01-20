@@ -658,31 +658,41 @@ class EquipmentListPageState extends State<EquipmentListPage> {
           const gap = 8.0;
 
           final totalGap = gap * (cols - 1);
-          final chipWidth = (constraints.maxWidth - totalGap) / cols;
+          final cellWidth = (constraints.maxWidth - totalGap) / cols;
 
-          // A height that matches ChoiceChip reasonably well across themes
+          // Pick a fixed height that looks good across devices.
+          // If you want slightly taller, bump to 40.
           const cellHeight = 36.0;
 
           return Wrap(
             spacing: gap,
             runSpacing: gap,
             children: _muscleFiltersGrid.map((label) {
-              // placeholder cell to force grid position
+              // Placeholder cell to force Core into col 2 row 3
               if (label == null) {
-                return SizedBox(width: chipWidth, height: cellHeight);
+                return SizedBox(width: cellWidth, height: cellHeight);
               }
 
               final selected = _selectedMuscle == label;
 
               return SizedBox(
-                width: chipWidth,
+                width: cellWidth,
                 height: cellHeight,
-                child: Center(
+                child: FittedBox(
+                  fit: BoxFit
+                      .scaleDown, // prevents text overflow on small screens
                   child: ChoiceChip(
-                    label: Text(
-                      label,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+                    materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    visualDensity: VisualDensity.compact,
+                    labelPadding: const EdgeInsets.symmetric(horizontal: 10),
+                    label: SizedBox(
+                      width: cellWidth, // makes label area consistent
+                      child: Text(
+                        label,
+                        textAlign: TextAlign.center,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ),
                     selected: selected,
                     onSelected: (_) => setState(() => _selectedMuscle = label),
