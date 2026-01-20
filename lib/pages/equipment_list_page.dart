@@ -631,7 +631,7 @@ class EquipmentListPageState extends State<EquipmentListPage> {
       child: LayoutBuilder(
         builder: (context, constraints) {
           // 4 columns -> naturally becomes 2 rows for 7 chips
-          const cols = 4;
+          const cols = 3;
           const gap = 8.0;
 
           final totalGap = gap * (cols - 1);
