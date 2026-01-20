@@ -426,7 +426,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
               controller: repsController,
               keyboardType: TextInputType.number,
               decoration: const InputDecoration(
-                labelText: "Reps / Seconds / Miles",
+                labelText: "Reps / Seconds / Minutes / Miles",
                 border: OutlineInputBorder(),
               ),
             ),

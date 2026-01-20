@@ -22,16 +22,29 @@ class EquipmentListPageState extends State<EquipmentListPage> {
   Set<String> equipmentWithSessionsToday = {};
 
   // ---------- PRIMARY MUSCLE GROUP FILTER ----------
-  static const List<String?> _muscleFilters = [
+  // Used for filtering logic if you need it elsewhere
+  static const List<String> _muscleFilters = [
     'All',
     'Chest',
     'Shoulders',
     'Back',
     'Arms',
     'Legs',
-    null, // empty cell (row 3, col 1)
-    'Core', // row 3, col 2 ✅
-    null, // empty cell (row 3, col 3)
+    'Core',
+  ];
+
+  // Used ONLY for display placement (3 cols x 3 rows)
+  // Core forced to column 2 row 3 via null placeholders
+  static const List<String?> _muscleFiltersGrid = [
+    'All',
+    'Chest',
+    'Shoulders',
+    'Back',
+    'Arms',
+    'Legs',
+    null, // row 3 col 1 (empty)
+    'Core', // row 3 col 2 ✅
+    null, // row 3 col 3 (empty)
   ];
 
   String _selectedMuscle = 'All';
@@ -641,29 +654,39 @@ class EquipmentListPageState extends State<EquipmentListPage> {
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
       child: LayoutBuilder(
         builder: (context, constraints) {
-          // 4 columns -> naturally becomes 2 rows for 7 chips
           const cols = 3;
           const gap = 8.0;
 
           final totalGap = gap * (cols - 1);
           final chipWidth = (constraints.maxWidth - totalGap) / cols;
 
+          // A height that matches ChoiceChip reasonably well across themes
+          const cellHeight = 36.0;
+
           return Wrap(
             spacing: gap,
             runSpacing: gap,
-            children: _muscleFilters.map((label) {
+            children: _muscleFiltersGrid.map((label) {
+              // placeholder cell to force grid position
               if (label == null) {
-                return const SizedBox(); // empty grid cell
+                return SizedBox(width: chipWidth, height: cellHeight);
               }
 
               final selected = _selectedMuscle == label;
 
               return SizedBox(
                 width: chipWidth,
-                child: ChoiceChip(
-                  label: Center(child: Text(label)),
-                  selected: selected,
-                  onSelected: (_) => setState(() => _selectedMuscle = label),
+                height: cellHeight,
+                child: Center(
+                  child: ChoiceChip(
+                    label: Text(
+                      label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    selected: selected,
+                    onSelected: (_) => setState(() => _selectedMuscle = label),
+                  ),
                 ),
               );
             }).toList(),
