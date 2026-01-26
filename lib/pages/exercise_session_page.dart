@@ -111,8 +111,9 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
 
   // ---------- Sessions ----------
   Future<void> _loadLast3DaysAndSessions() async {
-    final rawDates =
-        await sessionService.getLast3SessionDates(widget.exercise['id']);
+    final rawDates = await sessionService.getLast3SessionDates(
+      widget.exercise['id'],
+    );
 
     // Deduplicate by day; keep newest-first order as returned by service.
     final seen = <String>{};
@@ -190,7 +191,8 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
       case 'lose_weight':
         goalReps = 12;
         goalSets = 4;
-        progressionMultiplier = 0.97; // slightly easier (volume-based calc already handles)
+        progressionMultiplier =
+            0.97; // slightly easier (volume-based calc already handles)
         break;
       default:
         // fallback (hypertrophy-ish)
@@ -299,30 +301,81 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
 
   // ---------- Video helpers ----------
   Future<void> _loadExistingFormVideo() async {
-    // If the caller already included it, use it immediately
-    final existing = widget.exercise['video_url'] as String?;
-    if (existing != null && existing.isNotEmpty) {
-      _formVideoUrl = existing;
-      await _initVideoPlayerFromUrl(existing);
+    final client = Supabase.instance.client;
+
+    // 1) Prefer what was passed in (if present)
+    final passedUrl = (widget.exercise['video_url'] as String?)?.trim();
+    final passedSourceId = (widget.exercise['video_source_exercise_id'] ?? '')
+        .toString()
+        .trim();
+
+    if (passedUrl != null && passedUrl.isNotEmpty) {
+      _formVideoUrl = passedUrl;
+      await _initVideoPlayerFromUrl(passedUrl);
       return;
     }
 
-    // Otherwise fetch from DB (keeps fresh if caller didn't include it)
-    final client = Supabase.instance.client;
+    // 2) If passed-in exercise is an import, resolve the source
+    if (passedSourceId.isNotEmpty) {
+      final src = await client
+          .from('exercises')
+          .select('video_url')
+          .eq('id', passedSourceId)
+          .maybeSingle();
+
+      final srcUrl = (src?['video_url'] as String?)?.trim();
+      if (srcUrl != null && srcUrl.isNotEmpty) {
+        _formVideoUrl = srcUrl;
+        await _initVideoPlayerFromUrl(srcUrl);
+        return;
+      }
+
+      // Source has no video anymore -> disappears automatically
+      await _videoController?.dispose();
+      _videoController = null;
+      if (!mounted) return;
+      setState(() => _formVideoUrl = null);
+      return;
+    }
+
+    // 3) Otherwise fetch my exercise row fresh (covers cases where widget.exercise didn't include fields)
     final data = await client
         .from('exercises')
-        .select('video_url')
+        .select('video_url, video_source_exercise_id')
         .eq('id', widget.exercise['id'])
         .maybeSingle();
 
-    final url = data?['video_url'] as String?;
-    if (url != null && url.isNotEmpty) {
-      _formVideoUrl = url;
-      await _initVideoPlayerFromUrl(url);
-    } else {
-      if (!mounted) return;
-      setState(() => _formVideoUrl = null);
+    final localUrl = (data?['video_url'] as String?)?.trim();
+    final sourceId = (data?['video_source_exercise_id'] ?? '')
+        .toString()
+        .trim();
+
+    if (localUrl != null && localUrl.isNotEmpty) {
+      _formVideoUrl = localUrl;
+      await _initVideoPlayerFromUrl(localUrl);
+      return;
     }
+
+    if (sourceId.isNotEmpty) {
+      final src = await client
+          .from('exercises')
+          .select('video_url')
+          .eq('id', sourceId)
+          .maybeSingle();
+
+      final srcUrl = (src?['video_url'] as String?)?.trim();
+      if (srcUrl != null && srcUrl.isNotEmpty) {
+        _formVideoUrl = srcUrl;
+        await _initVideoPlayerFromUrl(srcUrl);
+        return;
+      }
+    }
+
+    // Nothing to show
+    await _videoController?.dispose();
+    _videoController = null;
+    if (!mounted) return;
+    setState(() => _formVideoUrl = null);
   }
 
   Future<void> _initVideoPlayerFromUrl(String url) async {
@@ -347,8 +400,9 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
 
       await _videoController?.dispose();
 
-      _videoController =
-          VideoPlayerController.networkUrl(Uri.parse(video.path));
+      _videoController = VideoPlayerController.networkUrl(
+        Uri.parse(video.path),
+      );
       await _videoController!.initialize();
       await _videoController!.setVolume(1.0);
       await _videoController!.setPlaybackSpeed(1.0);
@@ -358,9 +412,9 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
       setState(() {});
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Picking video failed: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Picking video failed: $e')));
     }
   }
 
@@ -376,8 +430,9 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
       // bucket id must match exactly
       final bucket = client.storage.from('exercise_form_video');
 
-      final ext =
-          p.extension(video.name).isNotEmpty ? p.extension(video.name) : '.mp4';
+      final ext = p.extension(video.name).isNotEmpty
+          ? p.extension(video.name)
+          : '.mp4';
       final storagePath = 'exercise_${widget.exercise['id']}/form$ext';
 
       final bytes = await video.readAsBytes();
@@ -408,9 +463,9 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
       );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Upload failed: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Upload failed: $e')));
     } finally {
       if (mounted) setState(() => _isUploadingVideo = false);
     }
@@ -466,7 +521,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
       // 1) Clear DB
       await client
           .from('exercises')
-          .update({'video_url': null})
+          .update({'video_url': null, 'video_source_exercise_id': null})
           .eq('id', widget.exercise['id']);
 
       // 2) Best-effort delete storage object if we can parse the path
@@ -491,14 +546,14 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
         _pickedVideo = null;
       });
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Form video removed.')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Form video removed.')));
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to remove video: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed to remove video: $e')));
     } finally {
       if (mounted) setState(() => _isRemovingVideo = false);
     }
@@ -685,8 +740,10 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
                               alignment: Alignment.centerRight,
                               color: Colors.red,
                               padding: const EdgeInsets.only(right: 20),
-                              child:
-                                  const Icon(Icons.delete, color: Colors.white),
+                              child: const Icon(
+                                Icons.delete,
+                                color: Colors.white,
+                              ),
                             ),
                             onDismissed: (_) =>
                                 _deleteSession(s['id'].toString()),
@@ -734,12 +791,12 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
                         ? const SizedBox(
                             width: 18,
                             height: 18,
-                            child:
-                                CircularProgressIndicator(strokeWidth: 2),
+                            child: CircularProgressIndicator(strokeWidth: 2),
                           )
                         : const Icon(Icons.cloud_upload),
                     label: Text(_isUploadingVideo ? "Uploading..." : "Upload"),
-                    onPressed: (_pickedVideo == null ||
+                    onPressed:
+                        (_pickedVideo == null ||
                             _isUploadingVideo ||
                             _isRemovingVideo)
                         ? null
@@ -762,7 +819,9 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
                           child: CircularProgressIndicator(strokeWidth: 2),
                         )
                       : const Icon(Icons.delete_outline),
-                  label: Text(_isRemovingVideo ? "Removing..." : "Remove video"),
+                  label: Text(
+                    _isRemovingVideo ? "Removing..." : "Remove video",
+                  ),
                   onPressed: (_isUploadingVideo || _isRemovingVideo)
                       ? null
                       : _removeFormVideo,

@@ -882,14 +882,26 @@ class _EquipmentTabState extends State<_EquipmentTab> {
             }
 
             try {
+              final friendVideoUrl = _exerciseVideoUrl(ex);
+              final friendExerciseId = (ex['id'] ?? '').toString().trim();
+
               await supabase.from('exercises').insert({
                 'name': exName,
                 'primary_muscle_group': (ex['primary_muscle_group'] ?? '')
                     .toString(),
                 'type': (ex['type'] ?? '').toString(),
                 'equipment_id': myEqId,
-                'video_url': _exerciseVideoUrl(ex),
+
+                // ✅ IMPORTANT: do NOT copy URL
+                'video_url': null,
+
+                // ✅ store reference ONLY if friend actually has a video AND we have their id
+                'video_source_exercise_id':
+                    (friendVideoUrl != null && friendExerciseId.isNotEmpty)
+                    ? friendExerciseId
+                    : null,
               });
+
               addedExercises++;
             } catch (_) {
               skippedExercises++;
@@ -1294,14 +1306,26 @@ class _ExercisesTabState extends State<_ExercisesTab> {
         }
 
         try {
+          final friendVideoUrl = _videoUrl(ex);
+          final friendExerciseId = (ex['id'] ?? '').toString().trim();
+
           await supabase.from('exercises').insert({
             'name': name,
             'primary_muscle_group': (ex['primary_muscle_group'] ?? '')
                 .toString(),
             'type': (ex['type'] ?? '').toString(),
             'equipment_id': targetEquipmentId,
-            'video_url': _videoUrl(ex),
+
+            // ✅ IMPORTANT: do NOT copy URL
+            'video_url': null,
+
+            // ✅ reference friend exercise as the source
+            'video_source_exercise_id':
+                (friendVideoUrl != null && friendExerciseId.isNotEmpty)
+                ? friendExerciseId
+                : null,
           });
+
           added++;
         } catch (_) {
           skipped++;
