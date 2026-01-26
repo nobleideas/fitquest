@@ -25,6 +25,9 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
   List<String> last3DayKeys = []; // "YYYY-MM-DD"
   Map<String, List<Map<String, dynamic>>> sessionsByDayKey = {};
 
+  // ✅ NEW: total volume per day key
+  Map<String, double> volumeByDayKey = {};
+
   // -------- Profile Goal / Suggestions --------
   String? _userGoal; // gain_strength, gain_mass, lose_weight
   double? _suggestedWeight;
@@ -38,6 +41,8 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
   VideoPlayerController? _videoController;
 
   bool _isUploadingVideo = false;
+  bool _isRemovingVideo = false;
+
   String? _formVideoUrl; // persisted URL from exercises.video_url
 
   @override
@@ -63,6 +68,20 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
   }
 
   String _formatDate(DateTime d) => "${d.month}/${d.day}/${d.year}";
+
+  // ---------- numeric helpers ----------
+  double _numToDouble(dynamic v) {
+    if (v == null) return 0.0;
+    if (v is num) return v.toDouble();
+    return double.tryParse(v.toString()) ?? 0.0;
+  }
+
+  int _numToInt(dynamic v) {
+    if (v == null) return 0;
+    if (v is int) return v;
+    if (v is num) return v.toInt();
+    return int.tryParse(v.toString()) ?? 0;
+  }
 
   // ---------- Load user goal ----------
   Future<void> _loadUserGoal() async {
@@ -105,18 +124,31 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
     }
 
     final Map<String, List<Map<String, dynamic>>> map = {};
+    final Map<String, double> volMap = {};
+
     for (final key in keys) {
       final date = _dateFromDayKey(key);
-      map[key] = await sessionService.getSessionsForDate(
+      final sessions = await sessionService.getSessionsForDate(
         widget.exercise['id'],
         date,
       );
+      map[key] = sessions;
+
+      // ✅ compute volume (sum weight * reps)
+      double totalVol = 0.0;
+      for (final s in sessions) {
+        final w = _numToDouble(s['weight']);
+        final r = _numToInt(s['reps']);
+        totalVol += (w * r);
+      }
+      volMap[key] = totalVol;
     }
 
     if (!mounted) return;
     setState(() {
       last3DayKeys = keys;
       sessionsByDayKey = map;
+      volumeByDayKey = volMap;
     });
 
     _computeSuggestion();
@@ -127,127 +159,129 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
     await _loadLast3DaysAndSessions();
   }
 
-  // ---------- Suggestion logic ----------
+  // ---------- Suggestion logic (UPDATED) ----------
+  //
+  // Goals:
+  // - If NO sessions exist: suggest reps & sets by goal, no weight.
+  // - If sessions exist: use MOST RECENT day's total volume.
+  //   - Pick target reps/sets by goal
+  //   - Compute weight = volume / (reps * sets)
+  //   - Apply small goal adjustment for progression
+  //
   void _computeSuggestion() {
+    final goal = (_userGoal ?? '').toLowerCase().trim();
+
+    // Goal-based defaults
+    int goalReps;
+    int goalSets;
+    double progressionMultiplier; // small change to push progression
+
+    switch (goal) {
+      case 'gain_strength':
+        goalReps = 5;
+        goalSets = 5;
+        progressionMultiplier = 1.02; // +2%
+        break;
+      case 'gain_mass':
+        goalReps = 10;
+        goalSets = 4;
+        progressionMultiplier = 1.01; // +1%
+        break;
+      case 'lose_weight':
+        goalReps = 12;
+        goalSets = 4;
+        progressionMultiplier = 0.97; // slightly easier (volume-based calc already handles)
+        break;
+      default:
+        // fallback (hypertrophy-ish)
+        goalReps = 8;
+        goalSets = 4;
+        progressionMultiplier = 1.01;
+        break;
+    }
+
+    // If no history at all
     if (last3DayKeys.isEmpty) {
       if (!mounted) return;
       setState(() {
         _suggestedWeight = null;
-        _suggestedReps = null;
-        _suggestedSets = null;
-        _suggestionNote = null;
+        _suggestedReps = goalReps;
+        _suggestedSets = goalSets;
+        _suggestionNote =
+            "No previous sessions for this exercise yet — reps/sets suggested from your goal.";
       });
       return;
     }
 
-    // Most recent day
+    // Most recent day key + sessions
     final mostRecentKey = last3DayKeys.first;
     final recentSessions = sessionsByDayKey[mostRecentKey] ?? const [];
+    final recentVolume = volumeByDayKey[mostRecentKey] ?? 0.0;
 
+    // If no sessions found for the most recent day (rare edge case)
     if (recentSessions.isEmpty) {
       if (!mounted) return;
       setState(() {
         _suggestedWeight = null;
-        _suggestedReps = null;
-        _suggestedSets = null;
-        _suggestionNote = null;
+        _suggestedReps = goalReps;
+        _suggestedSets = goalSets;
+        _suggestionNote =
+            "No sessions found in your recent history — reps/sets suggested from your goal.";
       });
       return;
     }
 
-    double maxWeight = 0;
-    int repsAtMax = 0;
-    double avgWeight = 0;
-    double avgReps = 0;
-
-    for (final s in recentSessions) {
-      final w = (s['weight'] is num)
-          ? (s['weight'] as num).toDouble()
-          : double.tryParse(s['weight']?.toString() ?? '') ?? 0.0;
-
-      final r = (s['reps'] is num)
-          ? (s['reps'] as num).toInt()
-          : int.tryParse(s['reps']?.toString() ?? '') ?? 0;
-
-      avgWeight += w;
-      avgReps += r;
-
-      if (w > maxWeight) {
-        maxWeight = w;
-        repsAtMax = r;
-      }
+    // If volume is 0 (maybe reps-based cardio / bodyweight entered as 0 weight)
+    // Still suggest reps/sets; weight would be useless.
+    if (recentVolume <= 0.0) {
+      if (!mounted) return;
+      setState(() {
+        _suggestedWeight = null;
+        _suggestedReps = goalReps;
+        _suggestedSets = goalSets;
+        _suggestionNote =
+            "Your most recent session volume was 0 — suggesting reps/sets based on your goal.";
+      });
+      return;
     }
 
-    avgWeight = avgWeight / recentSessions.length;
-    avgReps = avgReps / recentSessions.length;
+    // Compute weight from volume distribution
+    final reps = goalReps.clamp(1, 30);
+    final sets = goalSets.clamp(1, 12);
 
-    // Sets: average number of sets across last 3 days (fallback to most recent)
-    final setCounts = <int>[];
-    for (final key in last3DayKeys) {
-      final sessions = sessionsByDayKey[key] ?? const [];
-      if (sessions.isNotEmpty) setCounts.add(sessions.length);
-    }
-    int suggestedSets = setCounts.isEmpty
-        ? recentSessions.length
-        : (setCounts.reduce((a, b) => a + b) / setCounts.length).round();
-    suggestedSets = suggestedSets.clamp(1, 12);
+    final denom = (reps * sets).toDouble();
+    double baseWeight = recentVolume / denom;
 
-    final goal = (_userGoal ?? '').toLowerCase();
+    // Apply small progression based on goal
+    baseWeight *= progressionMultiplier;
 
-    int targetReps;
-    int targetSets;
-    double baseWeight;
-
-    // Use heaviest set if possible, else average
-    baseWeight = maxWeight > 0 ? maxWeight : avgWeight;
-
-    String note = "Based on your most recent session.";
-
-    switch (goal) {
-      case 'gain_strength':
-        targetReps = 5;
-        targetSets = 5;
-        baseWeight = baseWeight * 1.02; // +2%
-        note = "Gain strength: heavier weight (+2%), lower reps.";
-        break;
-
-      case 'gain_mass':
-        targetReps = 10;
-        targetSets = 4;
-        baseWeight = baseWeight * 1.01; // +1%
-        note = "Gain mass: moderate reps/sets (+1% weight).";
-        break;
-
-      case 'lose_weight':
-        targetReps = 12;
-        targetSets = 4;
-        baseWeight = baseWeight * 0.95; // -5%
-        note = "Lose weight: moderate reps with manageable weight (-5%).";
-        break;
-
-      default:
-        final recentAvgReps = avgReps.round().clamp(1, 30);
-        targetReps = recentAvgReps;
-        targetSets = suggestedSets;
-        baseWeight = (repsAtMax >= recentAvgReps) ? baseWeight * 1.01 : baseWeight;
-        note = "Based on your most recent session.";
-        break;
-    }
-
-    // Guardrails
-    targetReps = targetReps.clamp(1, 30);
-    targetSets = targetSets.clamp(1, 12);
-
-    // Round weight to nearest 2.5
+    // Round weight to nearest 2.5 like your original logic
     const roundTo = 2.5;
     double roundedWeight = (baseWeight / roundTo).round() * roundTo;
     if (roundedWeight <= 0) roundedWeight = baseWeight;
 
+    final volText = recentVolume.toStringAsFixed(0);
+
+    String note;
+    if (goal == 'gain_strength') {
+      note =
+          "Based on your most recent day volume ($volText), distributed as $sets sets × $reps reps (strength).";
+    } else if (goal == 'gain_mass') {
+      note =
+          "Based on your most recent day volume ($volText), distributed as $sets sets × $reps reps (mass).";
+    } else if (goal == 'lose_weight') {
+      note =
+          "Based on your most recent day volume ($volText), distributed as $sets sets × $reps reps (fat loss).";
+    } else {
+      note =
+          "Based on your most recent day volume ($volText), distributed as $sets sets × $reps reps.";
+    }
+
     if (!mounted) return;
     setState(() {
       _suggestedWeight = roundedWeight;
-      _suggestedReps = targetReps;
-      _suggestedSets = targetSets;
+      _suggestedReps = reps;
+      _suggestedSets = sets;
       _suggestionNote = note;
     });
   }
@@ -287,9 +321,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
       await _initVideoPlayerFromUrl(url);
     } else {
       if (!mounted) return;
-      setState(() {
-        _formVideoUrl = null;
-      });
+      setState(() => _formVideoUrl = null);
     }
   }
 
@@ -311,18 +343,16 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
       if (video == null) return;
 
       if (!mounted) return;
-      setState(() {
-        _pickedVideo = video; // enables Upload immediately
-      });
+      setState(() => _pickedVideo = video);
 
       await _videoController?.dispose();
 
-      // Works for blob URLs (web) and public URLs
-      _videoController = VideoPlayerController.networkUrl(Uri.parse(video.path));
+      _videoController =
+          VideoPlayerController.networkUrl(Uri.parse(video.path));
       await _videoController!.initialize();
       await _videoController!.setVolume(1.0);
       await _videoController!.setPlaybackSpeed(1.0);
-      _videoController!.setLooping(true);
+      await _videoController!.setLooping(true);
 
       if (!mounted) return;
       setState(() {});
@@ -343,7 +373,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
     try {
       final client = Supabase.instance.client;
 
-      // Make sure this matches your bucket id exactly
+      // bucket id must match exactly
       final bucket = client.storage.from('exercise_form_video');
 
       final ext =
@@ -383,6 +413,94 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
       );
     } finally {
       if (mounted) setState(() => _isUploadingVideo = false);
+    }
+  }
+
+  // ✅ NEW: remove existing form video (DB + best-effort storage delete)
+  String? _tryExtractStoragePathFromPublicUrl(String url, String bucketId) {
+    // Typical public URL:
+    // .../storage/v1/object/public/<bucketId>/<path>
+    // We want <path>
+    try {
+      final marker = '/storage/v1/object/public/$bucketId/';
+      final i = url.indexOf(marker);
+      if (i == -1) return null;
+      final path = url.substring(i + marker.length);
+      return path.isEmpty ? null : path;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _removeFormVideo() async {
+    final url = (_formVideoUrl ?? '').trim();
+    if (url.isEmpty) return;
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Remove form video?'),
+        content: const Text(
+          'This will remove the saved form video from this exercise.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
+    setState(() => _isRemovingVideo = true);
+
+    try {
+      final client = Supabase.instance.client;
+
+      // 1) Clear DB
+      await client
+          .from('exercises')
+          .update({'video_url': null})
+          .eq('id', widget.exercise['id']);
+
+      // 2) Best-effort delete storage object if we can parse the path
+      const bucketId = 'exercise_form_video';
+      final bucket = client.storage.from(bucketId);
+      final storagePath = _tryExtractStoragePathFromPublicUrl(url, bucketId);
+
+      if (storagePath != null) {
+        try {
+          await bucket.remove([storagePath]);
+        } catch (_) {
+          // ignore; DB cleared is the main goal
+        }
+      }
+
+      await _videoController?.dispose();
+      _videoController = null;
+
+      if (!mounted) return;
+      setState(() {
+        _formVideoUrl = null;
+        _pickedVideo = null;
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Form video removed.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to remove video: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _isRemovingVideo = false);
     }
   }
 
@@ -465,9 +583,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
             const SizedBox(height: 16),
 
             // ----------------- Suggested Next Session -----------------
-            if (_suggestedWeight != null &&
-                _suggestedReps != null &&
-                _suggestedSets != null)
+            if (_suggestedReps != null && _suggestedSets != null)
               Card(
                 elevation: 2,
                 shape: RoundedRectangleBorder(
@@ -505,26 +621,23 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
                         spacing: 8,
                         runSpacing: 8,
                         children: [
-                          Chip(
-                            label: Text(
-                              "Weight: ${_suggestedWeight!.toStringAsFixed(_suggestedWeight! % 1 == 0 ? 0 : 1)}",
-                            ),
-                          ),
-                          Chip(
-                            label: Text("Reps: $_suggestedReps"),
-                          ),
-                          Chip(
-                            label: Text("Sets: $_suggestedSets"),
-                          ),
-                          if (_userGoal != null && _userGoal!.isNotEmpty)
+                          if (_suggestedWeight != null)
                             Chip(
-                              label: Text("Goal: $_userGoal"),
-                            ),
+                              label: Text(
+                                "Weight: ${_suggestedWeight!.toStringAsFixed(_suggestedWeight! % 1 == 0 ? 0 : 1)}",
+                              ),
+                            )
+                          else
+                            const Chip(label: Text("Weight: —")),
+                          Chip(label: Text("Reps: $_suggestedReps")),
+                          Chip(label: Text("Sets: $_suggestedSets")),
+                          if (_userGoal != null && _userGoal!.isNotEmpty)
+                            Chip(label: Text("Goal: $_userGoal")),
                         ],
                       ),
                       const SizedBox(height: 6),
                       Text(
-                        "Tip: Log $_suggestedSets sets using the weight/reps above.",
+                        "Tip: Log $_suggestedSets sets using the reps above${_suggestedWeight == null ? '' : ' (and weight).'}",
                         style: Theme.of(context).textTheme.bodySmall,
                       ),
                     ],
@@ -545,6 +658,8 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
             ...last3DayKeys.map((key) {
               final date = _dateFromDayKey(key);
               final sessions = sessionsByDayKey[key] ?? const [];
+              final vol = volumeByDayKey[key] ?? 0.0;
+              final volLabel = vol.toStringAsFixed(0);
 
               return Card(
                 margin: const EdgeInsets.only(bottom: 12),
@@ -553,7 +668,8 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: ExpansionTile(
-                  title: Text(_formatDate(date)),
+                  // ✅ show volume next to date
+                  title: Text("${_formatDate(date)}  •  Volume: $volLabel"),
                   children: sessions.isEmpty
                       ? const [
                           ListTile(
@@ -569,13 +685,19 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
                               alignment: Alignment.centerRight,
                               color: Colors.red,
                               padding: const EdgeInsets.only(right: 20),
-                              child: const Icon(Icons.delete, color: Colors.white),
+                              child:
+                                  const Icon(Icons.delete, color: Colors.white),
                             ),
-                            onDismissed: (_) => _deleteSession(s['id'].toString()),
+                            onDismissed: (_) =>
+                                _deleteSession(s['id'].toString()),
                             child: ListTile(
                               leading: const Icon(Icons.fitness_center),
                               title: Text("Weight: ${s['weight']}"),
                               subtitle: Text("Reps: ${s['reps']}"),
+                              trailing: Text(
+                                "Vol: ${(_numToDouble(s['weight']) * _numToInt(s['reps'])).toStringAsFixed(0)}",
+                                style: Theme.of(context).textTheme.bodySmall,
+                              ),
                             ),
                           );
                         }).toList(),
@@ -597,8 +719,12 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
                 Expanded(
                   child: OutlinedButton.icon(
                     icon: const Icon(Icons.video_library),
-                    label: Text(_pickedVideo == null ? "Choose Video" : "Change Video"),
-                    onPressed: _isUploadingVideo ? null : _pickVideo,
+                    label: Text(
+                      _pickedVideo == null ? "Choose Video" : "Change Video",
+                    ),
+                    onPressed: (_isUploadingVideo || _isRemovingVideo)
+                        ? null
+                        : _pickVideo,
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -608,17 +734,41 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
                         ? const SizedBox(
                             width: 18,
                             height: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2),
+                            child:
+                                CircularProgressIndicator(strokeWidth: 2),
                           )
                         : const Icon(Icons.cloud_upload),
                     label: Text(_isUploadingVideo ? "Uploading..." : "Upload"),
-                    onPressed: (_pickedVideo == null || _isUploadingVideo)
+                    onPressed: (_pickedVideo == null ||
+                            _isUploadingVideo ||
+                            _isRemovingVideo)
                         ? null
                         : _uploadPickedVideo,
                   ),
                 ),
               ],
             ),
+
+            // ✅ NEW: remove video button
+            if ((_formVideoUrl ?? '').trim().isNotEmpty) ...[
+              const SizedBox(height: 10),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  icon: _isRemovingVideo
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.delete_outline),
+                  label: Text(_isRemovingVideo ? "Removing..." : "Remove video"),
+                  onPressed: (_isUploadingVideo || _isRemovingVideo)
+                      ? null
+                      : _removeFormVideo,
+                ),
+              ),
+            ],
 
             if (_pickedVideo != null)
               Padding(
@@ -631,7 +781,8 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
 
             const SizedBox(height: 12),
 
-            if (_videoController != null && _videoController!.value.isInitialized)
+            if (_videoController != null &&
+                _videoController!.value.isInitialized)
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
