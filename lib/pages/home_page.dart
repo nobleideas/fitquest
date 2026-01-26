@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:share_plus/share_plus.dart';
 
-// ✅ ADD: import your exercise session page (adjust path if needed)
 import 'exercise_session_page.dart';
 
 class HomePage extends StatefulWidget {
@@ -15,18 +14,10 @@ class HomePage extends StatefulWidget {
 
 class _DayWorkoutSummary {
   final DateTime day;
-
-  /// Unique exercise names (sorted A→Z) for display
   final List<String> exerciseNames;
-
-  /// Sets (sessions) completed per exercise name for that day
-  /// (A "set" == a row in exercise_sessions)
   final Map<String, int> exerciseSetCountsByName;
-
   final Map<String, int> muscleGroupCounts;
   final String dayTypeLabel;
-
-  /// Workout duration in minutes for the day (last session time - first session time)
   final int workoutDurationMinutes;
 
   _DayWorkoutSummary({
@@ -40,14 +31,12 @@ class _DayWorkoutSummary {
 }
 
 enum _WorkoutFilter { all, push, pull, legs, core }
-
-// For suggestion
 enum _SuggestedDayType { push, pull, legsCore }
 
 class _SuggestedRoutine {
   final _SuggestedDayType dayType;
   final int minutes;
-  final List<Map<String, dynamic>> exercises; // each: {id, name, type, primary_muscle_group, equipment_name}
+  final List<Map<String, dynamic>> exercises;
 
   _SuggestedRoutine({
     required this.dayType,
@@ -56,7 +45,6 @@ class _SuggestedRoutine {
   });
 }
 
-// ✅ public so MainShell can reference it in GlobalKey<HomePageState>
 class HomePageState extends State<HomePage> {
   final supabase = Supabase.instance.client;
 
@@ -65,22 +53,16 @@ class HomePageState extends State<HomePage> {
 
   _WorkoutFilter _selectedFilter = _WorkoutFilter.all;
 
-  // --- Bug/Suggestion Report UI state ---
   bool _isSubmittingReport = false;
   final TextEditingController _reportController = TextEditingController();
-  String _reportType = 'bug'; // 'bug' | 'suggestion'
+  String _reportType = 'bug';
 
-  // --- Username for share title ---
   String? _username;
 
-  // --- Suggest routine state ---
   _SuggestedRoutine? _suggestedRoutine;
   bool _isSuggesting = false;
-
-  // store last requested minutes so "Randomize" can rebuild with same length
   int? _lastSuggestedMinutes;
 
-  // ✅ allow MainShell to refresh Home tab on selection
   Future<void> refresh() async {
     await _loadRecentExercises();
   }
@@ -99,8 +81,6 @@ class HomePageState extends State<HomePage> {
 
   // ===================== NEW: open exercise session from suggestion =====================
 
-  /// Option A: Keep suggested list the same when returning.
-  /// We still refresh the workout summary so Home reflects any newly logged sets.
   Future<void> _openExerciseSessionFromSuggestion(Map<String, dynamic> ex) async {
     await Navigator.push(
       context,
@@ -109,9 +89,8 @@ class HomePageState extends State<HomePage> {
       ),
     );
 
-    // Refresh summary when returning (suggested list stays as-is)
     if (!mounted) return;
-    await _loadRecentExercises();
+    await _loadRecentExercises(); // suggestion list stays the same (Option A)
   }
 
   // ---------------- Bug/Suggestion report system ----------------
@@ -196,7 +175,9 @@ class HomePageState extends State<HomePage> {
 
     final msg = _reportController.text.trim();
     if (msg.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Please enter a message.')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please enter a message.')),
+      );
       return;
     }
 
@@ -235,9 +216,7 @@ class HomePageState extends State<HomePage> {
       final row = await supabase.from('profiles').select('username').eq('id', user.id).maybeSingle();
       final name = (row?['username'] ?? '').toString().trim();
       if (name.isNotEmpty) _username = name;
-    } catch (_) {
-      // ignore
-    }
+    } catch (_) {}
   }
 
   String _shareHandle() {
@@ -246,7 +225,7 @@ class HomePageState extends State<HomePage> {
     return u.startsWith('@') ? u : '@$u';
   }
 
-  // ---------------- Existing workout summary logic ----------------
+  // ---------------- Summary logic ----------------
 
   bool _isLegsGroup(String group) {
     final g = group.trim().toLowerCase();
@@ -288,7 +267,6 @@ class HomePageState extends State<HomePage> {
 
   bool _matchesFilter(_DayWorkoutSummary s) {
     if (_selectedFilter == _WorkoutFilter.all) return true;
-
     final label = s.dayTypeLabel.trim().toLowerCase();
     switch (_selectedFilter) {
       case _WorkoutFilter.all:
@@ -390,30 +368,20 @@ class HomePageState extends State<HomePage> {
                   Row(
                     children: [
                       Expanded(
-                        child: Text(
-                          'Select one or more days to share.',
-                          style: Theme.of(context).textTheme.bodyMedium,
-                        ),
+                        child: Text('Select one or more days to share.',
+                            style: Theme.of(context).textTheme.bodyMedium),
                       ),
                     ],
                   ),
                   const SizedBox(height: 8),
                   Row(
                     children: [
-                      TextButton(
-                        onPressed: () => toggleAll(true),
-                        child: const Text('Select all'),
-                      ),
+                      TextButton(onPressed: () => toggleAll(true), child: const Text('Select all')),
                       const SizedBox(width: 8),
-                      TextButton(
-                        onPressed: () => toggleAll(false),
-                        child: const Text('Clear'),
-                      ),
+                      TextButton(onPressed: () => toggleAll(false), child: const Text('Clear')),
                       const Spacer(),
-                      Text(
-                        '${selected.length}/${entries.length}',
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
+                      Text('${selected.length}/${entries.length}',
+                          style: Theme.of(context).textTheme.bodySmall),
                     ],
                   ),
                   const Divider(height: 16),
@@ -455,17 +423,12 @@ class HomePageState extends State<HomePage> {
               ),
             ),
             actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('Cancel'),
-              ),
+              TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
               TextButton(
                 onPressed: () async {
                   Navigator.pop(context);
-                  await _shareEntries(
-                    entries,
-                    subject: 'Workout Summary (${_filterLabel(_selectedFilter)})',
-                  );
+                  await _shareEntries(entries,
+                      subject: 'Workout Summary (${_filterLabel(_selectedFilter)})');
                 },
                 child: const Text('Share all shown'),
               ),
@@ -494,16 +457,18 @@ class HomePageState extends State<HomePage> {
     return Row(
       children: _WorkoutFilter.values.map((f) {
         final isSelected = _selectedFilter == f;
-
         return Expanded(
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 2),
             child: OutlinedButton(
               style: OutlinedButton.styleFrom(
                 padding: const EdgeInsets.symmetric(vertical: 10),
-                backgroundColor: isSelected ? Theme.of(context).colorScheme.primary.withOpacity(0.15) : null,
+                backgroundColor:
+                    isSelected ? Theme.of(context).colorScheme.primary.withOpacity(0.15) : null,
                 side: BorderSide(
-                  color: isSelected ? Theme.of(context).colorScheme.primary : Theme.of(context).dividerColor,
+                  color: isSelected
+                      ? Theme.of(context).colorScheme.primary
+                      : Theme.of(context).dividerColor,
                 ),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
               ),
@@ -525,7 +490,6 @@ class HomePageState extends State<HomePage> {
     );
   }
 
-  // --- helpers for volume math (numeric can come back as int/double/String) ---
   double _numToDouble(dynamic v) {
     if (v == null) return 0.0;
     if (v is num) return v.toDouble();
@@ -559,13 +523,10 @@ class HomePageState extends State<HomePage> {
           .order('created_at', ascending: false);
 
       final List<DateTime> workoutDays = [];
-
       final Map<DateTime, Map<String, Map<String, dynamic>>> uniqueExercisesByDay = {};
       final Map<DateTime, Map<String, int>> setCountsByDayByName = {};
-
       final Map<DateTime, DateTime> firstSessionLocalByDay = {};
       final Map<DateTime, DateTime> lastSessionLocalByDay = {};
-
       final Map<DateTime, double> legsVolumeByDay = {};
       final Map<DateTime, double> coreVolumeByDay = {};
 
@@ -796,7 +757,6 @@ class HomePageState extends State<HomePage> {
     final user = supabase.auth.currentUser;
     if (user == null) return [];
 
-    // ✅ include video_url so ExerciseSessionPage can use it without an extra fetch
     final rows = await supabase
         .from('exercises')
         .select('id, name, type, primary_muscle_group, video_url, equipment:equipment_id(name)')
@@ -822,7 +782,6 @@ class HomePageState extends State<HomePage> {
     return list;
   }
 
-  /// Last performed time by exercise_id. Never-performed exercises are absent.
   Future<Map<String, DateTime>> _loadLastPerformedAtByExerciseId() async {
     final user = supabase.auth.currentUser;
     if (user == null) return {};
@@ -838,7 +797,6 @@ class HomePageState extends State<HomePage> {
     for (final row in rows) {
       final id = (row['exercise_id'] ?? '').toString();
       if (id.isEmpty) continue;
-
       if (lastById.containsKey(id)) continue;
 
       final dt = DateTime.tryParse((row['created_at'] ?? '').toString());
@@ -865,10 +823,7 @@ class HomePageState extends State<HomePage> {
           ),
         ),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
           ElevatedButton(
             onPressed: () {
               final m = int.tryParse(controller.text.trim());
@@ -885,30 +840,22 @@ class HomePageState extends State<HomePage> {
     await _buildSuggestedRoutine(minutes, randomize: false);
   }
 
-  /// ✅ ISO week bucket key (YYYYWW). Older weeks always come first.
   int _isoWeekKey(DateTime d) {
-    // keep "never done" bucket separate and always first
     if (d.millisecondsSinceEpoch == 0) return 0;
 
     final date = DateTime(d.year, d.month, d.day);
-    final weekday = date.weekday; // Mon=1..Sun=7
-
-    // Thursday of this ISO week
+    final weekday = date.weekday;
     final thursday = date.add(Duration(days: 4 - weekday));
     final weekYear = thursday.year;
 
-    // First Thursday of the ISO week-year
     final jan4 = DateTime(weekYear, 1, 4);
     final jan4Weekday = jan4.weekday;
     final firstThursday = jan4.add(Duration(days: 4 - jan4Weekday));
 
     final weekNum = 1 + ((thursday.difference(firstThursday).inDays) ~/ 7);
-
-    return weekYear * 100 + weekNum; // e.g. 202601
+    return weekYear * 100 + weekNum;
   }
 
-  /// ✅ Fix: Always pick least-recently-performed first.
-  /// ✅ Randomize: shuffles only within the same ISO-week bucket, never breaking oldest-week-first.
   Future<void> _buildSuggestedRoutine(int minutes, {bool randomize = false}) async {
     if (_isSuggesting) return;
 
@@ -935,7 +882,6 @@ class HomePageState extends State<HomePage> {
         return lastPerformedById[id] ?? neverDone;
       }
 
-      // filter pool
       final relevantGroups = _muscleGroupsForSuggestedType(suggestedType);
 
       final pool = allExercises.where((ex) {
@@ -951,7 +897,7 @@ class HomePageState extends State<HomePage> {
         if (suggestedType == _SuggestedDayType.pull) {
           return (ex['type'] ?? '').toString().toLowerCase() == 'pull';
         }
-        return true; // legs/core any type
+        return true;
       }).toList();
 
       if (pool.isEmpty) {
@@ -966,14 +912,12 @@ class HomePageState extends State<HomePage> {
         return;
       }
 
-      // group by canonical mg
       final Map<String, List<Map<String, dynamic>>> byGroup = {};
       for (final ex in pool) {
         final mg = _canonicalMuscleGroup((ex['primary_muscle_group'] ?? '').toString());
         byGroup.putIfAbsent(mg, () => []).add(ex);
       }
 
-      // choose groups (weakest first)
       final availableGroups = byGroup.keys.toList();
       availableGroups.sort((a, b) {
         final av = volByGroup[a] ?? 0.0;
@@ -992,7 +936,6 @@ class HomePageState extends State<HomePage> {
         takeCount[groupsSelected[i]] = base + (i < rem ? 1 : 0);
       }
 
-      // pick: oldest-first per group
       final List<Map<String, dynamic>> picked = [];
 
       for (final g in groupsSelected) {
@@ -1005,7 +948,7 @@ class HomePageState extends State<HomePage> {
         list.sort((a, b) {
           final at = _lastTimeFor(a);
           final bt = _lastTimeFor(b);
-          final cmp = at.compareTo(bt); // oldest first
+          final cmp = at.compareTo(bt);
           if (cmp != 0) return cmp;
 
           final an = (a['name'] ?? '').toString().toLowerCase();
@@ -1014,7 +957,6 @@ class HomePageState extends State<HomePage> {
         });
 
         if (randomize) {
-          // shuffle within the same ISO-week bucket
           int start = 0;
           while (start < list.length) {
             final wk = _isoWeekKey(_lastTimeFor(list[start]));
@@ -1034,7 +976,6 @@ class HomePageState extends State<HomePage> {
         picked.addAll(list.take(need));
       }
 
-      // fill if short (oldest-first globally)
       if (picked.length < totalExercisesTarget) {
         final alreadyIds = picked.map((e) => (e['id'] ?? '').toString()).toSet();
 
@@ -1093,6 +1034,7 @@ class HomePageState extends State<HomePage> {
     }
   }
 
+  // ✅ UPDATED: Randomize moved to centered position above the first suggested exercise
   Widget _buildSuggestedRoutineCard(BuildContext context) {
     final s = _suggestedRoutine;
     if (s == null) return const SizedBox.shrink();
@@ -1115,7 +1057,9 @@ class HomePageState extends State<HomePage> {
                 Expanded(
                   child: Text(
                     'Suggested Routine',
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w800,
+                        ),
                   ),
                 ),
                 IconButton(
@@ -1126,6 +1070,8 @@ class HomePageState extends State<HomePage> {
               ],
             ),
             const SizedBox(height: 6),
+
+            // badges row (no randomize here anymore)
             Row(
               children: [
                 Container(
@@ -1141,20 +1087,25 @@ class HomePageState extends State<HomePage> {
                   '${s.minutes} min • $exCount exercise${exCount == 1 ? '' : 's'}',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
-                const Spacer(),
-                OutlinedButton.icon(
-                  icon: const Icon(Icons.shuffle, size: 18),
-                  label: const Text('Randomize'),
-                  onPressed: _isSuggesting
-                      ? null
-                      : () async {
-                          final m = _lastSuggestedMinutes ?? s.minutes;
-                          await _buildSuggestedRoutine(m, randomize: true);
-                        },
-                ),
               ],
             ),
+
+            // ✅ center randomize above the exercise list
             const SizedBox(height: 10),
+            Center(
+              child: OutlinedButton.icon(
+                icon: const Icon(Icons.shuffle, size: 18),
+                label: const Text('Randomize'),
+                onPressed: _isSuggesting
+                    ? null
+                    : () async {
+                        final m = _lastSuggestedMinutes ?? s.minutes;
+                        await _buildSuggestedRoutine(m, randomize: true);
+                      },
+              ),
+            ),
+            const SizedBox(height: 10),
+
             if (s.exercises.isEmpty)
               const Text('No matching exercises found for this suggestion.')
             else
@@ -1164,7 +1115,6 @@ class HomePageState extends State<HomePage> {
                 final mgLabel = mg.isEmpty ? '' : mg[0].toUpperCase() + mg.substring(1);
                 final equipmentName = (ex['equipment_name'] ?? '').toString().trim();
 
-                // ✅ CLICKABLE row that navigates to ExerciseSessionPage
                 return InkWell(
                   borderRadius: BorderRadius.circular(10),
                   onTap: () => _openExerciseSessionFromSuggestion(ex),
@@ -1176,7 +1126,9 @@ class HomePageState extends State<HomePage> {
                         const SizedBox(width: 8),
                         Expanded(
                           child: Text(
-                            equipmentName.isEmpty ? '$name ($mgLabel)' : '$name ($mgLabel)  •  $equipmentName',
+                            equipmentName.isEmpty
+                                ? '$name ($mgLabel)'
+                                : '$name ($mgLabel)  •  $equipmentName',
                             style: const TextStyle(fontWeight: FontWeight.w600),
                           ),
                         ),
@@ -1202,9 +1154,7 @@ class HomePageState extends State<HomePage> {
 
   @override
   Widget build(BuildContext context) {
-    if (isLoading) {
-      return const Center(child: CircularProgressIndicator());
-    }
+    if (isLoading) return const Center(child: CircularProgressIndicator());
 
     final entries = _filteredEntries();
 
@@ -1215,10 +1165,7 @@ class HomePageState extends State<HomePage> {
           Row(
             children: [
               Expanded(
-                child: Text(
-                  'Workout Summary',
-                  style: Theme.of(context).textTheme.headlineSmall,
-                ),
+                child: Text('Workout Summary', style: Theme.of(context).textTheme.headlineSmall),
               ),
               IconButton(
                 tooltip: 'Suggest Routine',
@@ -1256,7 +1203,8 @@ class HomePageState extends State<HomePage> {
               final date = entry.key;
               final s = entry.value;
 
-              final muscleEntries = s.muscleGroupCounts.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
+              final muscleEntries = s.muscleGroupCounts.entries.toList()
+                ..sort((a, b) => b.value.compareTo(a.value));
 
               return Padding(
                 padding: const EdgeInsets.symmetric(vertical: 10),
@@ -1270,7 +1218,8 @@ class HomePageState extends State<HomePage> {
                             children: [
                               Text(_formatDate(date), style: const TextStyle(fontWeight: FontWeight.bold)),
                               const SizedBox(width: 8),
-                              Text('${s.workoutDurationMinutes} min', style: Theme.of(context).textTheme.bodySmall),
+                              Text('${s.workoutDurationMinutes} min',
+                                  style: Theme.of(context).textTheme.bodySmall),
                             ],
                           ),
                         ),
