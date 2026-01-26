@@ -30,6 +30,9 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
   /// Exercise IDs that have at least one session today (for this equipment)
   Set<String> exercisesWithSessionsToday = {};
 
+  /// ✅ For imported exercises: which *source* exercises still have a video_url
+  final Set<String> _sourceExercisesWithVideo = {};
+
   @override
   void initState() {
     super.initState();
@@ -43,17 +46,24 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
     return s;
   }
 
-  bool _hasFormVideo(Map<String, dynamic> ex) {
-    // ✅ Local video saved on MY exercise row
+  bool _hasDirectVideo(Map<String, dynamic> ex) {
     final url = _cleanStr(ex['video_url']);
-    if (url.isNotEmpty) return true;
+    return url.isNotEmpty;
+  }
 
-    // ✅ Imported video reference (points to someone else's exercise)
-    // This is what your session page resolves via RPC
-    final sourceId = _cleanStr(ex['video_source_exercise_id']);
-    if (sourceId.isNotEmpty) return true;
+  String _sourceId(Map<String, dynamic> ex) {
+    return _cleanStr(ex['video_source_exercise_id']);
+  }
 
-    return false;
+  bool _hasFormVideo(Map<String, dynamic> ex) {
+    // ✅ Local video saved on THIS exercise row
+    if (_hasDirectVideo(ex)) return true;
+
+    // ✅ Imported: only show as "has video" if source still has video_url
+    final srcId = _sourceId(ex);
+    if (srcId.isEmpty) return false;
+
+    return _sourceExercisesWithVideo.contains(srcId);
   }
 
   Future<void> _loadExercises() async {
@@ -72,7 +82,11 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
               ),
         );
 
+      // ✅ Determine which exercises were used today
       final todaySet = await _loadExerciseIdsWithSessionsToday();
+
+      // ✅ Verify imported video sources still exist
+      await _refreshSourceVideoCache(sorted);
 
       // Reorder: used today (alpha) first, then the rest (alpha)
       final usedToday = <Map<String, dynamic>>[];
@@ -101,12 +115,46 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
       setState(() {
         exercises = [];
         exercisesWithSessionsToday = {};
+        _sourceExercisesWithVideo.clear();
         isLoading = false;
       });
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Failed to load exercises: $e')),
       );
+    }
+  }
+
+  /// ✅ Build a cache of source exercise IDs that *currently* have a video_url.
+  /// This prevents the icon from showing when the original friend deleted the video.
+  Future<void> _refreshSourceVideoCache(List<Map<String, dynamic>> exList) async {
+    _sourceExercisesWithVideo.clear();
+
+    final sourceIds = <String>{};
+
+    for (final ex in exList) {
+      // Only care about imported exercises that do NOT have a direct local video
+      if (_hasDirectVideo(ex)) continue;
+
+      final srcId = _sourceId(ex);
+      if (srcId.isNotEmpty) sourceIds.add(srcId);
+    }
+
+    if (sourceIds.isEmpty) return;
+
+    // Supabase "in" can be picky about size; but your lists are usually small.
+    // If you ever hit large lists, we can chunk this.
+    final rows = await supabase
+        .from('exercises')
+        .select('id, video_url')
+        .inFilter('id', sourceIds.toList());
+
+    for (final r in rows) {
+      final id = _cleanStr(r['id']);
+      final url = _cleanStr(r['video_url']);
+      if (id.isNotEmpty && url.isNotEmpty) {
+        _sourceExercisesWithVideo.add(id);
+      }
     }
   }
 
@@ -510,9 +558,7 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
                               ),
                             ),
                             const SizedBox(width: 10),
-                            Icon(
-                              hasSessionToday ? Icons.check_circle : Icons.fitness_center,
-                            ),
+                            Icon(hasSessionToday ? Icons.check_circle : Icons.fitness_center),
                             const SizedBox(width: 8),
                             PopupMenuButton<String>(
                               onSelected: (value) => _onMenuSelected(value, exercise),
