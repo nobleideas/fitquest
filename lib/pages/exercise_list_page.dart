@@ -36,9 +36,24 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
     _loadExercises();
   }
 
+  String _cleanStr(dynamic v) {
+    final s = (v ?? '').toString().trim();
+    if (s.isEmpty) return '';
+    if (s.toLowerCase() == 'null') return '';
+    return s;
+  }
+
   bool _hasFormVideo(Map<String, dynamic> ex) {
-    final s = (ex['video_url'] ?? '').toString().trim();
-    return s.isNotEmpty && s.toLowerCase() != 'null';
+    // ✅ Local video saved on MY exercise row
+    final url = _cleanStr(ex['video_url']);
+    if (url.isNotEmpty) return true;
+
+    // ✅ Imported video reference (points to someone else's exercise)
+    // This is what your session page resolves via RPC
+    final sourceId = _cleanStr(ex['video_source_exercise_id']);
+    if (sourceId.isNotEmpty) return true;
+
+    return false;
   }
 
   Future<void> _loadExercises() async {
@@ -108,7 +123,6 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
     final startUtc = startLocal.toUtc().toIso8601String();
     final endUtc = endLocal.toUtc().toIso8601String();
 
-    // exercise_sessions has exercise_id, so we can filter by exercise.equipment_id via join
     final rows = await supabase
         .from('exercise_sessions')
         .select('exercise_id, created_at, exercises!inner(id, equipment_id)')
@@ -158,14 +172,8 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
                         value: primaryMuscleGroup,
                         items: const [
                           DropdownMenuItem(value: 'back', child: Text('Back')),
-                          DropdownMenuItem(
-                            value: 'chest',
-                            child: Text('Chest'),
-                          ),
-                          DropdownMenuItem(
-                            value: 'shoulders',
-                            child: Text('Shoulders'),
-                          ),
+                          DropdownMenuItem(value: 'chest', child: Text('Chest')),
+                          DropdownMenuItem(value: 'shoulders', child: Text('Shoulders')),
                           DropdownMenuItem(value: 'arms', child: Text('Arms')),
                           DropdownMenuItem(value: 'legs', child: Text('Legs')),
                           DropdownMenuItem(value: 'core', child: Text('Core')),
@@ -216,7 +224,7 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
 
                     if (!mounted) return;
                     Navigator.pop(context);
-                    await _loadExercises(); // refresh list + today's highlights
+                    await _loadExercises();
                   },
                   child: const Text("Add"),
                 ),
@@ -276,12 +284,9 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
     final exerciseName = (exercise['name'] ?? 'Exercise').toString();
     String? targetEquipmentName;
 
-    // load equipment
     final equipmentListDynamic = await _equipmentService.getAllEquipment();
     final equipmentList =
-        equipmentListDynamic
-            .map((e) => Map<String, dynamic>.from(e as Map))
-            .toList()
+        equipmentListDynamic.map((e) => Map<String, dynamic>.from(e as Map)).toList()
           ..sort(
             (a, b) => (a['name'] as String).toLowerCase().compareTo(
                   (b['name'] as String).toLowerCase(),
@@ -298,9 +303,8 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
           builder: (context, setDialogState) {
             final newName = newEquipmentController.text.trim();
             final canMove =
-                (selectedEquipmentId != null &&
-                    selectedEquipmentId!.isNotEmpty) ||
-                newName.isNotEmpty;
+                (selectedEquipmentId != null && selectedEquipmentId!.isNotEmpty) ||
+                    newName.isNotEmpty;
 
             return AlertDialog(
               title: Text('Move “$exerciseName”'),
@@ -310,8 +314,6 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
                 children: [
                   const Text('Move to existing equipment:'),
                   const SizedBox(height: 8),
-
-                  // ---------- EXISTING EQUIPMENT DROPDOWN ----------
                   DropdownButtonFormField<String>(
                     value: selectedEquipmentId,
                     isExpanded: true,
@@ -323,13 +325,11 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
                         ),
                     ],
                     onChanged: newEquipmentController.text.isNotEmpty
-                        ? null // 🔒 disabled while typing new name
+                        ? null
                         : (val) {
                             setDialogState(() {
                               selectedEquipmentId = val;
-                              if (val != null) {
-                                newEquipmentController.text = '';
-                              }
+                              if (val != null) newEquipmentController.text = '';
                             });
                           },
                     decoration: const InputDecoration(
@@ -337,15 +337,11 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
                       hintText: 'Select equipment',
                     ),
                   ),
-
                   const SizedBox(height: 16),
                   const Divider(),
                   const SizedBox(height: 8),
-
                   const Text('Or create a new equipment:'),
                   const SizedBox(height: 8),
-
-                  // ---------- NEW EQUIPMENT TEXT FIELD ----------
                   TextField(
                     controller: newEquipmentController,
                     enabled: selectedEquipmentId == null,
@@ -363,7 +359,6 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
                   ),
                 ],
               ),
-
               actions: [
                 TextButton(
                   onPressed: () => Navigator.pop(context),
@@ -377,21 +372,14 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
                           final typedName = newEquipmentController.text.trim();
 
                           if (typedName.isNotEmpty) {
-                            // Create new equipment then move
                             final created =
-                                await _equipmentService.insertEquipment(
-                              typedName,
-                            );
+                                await _equipmentService.insertEquipment(typedName);
                             targetEquipmentId = created['id'].toString();
                             targetEquipmentName = created['name'].toString();
                           } else {
-                            // Move to existing equipment
                             targetEquipmentId = selectedEquipmentId!;
                             targetEquipmentName = equipmentList
-                                .firstWhere(
-                                  (e) =>
-                                      e['id'].toString() == selectedEquipmentId,
-                                )['name']
+                                .firstWhere((e) => e['id'].toString() == selectedEquipmentId)['name']
                                 .toString();
                           }
 
@@ -405,15 +393,12 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
 
                           ScaffoldMessenger.of(context).showSnackBar(
                             SnackBar(
-                              content: Text(
-                                '“$exerciseName” moved to $targetEquipmentName',
-                              ),
+                              content: Text('“$exerciseName” moved to $targetEquipmentName'),
                               behavior: SnackBarBehavior.floating,
                               duration: const Duration(seconds: 2),
                             ),
                           );
 
-                          // If moved off this equipment, refresh list + highlights
                           await _loadExercises();
                         }
                       : null,
@@ -432,9 +417,7 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
     final name = (exercise['name'] ?? 'this exercise').toString();
     final exerciseId = exercise['id'].toString();
 
-    final sessionCount = await _exerciseService.getSessionCountForExercise(
-      exerciseId,
-    );
+    final sessionCount = await _exerciseService.getSessionCountForExercise(exerciseId);
 
     final confirm = await showDialog<bool>(
       context: context,
@@ -469,10 +452,7 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
   }
 
   // ---------- MENU HANDLER ----------
-  Future<void> _onMenuSelected(
-    String value,
-    Map<String, dynamic> exercise,
-  ) async {
+  Future<void> _onMenuSelected(String value, Map<String, dynamic> exercise) async {
     switch (value) {
       case 'edit':
         await _editExerciseName(exercise);
@@ -493,9 +473,7 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
       body: isLoading
           ? const Center(child: CircularProgressIndicator())
           : exercises.isEmpty
-              ? const Center(
-                  child: Text("No exercises available for this equipment."),
-                )
+              ? const Center(child: Text("No exercises available for this equipment."))
               : RefreshIndicator(
                   onRefresh: _loadExercises,
                   child: ListView.builder(
@@ -504,8 +482,7 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
                     itemBuilder: (context, index) {
                       final exercise = exercises[index];
                       final exerciseId = exercise['id']?.toString() ?? '';
-                      final hasSessionToday =
-                          exercisesWithSessionsToday.contains(exerciseId);
+                      final hasSessionToday = exercisesWithSessionsToday.contains(exerciseId);
 
                       final hasVideo = _hasFormVideo(exercise);
 
@@ -519,52 +496,30 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
                                 )
                               : null,
                         ),
-                        subtitle: Text(
-                          "${exercise['primary_muscle_group']} • ${exercise['type']}",
-                        ),
+                        subtitle: Text("${exercise['primary_muscle_group']} • ${exercise['type']}"),
                         trailing: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            // ✅ Form video indicator (always visible)
                             Tooltip(
-                              message: hasVideo
-                                  ? 'Form video available'
-                                  : 'No form video',
+                              message: hasVideo ? 'Form video available' : 'No form video',
                               child: Icon(
-                                hasVideo
-                                    ? Icons.play_circle_fill
-                                    : Icons.videocam_off,
+                                hasVideo ? Icons.play_circle_fill : Icons.videocam_off,
                                 color: hasVideo
                                     ? Theme.of(context).colorScheme.primary
                                     : Theme.of(context).disabledColor,
                               ),
                             ),
                             const SizedBox(width: 10),
-
-                            // ✅ "used today" indicator (existing behavior)
                             Icon(
-                              hasSessionToday
-                                  ? Icons.check_circle
-                                  : Icons.fitness_center,
+                              hasSessionToday ? Icons.check_circle : Icons.fitness_center,
                             ),
                             const SizedBox(width: 8),
-
                             PopupMenuButton<String>(
-                              onSelected: (value) =>
-                                  _onMenuSelected(value, exercise),
+                              onSelected: (value) => _onMenuSelected(value, exercise),
                               itemBuilder: (context) => const [
-                                PopupMenuItem(
-                                  value: 'edit',
-                                  child: Text('Edit name'),
-                                ),
-                                PopupMenuItem(
-                                  value: 'move',
-                                  child: Text('Move to equipment…'),
-                                ),
-                                PopupMenuItem(
-                                  value: 'delete',
-                                  child: Text('Delete'),
-                                ),
+                                PopupMenuItem(value: 'edit', child: Text('Edit name')),
+                                PopupMenuItem(value: 'move', child: Text('Move to equipment…')),
+                                PopupMenuItem(value: 'delete', child: Text('Delete')),
                               ],
                             ),
                           ],
@@ -573,12 +528,9 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
                           await Navigator.push(
                             context,
                             MaterialPageRoute(
-                              builder: (_) =>
-                                  ExerciseSessionPage(exercise: exercise),
+                              builder: (_) => ExerciseSessionPage(exercise: exercise),
                             ),
                           );
-
-                          // Refresh on return so highlight + ordering updates immediately
                           await _loadExercises();
                         },
                       );
