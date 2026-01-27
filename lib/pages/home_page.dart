@@ -1,5 +1,8 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../services/suggestion_service.dart';
@@ -32,7 +35,7 @@ class _DayWorkoutSummary {
 
 enum _WorkoutFilter { all, push, pull, legs, core }
 
-class HomePageState extends State<HomePage> {
+class HomePageState extends State<HomePage> with WidgetsBindingObserver {
   final supabase = Supabase.instance.client;
 
   bool isLoading = true;
@@ -52,6 +55,13 @@ class HomePageState extends State<HomePage> {
   bool _isSuggesting = false;
   int _lastSuggestedMinutes = 30;
 
+  // ---------- Persisted suggestion ----------
+  static const String _prefsKeySuggestedRoutine = 'home.suggested_routine.v1';
+  static const String _prefsKeyLastSuggestedMinutes = 'home.last_suggested_minutes.v1';
+
+  // For "close app" warning (Android back / system navigation)
+  bool _didShowCloseWarningThisSession = false;
+
   SuggestionService get _suggestionService => SuggestionService(supabase);
 
   Future<void> refresh() async {
@@ -61,13 +71,135 @@ class HomePageState extends State<HomePage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+
+    // Load persisted suggestion first, then load summary.
+    _restoreSuggestedRoutineFromPrefs();
     _loadRecentExercises();
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _reportController.dispose();
     super.dispose();
+  }
+
+  // If app is backgrounded / detached, keep the latest suggestion saved.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      _persistSuggestedRoutineToPrefs();
+    }
+  }
+
+  // ===================== Persistence helpers =====================
+
+  Map<String, dynamic> _routineToJson(SuggestedRoutine r) {
+    return {
+      'minutes': r.minutes,
+      'dayType': r.dayType.name, // push / pull / legsCore (enum name)
+      'message': r.message,
+      'exercises': r.exercises, // already List<Map<String,dynamic>>
+      'saved_at_utc': DateTime.now().toUtc().toIso8601String(),
+    };
+  }
+
+  SuggestedRoutine? _routineFromJson(Map<String, dynamic> json) {
+    try {
+      final minutes = (json['minutes'] as num?)?.toInt() ?? 0;
+      final dayTypeStr = (json['dayType'] ?? '').toString().trim();
+      final message = (json['message'] as String?)?.toString();
+
+      final exRaw = json['exercises'];
+      final List<Map<String, dynamic>> exercises = (exRaw is List)
+          ? exRaw
+              .whereType<Map>()
+              .map((m) => Map<String, dynamic>.from(m))
+              .toList()
+          : <Map<String, dynamic>>[];
+
+      if (minutes <= 0) return null;
+
+      SuggestedDayType dayType;
+      switch (dayTypeStr) {
+        case 'push':
+          dayType = SuggestedDayType.push;
+          break;
+        case 'pull':
+          dayType = SuggestedDayType.pull;
+          break;
+        case 'legsCore':
+          dayType = SuggestedDayType.legsCore;
+          break;
+        default:
+          return null;
+      }
+
+      return SuggestedRoutine(
+        minutes: minutes,
+        dayType: dayType,
+        exercises: exercises,
+        message: (message != null && message.trim().isNotEmpty) ? message.trim() : null,
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _restoreSuggestedRoutineFromPrefs() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+
+      final lastMins = prefs.getInt(_prefsKeyLastSuggestedMinutes);
+      if (lastMins != null && lastMins > 0) {
+        _lastSuggestedMinutes = lastMins;
+      }
+
+      final raw = prefs.getString(_prefsKeySuggestedRoutine);
+      if (raw == null || raw.trim().isEmpty) return;
+
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return;
+
+      final routine = _routineFromJson(Map<String, dynamic>.from(decoded));
+      if (!mounted) return;
+
+      if (routine != null) {
+        setState(() => _suggestedRoutine = routine);
+      }
+    } catch (_) {
+      // ignore
+    }
+  }
+
+  Future<void> _persistSuggestedRoutineToPrefs() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setInt(_prefsKeyLastSuggestedMinutes, _lastSuggestedMinutes);
+
+      final r = _suggestedRoutine;
+      if (r == null) {
+        await prefs.remove(_prefsKeySuggestedRoutine);
+        return;
+      }
+
+      final raw = jsonEncode(_routineToJson(r));
+      await prefs.setString(_prefsKeySuggestedRoutine, raw);
+    } catch (_) {
+      // ignore
+    }
+  }
+
+  Future<void> _clearSuggestedRoutinePersisted() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_prefsKeySuggestedRoutine);
+    } catch (_) {
+      // ignore
+    }
   }
 
   // ===================== open exercise session from suggestion =====================
@@ -704,6 +836,7 @@ class HomePageState extends State<HomePage> {
 
     if (res == null) return;
     _lastSuggestedMinutes = res.minutes;
+    await _persistSuggestedRoutineToPrefs();
 
     await _buildSuggestedRoutine(minutes: res.minutes, choice: res.choice, randomize: false);
   }
@@ -730,6 +863,9 @@ class HomePageState extends State<HomePage> {
       if (!mounted) return;
       setState(() => _suggestedRoutine = routine);
 
+      // ✅ Persist after any change
+      await _persistSuggestedRoutineToPrefs();
+
       if (routine.exercises.isEmpty && routine.message != null) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(routine.message!)),
@@ -743,6 +879,58 @@ class HomePageState extends State<HomePage> {
     } finally {
       if (mounted) setState(() => _isSuggesting = false);
     }
+  }
+
+  Future<void> _confirmAndClearSuggestedRoutine() async {
+    final hasRoutine = _suggestedRoutine != null;
+    if (!hasRoutine) return;
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Remove suggested routine?'),
+        content: const Text(
+          'This will clear your current suggested routine. You can always generate another later.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          ElevatedButton(onPressed: () => Navigator.pop(context, true), child: const Text('Remove')),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
+    if (!mounted) return;
+    setState(() => _suggestedRoutine = null);
+    await _clearSuggestedRoutinePersisted();
+  }
+
+  Future<bool> _handleBackPressedWithWarning() async {
+    // If there's an active suggested routine, warn once per app session.
+    if (_suggestedRoutine != null && !_didShowCloseWarningThisSession) {
+      _didShowCloseWarningThisSession = true;
+
+      await showDialog<void>(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: const Text('Careful—don’t lose your routine'),
+          content: const Text(
+            'If you close the app mid-workout, your suggested routine might not be shown again unless it’s saved. '
+            'Good news: Fit Quest now saves your current suggestion automatically.',
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Got it')),
+          ],
+        ),
+      );
+
+      // Don’t block the back action permanently; after warning, allow normal behavior.
+      // Persist just in case.
+      await _persistSuggestedRoutineToPrefs();
+    }
+
+    return true; // allow pop
   }
 
   Widget _buildSuggestedRoutineCard() {
@@ -774,7 +962,7 @@ class HomePageState extends State<HomePage> {
                 ),
                 IconButton(
                   tooltip: 'Clear',
-                  onPressed: () => setState(() => _suggestedRoutine = null),
+                  onPressed: _confirmAndClearSuggestedRoutine,
                   icon: const Icon(Icons.close),
                 ),
               ],
@@ -863,106 +1051,117 @@ class HomePageState extends State<HomePage> {
 
     final entries = _filteredEntries();
 
-    return Padding(
-      padding: const EdgeInsets.all(16.0),
-      child: ListView(
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: Text('Workout Summary', style: Theme.of(context).textTheme.headlineSmall),
-              ),
-              IconButton(
-                tooltip: 'Suggest Routine',
-                onPressed: _isSuggesting ? null : _openSuggestRoutineDialog,
-                icon: _isSuggesting
-                    ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
-                    : const Icon(Icons.casino),
-              ),
-              IconButton(
-                tooltip: 'Report a bug / suggestion',
-                onPressed: _isSubmittingReport ? null : _openReportDialog,
-                icon: const Icon(Icons.bug_report_outlined),
-              ),
-              IconButton(
-                tooltip: 'Share',
-                onPressed: entries.isEmpty ? null : _openSharePicker,
-                icon: const Icon(Icons.share),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
+    // Wrap entire page in a PopScope to show a warning once when leaving.
+    return PopScope(
+      canPop: true,
+      onPopInvoked: (didPop) async {
+        // onPopInvoked runs after the pop attempt; for a "before pop" warning,
+        // we handle it by showing a dialog once (non-blocking) and persisting state.
+        if (!didPop) return;
+        await _handleBackPressedWithWarning();
+      },
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: ListView(
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text('Workout Summary', style: Theme.of(context).textTheme.headlineSmall),
+                ),
+                IconButton(
+                  tooltip: 'Suggest Routine',
+                  onPressed: _isSuggesting ? null : _openSuggestRoutineDialog,
+                  icon: _isSuggesting
+                      ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Icon(Icons.casino),
+                ),
+                IconButton(
+                  tooltip: 'Report a bug / suggestion',
+                  onPressed: _isSubmittingReport ? null : _openReportDialog,
+                  icon: const Icon(Icons.bug_report_outlined),
+                ),
+                IconButton(
+                  tooltip: 'Share',
+                  onPressed: entries.isEmpty ? null : _openSharePicker,
+                  icon: const Icon(Icons.share),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
 
-          _buildSuggestedRoutineCard(),
-          if (_suggestedRoutine != null) const SizedBox(height: 12),
+            _buildSuggestedRoutineCard(),
+            if (_suggestedRoutine != null) const SizedBox(height: 12),
 
-          _buildFilterBar(),
-          const SizedBox(height: 16),
+            _buildFilterBar(),
+            const SizedBox(height: 16),
 
-          if (summaryByDay.isEmpty)
-            const Text('No workouts logged yet.')
-          else if (entries.isEmpty)
-            const Text('No workouts found for this filter.')
-          else
-            ...entries.map((entry) {
-              final date = entry.key;
-              final s = entry.value;
+            if (summaryByDay.isEmpty)
+              const Text('No workouts logged yet.')
+            else if (entries.isEmpty)
+              const Text('No workouts found for this filter.')
+            else
+              ...entries.map((entry) {
+                final date = entry.key;
+                final s = entry.value;
 
-              final muscleEntries = s.muscleGroupCounts.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
+                final muscleEntries = s.muscleGroupCounts.entries.toList()
+                  ..sort((a, b) => b.value.compareTo(a.value));
 
-              return Padding(
-                padding: const EdgeInsets.symmetric(vertical: 10),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Row(
-                            children: [
-                              Text(_formatDate(date), style: const TextStyle(fontWeight: FontWeight.bold)),
-                              const SizedBox(width: 8),
-                              Text('${s.workoutDurationMinutes} min', style: Theme.of(context).textTheme.bodySmall),
-                            ],
+                return Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Row(
+                              children: [
+                                Text(_formatDate(date), style: const TextStyle(fontWeight: FontWeight.bold)),
+                                const SizedBox(width: 8),
+                                Text('${s.workoutDurationMinutes} min', style: Theme.of(context).textTheme.bodySmall),
+                              ],
+                            ),
                           ),
-                        ),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                          decoration: BoxDecoration(
-                            border: Border.all(color: Theme.of(context).dividerColor),
-                            borderRadius: BorderRadius.circular(16),
-                          ),
-                          child: Text(s.dayTypeLabel, style: const TextStyle(fontWeight: FontWeight.w600)),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 6),
-                    if (muscleEntries.isNotEmpty)
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: muscleEntries.map((e) {
-                          return Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                             decoration: BoxDecoration(
-                              color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                              border: Border.all(color: Theme.of(context).dividerColor),
                               borderRadius: BorderRadius.circular(16),
                             ),
-                            child: Text('${e.key}: ${e.value}'),
-                          );
-                        }).toList(),
+                            child: Text(s.dayTypeLabel, style: const TextStyle(fontWeight: FontWeight.w600)),
+                          ),
+                        ],
                       ),
-                    const SizedBox(height: 8),
-                    ...s.exerciseNames.map((name) {
-                      final sets = s.exerciseSetCountsByName[name] ?? 0;
-                      return Text('• $name ${sets}x');
-                    }),
-                    const Divider(height: 24),
-                  ],
-                ),
-              );
-            }).toList(),
-        ],
+                      const SizedBox(height: 6),
+                      if (muscleEntries.isNotEmpty)
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: muscleEntries.map((e) {
+                            return Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                              decoration: BoxDecoration(
+                                color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                              child: Text('${e.key}: ${e.value}'),
+                            );
+                          }).toList(),
+                        ),
+                      const SizedBox(height: 8),
+                      ...s.exerciseNames.map((name) {
+                        final sets = s.exerciseSetCountsByName[name] ?? 0;
+                        return Text('• $name ${sets}x');
+                      }),
+                      const Divider(height: 24),
+                    ],
+                  ),
+                );
+              }).toList(),
+          ],
+        ),
       ),
     );
   }

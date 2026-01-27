@@ -65,6 +65,8 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
     return '$y-$m-$day';
   }
 
+  String _todayKey() => _dayKey(DateTime.now());
+
   DateTime _dateFromDayKey(String key) {
     final parts = key.split('-').map(int.parse).toList();
     return DateTime(parts[0], parts[1], parts[2]);
@@ -191,22 +193,28 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
         break;
     }
 
-    // If no history at all -> no weight, but reps/sets by goal
-    if (last3DayKeys.isEmpty) {
+    // ✅ IMPORTANT: use the most recent day that is NOT today
+    final todayKey = _todayKey();
+    final referenceKey = last3DayKeys.firstWhere(
+      (k) => k != todayKey,
+      orElse: () => '',
+    );
+
+    // If no history day besides today -> no weight, but reps/sets by goal
+    if (referenceKey.isEmpty) {
       if (!mounted) return;
       setState(() {
         _suggestedWeight = null;
         _suggestedReps = goalReps;
         _suggestedSets = goalSets;
         _suggestionNote =
-            "No previous sessions for this exercise yet — reps/sets suggested from your goal.";
+            "Not enough prior days for this exercise to suggest weight yet — reps/sets suggested from your goal.";
       });
       return;
     }
 
-    final mostRecentKey = last3DayKeys.first;
-    final recentSessions = sessionsByDayKey[mostRecentKey] ?? const [];
-    final recentVolume = volumeByDayKey[mostRecentKey] ?? 0.0;
+    final recentSessions = sessionsByDayKey[referenceKey] ?? const [];
+    final recentVolume = volumeByDayKey[referenceKey] ?? 0.0;
 
     if (recentSessions.isEmpty || recentVolume <= 0.0) {
       if (!mounted) return;
@@ -215,7 +223,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
         _suggestedReps = goalReps;
         _suggestedSets = goalSets;
         _suggestionNote =
-            "Not enough recent volume to suggest weight — reps/sets suggested from your goal.";
+            "Not enough prior volume to suggest weight — reps/sets suggested from your goal.";
       });
       return;
     }
@@ -234,7 +242,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
     final volText = recentVolume.toStringAsFixed(0);
 
     final note =
-        "Based on your most recent day volume ($volText), distributed as $sets sets × $reps reps${goal.isNotEmpty ? " (${goal.replaceAll('_', ' ')})" : ""}.";
+        "Based on your most recent prior day volume ($volText), distributed as $sets sets × $reps reps${goal.isNotEmpty ? " (${goal.replaceAll('_', ' ')})" : ""}.";
 
     if (!mounted) return;
     setState(() {
@@ -777,8 +785,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
                   child: OutlinedButton.icon(
                     icon: const Icon(Icons.video_library),
                     label: Text(_pickedVideo == null ? "Choose Video" : "Change Video"),
-                    onPressed:
-                        (_isUploadingVideo || _isRemovingVideo) ? null : _pickVideo,
+                    onPressed: (_isUploadingVideo || _isRemovingVideo) ? null : _pickVideo,
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -792,9 +799,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
                           )
                         : const Icon(Icons.cloud_upload),
                     label: Text(_isUploadingVideo ? "Uploading..." : "Upload"),
-                    onPressed: (_pickedVideo == null ||
-                            _isUploadingVideo ||
-                            _isRemovingVideo)
+                    onPressed: (_pickedVideo == null || _isUploadingVideo || _isRemovingVideo)
                         ? null
                         : _uploadPickedVideo,
                   ),
@@ -817,8 +822,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
                         )
                       : const Icon(Icons.delete_outline),
                   label: Text(_isRemovingVideo ? "Removing..." : "Remove video"),
-                  onPressed:
-                      (_isUploadingVideo || _isRemovingVideo) ? null : _removeFormVideo,
+                  onPressed: (_isUploadingVideo || _isRemovingVideo) ? null : _removeFormVideo,
                 ),
               ),
             ],
