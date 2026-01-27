@@ -234,7 +234,8 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
     if (user == null) return;
 
     try {
-      final row = await supabase.from('profiles').select('username').eq('id', user.id).maybeSingle();
+      final row =
+          await supabase.from('profiles').select('username').eq('id', user.id).maybeSingle();
       final name = (row?['username'] ?? '').toString().trim();
       if (name.isNotEmpty) _username = name;
     } catch (_) {}
@@ -549,7 +550,8 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
                       const SizedBox(width: 8),
                       TextButton(onPressed: () => toggleAll(false), child: const Text('Clear')),
                       const Spacer(),
-                      Text('${selected.length}/${entries.length}', style: Theme.of(context).textTheme.bodySmall),
+                      Text('${selected.length}/${entries.length}',
+                          style: Theme.of(context).textTheme.bodySmall),
                     ],
                   ),
                   const Divider(height: 16),
@@ -947,6 +949,7 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
     return list;
   }
 
+  /// Most recent performed time per exercise_id (local). THIS is the "days since LAST completed" basis.
   Future<Map<String, DateTime>> _loadLastPerformedAtByExerciseId() async {
     final user = supabase.auth.currentUser;
     if (user == null) return {};
@@ -969,6 +972,67 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
 
     return lastById;
+  }
+
+  /// NEW: total completion count per exercise_id (used for even distribution/rotation)
+  Future<Map<String, int>> _loadCompletionCountByExerciseId() async {
+    final user = supabase.auth.currentUser;
+    if (user == null) return {};
+
+    final rows = await supabase
+        .from('exercise_sessions')
+        .select('exercise_id')
+        .eq('user_id', user.id);
+
+    final Map<String, int> counts = {};
+    for (final row in rows) {
+      final id = (row['exercise_id'] ?? '').toString();
+      if (id.isEmpty) continue;
+      counts[id] = (counts[id] ?? 0) + 1;
+    }
+    return counts;
+  }
+
+  /// NEW: find the most recent local day for a given suggested type (Push/Pull/LegsCore).
+  DateTime? _mostRecentDayForSuggestedType(_SuggestedDayType t) {
+    if (summaryByDay.isEmpty) return null;
+
+    final days = summaryByDay.keys.toList()..sort((a, b) => b.compareTo(a));
+
+    for (final d in days) {
+      final label = (summaryByDay[d]?.dayTypeLabel ?? '').trim().toLowerCase();
+      if (t == _SuggestedDayType.push && label == 'push') return d;
+      if (t == _SuggestedDayType.pull && label == 'pull') return d;
+      if (t == _SuggestedDayType.legsCore && (label == 'legs' || label == 'core')) return d;
+    }
+    return null;
+  }
+
+  /// NEW: get distinct exercise_ids used on a given local day
+  Future<Set<String>> _loadExerciseIdsUsedOnLocalDay(DateTime day) async {
+    final user = supabase.auth.currentUser;
+    if (user == null) return {};
+
+    final startLocal = DateTime(day.year, day.month, day.day);
+    final endLocal = startLocal.add(const Duration(days: 1));
+
+    // created_at is timestamptz; compare using UTC instants.
+    final startUtc = startLocal.toUtc().toIso8601String();
+    final endUtc = endLocal.toUtc().toIso8601String();
+
+    final rows = await supabase
+        .from('exercise_sessions')
+        .select('exercise_id, created_at')
+        .eq('user_id', user.id)
+        .gte('created_at', startUtc)
+        .lt('created_at', endUtc);
+
+    final ids = <String>{};
+    for (final r in rows) {
+      final id = (r['exercise_id'] ?? '').toString();
+      if (id.isNotEmpty) ids.add(id);
+    }
+    return ids;
   }
 
   // ✅ NEW: If a suggestion exists today, offer "Resume" vs "Generate new"
@@ -1042,22 +1106,6 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
     await _buildSuggestedRoutine(minutes, randomize: false);
   }
 
-  int _isoWeekKey(DateTime d) {
-    if (d.millisecondsSinceEpoch == 0) return 0;
-
-    final date = DateTime(d.year, d.month, d.day);
-    final weekday = date.weekday;
-    final thursday = date.add(Duration(days: 4 - weekday));
-    final weekYear = thursday.year;
-
-    final jan4 = DateTime(weekYear, 1, 4);
-    final jan4Weekday = jan4.weekday;
-    final firstThursday = jan4.add(Duration(days: 4 - jan4Weekday));
-
-    final weekNum = 1 + ((thursday.difference(firstThursday).inDays) ~/ 7);
-    return weekYear * 100 + weekNum;
-  }
-
   Future<void> _buildSuggestedRoutine(int minutes, {bool randomize = false}) async {
     if (_isSuggesting) return;
 
@@ -1076,6 +1124,13 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
       final volByGroup = await _loadTotalVolumeByCanonicalGroup();
       final allExercises = await _loadMyExercises();
       final lastPerformedById = await _loadLastPerformedAtByExerciseId();
+      final completionCountById = await _loadCompletionCountByExerciseId();
+
+      // 🚫 Exclude exercises from the most recent workout of THIS suggested type
+      final lastSameTypeDay = _mostRecentDayForSuggestedType(suggestedType);
+      final excludeIds = lastSameTypeDay == null
+          ? <String>{}
+          : await _loadExerciseIdsUsedOnLocalDay(lastSameTypeDay);
 
       final neverDone = DateTime.fromMillisecondsSinceEpoch(0);
 
@@ -1084,9 +1139,64 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
         return lastPerformedById[id] ?? neverDone;
       }
 
+      int _countFor(Map<String, dynamic> ex) {
+        final id = (ex['id'] ?? '').toString();
+        return completionCountById[id] ?? 0;
+      }
+
+      int _compareFair(Map<String, dynamic> a, Map<String, dynamic> b) {
+        final ac = _countFor(a);
+        final bc = _countFor(b);
+        if (ac != bc) return ac.compareTo(bc); // ✅ least completed first
+
+        final at = _lastTimeFor(a);
+        final bt = _lastTimeFor(b);
+        final timeCmp = at.compareTo(bt); // ✅ longest since LAST performed next
+        if (timeCmp != 0) return timeCmp;
+
+        final an = (a['name'] ?? '').toString().toLowerCase();
+        final bn = (b['name'] ?? '').toString().toLowerCase();
+        return an.compareTo(bn);
+      }
+
+      void _shuffleTopTier(List<Map<String, dynamic>> list) {
+        if (list.length <= 1) return;
+
+        // list should already be sorted by _compareFair
+        final bestCount = _countFor(list.first);
+        final bestTime = _lastTimeFor(list.first);
+
+        // Shuffle among candidates that are equally "eligible":
+        // same completion count, and within 7 days of the oldest candidate in this tier.
+        final tier = <Map<String, dynamic>>[];
+        for (final ex in list) {
+          final c = _countFor(ex);
+          final t = _lastTimeFor(ex);
+          final withinWindow = t.difference(bestTime).inDays.abs() <= 7;
+          if (c == bestCount && withinWindow) {
+            tier.add(ex);
+          } else {
+            break;
+          }
+        }
+
+        if (tier.length >= 2) {
+          tier.shuffle(Random());
+          for (int i = 0; i < tier.length; i++) {
+            list[i] = tier[i];
+          }
+        }
+      }
+
       final relevantGroups = _muscleGroupsForSuggestedType(suggestedType);
 
       final pool = allExercises.where((ex) {
+        final id = (ex['id'] ?? '').toString();
+        if (id.isEmpty) return false;
+
+        // 🚫 never suggest anything from the most recent same-type day
+        if (excludeIds.contains(id)) return false;
+
         final name = (ex['name'] ?? '').toString().trim();
         if (name.isEmpty) return false;
 
@@ -1099,7 +1209,7 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
         if (suggestedType == _SuggestedDayType.pull) {
           return (ex['type'] ?? '').toString().toLowerCase() == 'pull';
         }
-        return true;
+        return true; // legs/core uses muscle group match only
       }).toList();
 
       if (pool.isEmpty) {
@@ -1149,33 +1259,8 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
         final need = takeCount[g] ?? 0;
         if (need <= 0) continue;
 
-        list.sort((a, b) {
-          final at = _lastTimeFor(a);
-          final bt = _lastTimeFor(b);
-          final cmp = at.compareTo(bt);
-          if (cmp != 0) return cmp;
-
-          final an = (a['name'] ?? '').toString().toLowerCase();
-          final bn = (b['name'] ?? '').toString().toLowerCase();
-          return an.compareTo(bn);
-        });
-
-        if (randomize) {
-          int start = 0;
-          while (start < list.length) {
-            final wk = _isoWeekKey(_lastTimeFor(list[start]));
-            int end = start + 1;
-            while (end < list.length && _isoWeekKey(_lastTimeFor(list[end])) == wk) {
-              end++;
-            }
-            final sub = list.sublist(start, end);
-            sub.shuffle(Random());
-            for (int i = 0; i < sub.length; i++) {
-              list[start + i] = sub[i];
-            }
-            start = end;
-          }
-        }
+        list.sort(_compareFair);
+        if (randomize) _shuffleTopTier(list);
 
         picked.addAll(list.take(need));
       }
@@ -1188,33 +1273,8 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
           return id.isNotEmpty && !alreadyIds.contains(id);
         }).toList();
 
-        remaining.sort((a, b) {
-          final at = _lastTimeFor(a);
-          final bt = _lastTimeFor(b);
-          final cmp = at.compareTo(bt);
-          if (cmp != 0) return cmp;
-
-          final an = (a['name'] ?? '').toString().toLowerCase();
-          final bn = (b['name'] ?? '').toString().toLowerCase();
-          return an.compareTo(bn);
-        });
-
-        if (randomize) {
-          int start = 0;
-          while (start < remaining.length) {
-            final wk = _isoWeekKey(_lastTimeFor(remaining[start]));
-            int end = start + 1;
-            while (end < remaining.length && _isoWeekKey(_lastTimeFor(remaining[end])) == wk) {
-              end++;
-            }
-            final sub = remaining.sublist(start, end);
-            sub.shuffle(Random());
-            for (int i = 0; i < sub.length; i++) {
-              remaining[start + i] = sub[i];
-            }
-            start = end;
-          }
-        }
+        remaining.sort(_compareFair);
+        if (randomize) _shuffleTopTier(remaining);
 
         for (final ex in remaining) {
           if (picked.length >= totalExercisesTarget) break;
@@ -1281,7 +1341,6 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
               ],
             ),
             const SizedBox(height: 6),
-
             Row(
               children: [
                 Container(
@@ -1299,7 +1358,6 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 ),
               ],
             ),
-
             const SizedBox(height: 10),
             Center(
               child: OutlinedButton.icon(
@@ -1314,7 +1372,6 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
               ),
             ),
             const SizedBox(height: 10),
-
             if (s.exercises.isEmpty)
               const Text('No matching exercises found for this suggestion.')
             else
@@ -1451,7 +1508,8 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
                               children: [
                                 Text(_formatDate(date), style: const TextStyle(fontWeight: FontWeight.bold)),
                                 const SizedBox(width: 8),
-                                Text('${s.workoutDurationMinutes} min', style: Theme.of(context).textTheme.bodySmall),
+                                Text('${s.workoutDurationMinutes} min',
+                                    style: Theme.of(context).textTheme.bodySmall),
                               ],
                             ),
                           ),
