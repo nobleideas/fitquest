@@ -1,7 +1,10 @@
+import 'dart:convert';
 import 'dart:math';
+
 import 'package:flutter/material.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'exercise_session_page.dart';
 
@@ -45,7 +48,7 @@ class _SuggestedRoutine {
   });
 }
 
-class HomePageState extends State<HomePage> {
+class HomePageState extends State<HomePage> with WidgetsBindingObserver {
   final supabase = Supabase.instance.client;
 
   bool isLoading = true;
@@ -63,6 +66,9 @@ class HomePageState extends State<HomePage> {
   bool _isSuggesting = false;
   int? _lastSuggestedMinutes;
 
+  // Tracks which local day this suggestion belongs to (YYYY-MM-DD)
+  String? _suggestedRoutineDayKey;
+
   Future<void> refresh() async {
     await _loadRecentExercises();
   }
@@ -70,13 +76,27 @@ class HomePageState extends State<HomePage> {
   @override
   void initState() {
     super.initState();
-    _loadRecentExercises();
+    WidgetsBinding.instance.addObserver(this);
+
+    // Restore suggestion (if any) then load summary
+    _restoreSuggestedRoutineIfAny().then((_) => _loadRecentExercises());
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _reportController.dispose();
     super.dispose();
+  }
+
+  // Persist when app goes to background / inactive
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
+      _persistSuggestedRoutine();
+    }
   }
 
   // ===================== NEW: open exercise session from suggestion =====================
@@ -90,7 +110,8 @@ class HomePageState extends State<HomePage> {
     );
 
     if (!mounted) return;
-    await _loadRecentExercises(); // suggestion list stays the same (Option A)
+    await _loadRecentExercises(); // keep suggestion list the same
+    await _persistSuggestedRoutine(); // keep persisted routine up to date
   }
 
   // ---------------- Bug/Suggestion report system ----------------
@@ -223,6 +244,154 @@ class HomePageState extends State<HomePage> {
     final u = (_username ?? '').trim();
     if (u.isEmpty) return '@user';
     return u.startsWith('@') ? u : '@$u';
+  }
+
+  // ===================== Suggested routine persistence =====================
+
+  String _dayKeyLocal(DateTime d) =>
+      '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
+  String _prefKeyRoutine(String userId) => 'suggested_routine_v1_$userId';
+  String _prefKeyMinutes(String userId) => 'suggested_routine_minutes_v1_$userId';
+
+  Future<void> _persistSuggestedRoutine() async {
+    final user = supabase.auth.currentUser;
+    final s = _suggestedRoutine;
+    if (user == null || s == null) return;
+
+    final prefs = await SharedPreferences.getInstance();
+    final payload = <String, dynamic>{
+      'dayKey': _suggestedRoutineDayKey ?? _dayKeyLocal(DateTime.now()),
+      'createdAt': DateTime.now().toIso8601String(),
+      'dayType': s.dayType.name, // push / pull / legsCore
+      'minutes': s.minutes,
+      'exerciseIds': s.exercises.map((e) => (e['id'] ?? '').toString()).toList(),
+    };
+
+    await prefs.setString(_prefKeyRoutine(user.id), jsonEncode(payload));
+    await prefs.setInt(_prefKeyMinutes(user.id), s.minutes);
+  }
+
+  Future<void> _clearPersistedSuggestedRoutine() async {
+    final user = supabase.auth.currentUser;
+    if (user == null) return;
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_prefKeyRoutine(user.id));
+    await prefs.remove(_prefKeyMinutes(user.id));
+  }
+
+  _SuggestedDayType? _parseDayType(String? s) {
+    switch (s) {
+      case 'push':
+        return _SuggestedDayType.push;
+      case 'pull':
+        return _SuggestedDayType.pull;
+      case 'legsCore':
+        return _SuggestedDayType.legsCore;
+    }
+    return null;
+  }
+
+  Future<List<Map<String, dynamic>>> _loadExercisesByIdsInOrder(List<String> ids) async {
+    final user = supabase.auth.currentUser;
+    if (user == null || ids.isEmpty) return [];
+
+    final rows = await supabase
+        .from('exercises')
+        .select('id, name, type, primary_muscle_group, video_url, equipment:equipment_id(name)')
+        .eq('user_id', user.id)
+        .inFilter('id', ids);
+
+    final list = rows is List ? List<Map<String, dynamic>>.from(rows) : <Map<String, dynamic>>[];
+
+    for (final ex in list) {
+      final equipment = ex['equipment'];
+      if (equipment is Map) {
+        ex['equipment_name'] = (equipment['name'] ?? '').toString();
+      } else {
+        ex['equipment_name'] = '';
+      }
+    }
+
+    final byId = <String, Map<String, dynamic>>{
+      for (final ex in list) (ex['id'] ?? '').toString(): ex,
+    };
+
+    final ordered = <Map<String, dynamic>>[];
+    for (final id in ids) {
+      final ex = byId[id];
+      if (ex != null) ordered.add(ex);
+    }
+
+    return ordered;
+  }
+
+  Future<void> _restoreSuggestedRoutineIfAny() async {
+    final user = supabase.auth.currentUser;
+    if (user == null) return;
+
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_prefKeyRoutine(user.id));
+    if (raw == null || raw.trim().isEmpty) return;
+
+    try {
+      final data = jsonDecode(raw) as Map<String, dynamic>;
+      final dayKey = (data['dayKey'] ?? '').toString();
+      final todayKey = _dayKeyLocal(DateTime.now());
+
+      // Only restore if created today
+      if (dayKey != todayKey) {
+        await _clearPersistedSuggestedRoutine();
+        return;
+      }
+
+      final dayType = _parseDayType((data['dayType'] ?? '').toString());
+      final minutes = int.tryParse((data['minutes'] ?? '').toString()) ?? 0;
+
+      final idsDynamic = data['exerciseIds'];
+      final ids = (idsDynamic is List)
+          ? idsDynamic.map((e) => e.toString()).where((s) => s.isNotEmpty).toList()
+          : <String>[];
+
+      if (dayType == null || minutes <= 0 || ids.isEmpty) {
+        await _clearPersistedSuggestedRoutine();
+        return;
+      }
+
+      final exercises = await _loadExercisesByIdsInOrder(ids);
+      if (exercises.isEmpty) {
+        await _clearPersistedSuggestedRoutine();
+        return;
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _suggestedRoutine = _SuggestedRoutine(
+          dayType: dayType,
+          minutes: minutes,
+          exercises: exercises,
+        );
+        _lastSuggestedMinutes = minutes;
+        _suggestedRoutineDayKey = todayKey;
+      });
+    } catch (_) {
+      await _clearPersistedSuggestedRoutine();
+    }
+  }
+
+  bool _hasActiveSuggestionToday() {
+    final todayKey = _dayKeyLocal(DateTime.now());
+    return _suggestedRoutine != null && _suggestedRoutineDayKey == todayKey;
+  }
+
+  Future<void> _clearSuggestionInMemoryAndDisk() async {
+    setState(() {
+      _suggestedRoutine = null;
+      _lastSuggestedMinutes = null;
+      _suggestedRoutineDayKey = null;
+    });
+    await _clearPersistedSuggestedRoutine();
   }
 
   // ---------------- Summary logic ----------------
@@ -380,8 +549,7 @@ class HomePageState extends State<HomePage> {
                       const SizedBox(width: 8),
                       TextButton(onPressed: () => toggleAll(false), child: const Text('Clear')),
                       const Spacer(),
-                      Text('${selected.length}/${entries.length}',
-                          style: Theme.of(context).textTheme.bodySmall),
+                      Text('${selected.length}/${entries.length}', style: Theme.of(context).textTheme.bodySmall),
                     ],
                   ),
                   const Divider(height: 16),
@@ -427,8 +595,7 @@ class HomePageState extends State<HomePage> {
               TextButton(
                 onPressed: () async {
                   Navigator.pop(context);
-                  await _shareEntries(entries,
-                      subject: 'Workout Summary (${_filterLabel(_selectedFilter)})');
+                  await _shareEntries(entries, subject: 'Workout Summary (${_filterLabel(_selectedFilter)})');
                 },
                 child: const Text('Share all shown'),
               ),
@@ -463,12 +630,9 @@ class HomePageState extends State<HomePage> {
             child: OutlinedButton(
               style: OutlinedButton.styleFrom(
                 padding: const EdgeInsets.symmetric(vertical: 10),
-                backgroundColor:
-                    isSelected ? Theme.of(context).colorScheme.primary.withOpacity(0.15) : null,
+                backgroundColor: isSelected ? Theme.of(context).colorScheme.primary.withOpacity(0.15) : null,
                 side: BorderSide(
-                  color: isSelected
-                      ? Theme.of(context).colorScheme.primary
-                      : Theme.of(context).dividerColor,
+                  color: isSelected ? Theme.of(context).colorScheme.primary : Theme.of(context).dividerColor,
                 ),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
               ),
@@ -545,8 +709,9 @@ class HomePageState extends State<HomePage> {
         final sessionVolume = w * r;
 
         final exJoined = row['exercises'];
-        final List<Map<String, dynamic>> list =
-            exJoined is List ? List<Map<String, dynamic>>.from(exJoined) : [Map<String, dynamic>.from(exJoined)];
+        final List<Map<String, dynamic>> list = exJoined is List
+            ? List<Map<String, dynamic>>.from(exJoined)
+            : [Map<String, dynamic>.from(exJoined)];
 
         uniqueExercisesByDay.putIfAbsent(day, () => {});
         setCountsByDayByName.putIfAbsent(day, () => {});
@@ -806,6 +971,43 @@ class HomePageState extends State<HomePage> {
     return lastById;
   }
 
+  // ✅ NEW: If a suggestion exists today, offer "Resume" vs "Generate new"
+  Future<void> _handleSuggestButtonPressed() async {
+    // If we have an active suggestion today, give options
+    if (_hasActiveSuggestionToday()) {
+      final choice = await showDialog<String>(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: const Text('Suggested routine in progress'),
+          content: const Text(
+            'You already have a suggested routine for today.\n\n'
+            'Do you want to resume it, or generate a new one?',
+          ),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context, 'cancel'), child: const Text('Cancel')),
+            TextButton(onPressed: () => Navigator.pop(context, 'resume'), child: const Text('Resume')),
+            ElevatedButton(onPressed: () => Navigator.pop(context, 'new'), child: const Text('Generate new')),
+          ],
+        ),
+      );
+
+      if (choice == 'resume') {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Resuming your current suggested routine below.')),
+        );
+        return;
+      }
+
+      if (choice != 'new') return;
+
+      await _clearSuggestionInMemoryAndDisk();
+      // continue to minutes prompt
+    }
+
+    await _openSuggestRoutineDialog();
+  }
+
   Future<void> _openSuggestRoutineDialog() async {
     final controller = TextEditingController(text: '30');
 
@@ -908,7 +1110,9 @@ class HomePageState extends State<HomePage> {
             minutes: minutes,
             exercises: const [],
           );
+          _suggestedRoutineDayKey = _dayKeyLocal(DateTime.now());
         });
+        await _persistSuggestedRoutine();
         return;
       }
 
@@ -1019,13 +1223,18 @@ class HomePageState extends State<HomePage> {
       }
 
       if (!mounted) return;
+
+      final todayKey = _dayKeyLocal(DateTime.now());
       setState(() {
         _suggestedRoutine = _SuggestedRoutine(
           dayType: suggestedType,
           minutes: minutes,
           exercises: picked.take(totalExercisesTarget).toList(),
         );
+        _suggestedRoutineDayKey = todayKey;
       });
+
+      await _persistSuggestedRoutine();
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to build suggestion: $e')));
@@ -1064,14 +1273,15 @@ class HomePageState extends State<HomePage> {
                 ),
                 IconButton(
                   tooltip: 'Clear',
-                  onPressed: () => setState(() => _suggestedRoutine = null),
+                  onPressed: () async {
+                    await _clearSuggestionInMemoryAndDisk();
+                  },
                   icon: const Icon(Icons.close),
                 ),
               ],
             ),
             const SizedBox(height: 6),
 
-            // badges row (no randomize here anymore)
             Row(
               children: [
                 Container(
@@ -1090,7 +1300,6 @@ class HomePageState extends State<HomePage> {
               ],
             ),
 
-            // ✅ center randomize above the exercise list
             const SizedBox(height: 10),
             Center(
               child: OutlinedButton.icon(
@@ -1126,9 +1335,7 @@ class HomePageState extends State<HomePage> {
                         const SizedBox(width: 8),
                         Expanded(
                           child: Text(
-                            equipmentName.isEmpty
-                                ? '$name ($mgLabel)'
-                                : '$name ($mgLabel)  •  $equipmentName',
+                            equipmentName.isEmpty ? '$name ($mgLabel)' : '$name ($mgLabel)  •  $equipmentName',
                             style: const TextStyle(fontWeight: FontWeight.w600),
                           ),
                         ),
@@ -1158,108 +1365,134 @@ class HomePageState extends State<HomePage> {
 
     final entries = _filteredEntries();
 
-    return Padding(
-      padding: const EdgeInsets.all(16.0),
-      child: ListView(
-        children: [
-          Row(
-            children: [
-              Expanded(
-                child: Text('Workout Summary', style: Theme.of(context).textTheme.headlineSmall),
-              ),
-              IconButton(
-                tooltip: 'Suggest Routine',
-                onPressed: _isSuggesting ? null : _openSuggestRoutineDialog,
-                icon: _isSuggesting
-                    ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
-                    : const Icon(Icons.auto_awesome),
-              ),
-              IconButton(
-                tooltip: 'Report a bug / suggestion',
-                onPressed: _isSubmittingReport ? null : _openReportDialog,
-                icon: const Icon(Icons.bug_report_outlined),
-              ),
-              IconButton(
-                tooltip: 'Share',
-                onPressed: entries.isEmpty ? null : _openSharePicker,
-                icon: const Icon(Icons.share),
-              ),
+    return PopScope(
+      canPop: !_hasActiveSuggestionToday(),
+      onPopInvoked: (didPop) async {
+        if (didPop) return;
+        if (!_hasActiveSuggestionToday()) return;
+
+        final leave = await showDialog<bool>(
+          context: context,
+          builder: (_) => AlertDialog(
+            title: const Text('Leave workout?'),
+            content: const Text(
+              'If you leave now, this exact suggested routine might not be suggested again.\n\n'
+              'Good news: your current suggestion is saved and will still be here when you return.',
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Stay')),
+              ElevatedButton(onPressed: () => Navigator.pop(context, true), child: const Text('Leave')),
             ],
           ),
-          const SizedBox(height: 12),
+        );
 
-          _buildSuggestedRoutineCard(context),
-          if (_suggestedRoutine != null) const SizedBox(height: 12),
+        if (leave == true && mounted) {
+          await _persistSuggestedRoutine();
+          Navigator.pop(context);
+        }
+      },
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: ListView(
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text('Workout Summary', style: Theme.of(context).textTheme.headlineSmall),
+                ),
+                IconButton(
+                  tooltip: 'Suggest Routine',
+                  onPressed: _isSuggesting ? null : _handleSuggestButtonPressed,
+                  icon: _isSuggesting
+                      ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Icon(Icons.auto_awesome),
+                ),
+                IconButton(
+                  tooltip: 'Report a bug / suggestion',
+                  onPressed: _isSubmittingReport ? null : _openReportDialog,
+                  icon: const Icon(Icons.bug_report_outlined),
+                ),
+                IconButton(
+                  tooltip: 'Share',
+                  onPressed: entries.isEmpty ? null : _openSharePicker,
+                  icon: const Icon(Icons.share),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
 
-          _buildFilterBar(),
-          const SizedBox(height: 16),
+            _buildSuggestedRoutineCard(context),
+            if (_suggestedRoutine != null) const SizedBox(height: 12),
 
-          if (summaryByDay.isEmpty)
-            const Text('No workouts logged yet.')
-          else if (entries.isEmpty)
-            const Text('No workouts found for this filter.')
-          else
-            ...entries.map((entry) {
-              final date = entry.key;
-              final s = entry.value;
+            _buildFilterBar(),
+            const SizedBox(height: 16),
 
-              final muscleEntries = s.muscleGroupCounts.entries.toList()
-                ..sort((a, b) => b.value.compareTo(a.value));
+            if (summaryByDay.isEmpty)
+              const Text('No workouts logged yet.')
+            else if (entries.isEmpty)
+              const Text('No workouts found for this filter.')
+            else
+              ...entries.map((entry) {
+                final date = entry.key;
+                final s = entry.value;
 
-              return Padding(
-                padding: const EdgeInsets.symmetric(vertical: 10),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Row(
-                            children: [
-                              Text(_formatDate(date), style: const TextStyle(fontWeight: FontWeight.bold)),
-                              const SizedBox(width: 8),
-                              Text('${s.workoutDurationMinutes} min',
-                                  style: Theme.of(context).textTheme.bodySmall),
-                            ],
+                final muscleEntries = s.muscleGroupCounts.entries.toList()
+                  ..sort((a, b) => b.value.compareTo(a.value));
+
+                return Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 10),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Row(
+                              children: [
+                                Text(_formatDate(date), style: const TextStyle(fontWeight: FontWeight.bold)),
+                                const SizedBox(width: 8),
+                                Text('${s.workoutDurationMinutes} min', style: Theme.of(context).textTheme.bodySmall),
+                              ],
+                            ),
                           ),
-                        ),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                          decoration: BoxDecoration(
-                            border: Border.all(color: Theme.of(context).dividerColor),
-                            borderRadius: BorderRadius.circular(16),
-                          ),
-                          child: Text(s.dayTypeLabel, style: const TextStyle(fontWeight: FontWeight.w600)),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 6),
-                    if (muscleEntries.isNotEmpty)
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: muscleEntries.map((e) {
-                          return Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                             decoration: BoxDecoration(
-                              color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                              border: Border.all(color: Theme.of(context).dividerColor),
                               borderRadius: BorderRadius.circular(16),
                             ),
-                            child: Text('${e.key}: ${e.value}'),
-                          );
-                        }).toList(),
+                            child: Text(s.dayTypeLabel, style: const TextStyle(fontWeight: FontWeight.w600)),
+                          ),
+                        ],
                       ),
-                    const SizedBox(height: 8),
-                    ...s.exerciseNames.map((name) {
-                      final sets = s.exerciseSetCountsByName[name] ?? 0;
-                      return Text('• $name ${sets}x');
-                    }),
-                    const Divider(height: 24),
-                  ],
-                ),
-              );
-            }).toList(),
-        ],
+                      const SizedBox(height: 6),
+                      if (muscleEntries.isNotEmpty)
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: muscleEntries.map((e) {
+                            return Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                              decoration: BoxDecoration(
+                                color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                              child: Text('${e.key}: ${e.value}'),
+                            );
+                          }).toList(),
+                        ),
+                      const SizedBox(height: 8),
+                      ...s.exerciseNames.map((name) {
+                        final sets = s.exerciseSetCountsByName[name] ?? 0;
+                        return Text('• $name ${sets}x');
+                      }),
+                      const Divider(height: 24),
+                    ],
+                  ),
+                );
+              }).toList(),
+          ],
+        ),
       ),
     );
   }
