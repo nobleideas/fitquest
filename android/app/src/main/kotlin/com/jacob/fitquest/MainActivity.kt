@@ -1,4 +1,4 @@
-package com.example.flutter_application_template_1
+package com.jacob.fitquest
 
 import io.flutter.embedding.android.FlutterActivity
 

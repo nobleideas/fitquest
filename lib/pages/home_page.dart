@@ -12,10 +12,10 @@ class HomePage extends StatefulWidget {
   const HomePage({super.key});
 
   @override
-  HomePageState createState() => HomePageState();
+  State<HomePage> createState() => HomePageState();
 }
 
-class _DayWorkoutSummary {
+class DayWorkoutSummary {
   final DateTime day;
   final List<String> exerciseNames;
   final Map<String, int> exerciseSetCountsByName;
@@ -23,7 +23,7 @@ class _DayWorkoutSummary {
   final String dayTypeLabel;
   final int workoutDurationMinutes;
 
-  _DayWorkoutSummary({
+  DayWorkoutSummary({
     required this.day,
     required this.exerciseNames,
     required this.exerciseSetCountsByName,
@@ -33,15 +33,15 @@ class _DayWorkoutSummary {
   });
 }
 
-enum _WorkoutFilter { all, push, pull, legs, core }
+enum WorkoutFilter { all, push, pull, legs, core }
 
 class HomePageState extends State<HomePage> with WidgetsBindingObserver {
   final supabase = Supabase.instance.client;
 
   bool isLoading = true;
-  Map<DateTime, _DayWorkoutSummary> summaryByDay = {};
+  Map<DateTime, DayWorkoutSummary> summaryByDay = {};
 
-  _WorkoutFilter _selectedFilter = _WorkoutFilter.all;
+  WorkoutFilter _selectedFilter = WorkoutFilter.all;
 
   bool _isSubmittingReport = false;
   final TextEditingController _reportController = TextEditingController();
@@ -57,7 +57,8 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   // ---------- Persisted suggestion ----------
   static const String _prefsKeySuggestedRoutine = 'home.suggested_routine.v1';
-  static const String _prefsKeyLastSuggestedMinutes = 'home.last_suggested_minutes.v1';
+  static const String _prefsKeyLastSuggestedMinutes =
+      'home.last_suggested_minutes.v1';
 
   // For "close app" warning (Android back / system navigation)
   bool _didShowCloseWarningThisSession = false;
@@ -116,9 +117,9 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
       final exRaw = json['exercises'];
       final List<Map<String, dynamic>> exercises = (exRaw is List)
           ? exRaw
-              .whereType<Map>()
-              .map((m) => Map<String, dynamic>.from(m))
-              .toList()
+                .whereType<Map>()
+                .map((m) => Map<String, dynamic>.from(m))
+                .toList()
           : <Map<String, dynamic>>[];
 
       if (minutes <= 0) return null;
@@ -142,7 +143,9 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
         minutes: minutes,
         dayType: dayType,
         exercises: exercises,
-        message: (message != null && message.trim().isNotEmpty) ? message.trim() : null,
+        message: (message != null && message.trim().isNotEmpty)
+            ? message.trim()
+            : null,
       );
     } catch (_) {
       return null;
@@ -204,7 +207,9 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   // ===================== open exercise session from suggestion =====================
 
-  Future<void> _openExerciseSessionFromSuggestion(Map<String, dynamic> ex) async {
+  Future<void> _openExerciseSessionFromSuggestion(
+    Map<String, dynamic> ex,
+  ) async {
     await Navigator.push(
       context,
       MaterialPageRoute(builder: (_) => ExerciseSessionPage(exercise: ex)),
@@ -233,7 +238,10 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
                   value: _reportType,
                   items: const [
                     DropdownMenuItem(value: 'bug', child: Text('Bug')),
-                    DropdownMenuItem(value: 'suggestion', child: Text('Suggestion')),
+                    DropdownMenuItem(
+                      value: 'suggestion',
+                      child: Text('Suggestion'),
+                    ),
                   ],
                   onChanged: (v) {
                     if (v == null) return;
@@ -259,7 +267,9 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
             ),
             actions: [
               TextButton(
-                onPressed: _isSubmittingReport ? null : () => Navigator.pop(context),
+                onPressed: _isSubmittingReport
+                    ? null
+                    : () => Navigator.pop(context),
                 child: const Text('Cancel'),
               ),
               ElevatedButton.icon(
@@ -289,16 +299,18 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
     final user = supabase.auth.currentUser;
     if (user == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('You must be logged in to submit a report.')),
+        const SnackBar(
+          content: Text('You must be logged in to submit a report.'),
+        ),
       );
       return;
     }
 
     final msg = _reportController.text.trim();
     if (msg.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please enter a message.')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Please enter a message.')));
       return;
     }
 
@@ -317,9 +329,9 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
       );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to submit report: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed to submit report: $e')));
     } finally {
       if (mounted) setState(() => _isSubmittingReport = false);
     }
@@ -355,54 +367,57 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
   bool _isLegsGroup(String group) => group.trim().toLowerCase() == 'legs';
   bool _isCoreGroup(String group) => group.trim().toLowerCase() == 'core';
 
-  String _filterLabel(_WorkoutFilter f) {
+  String _filterLabel(WorkoutFilter f) {
     switch (f) {
-      case _WorkoutFilter.all:
+      case WorkoutFilter.all:
         return 'All';
-      case _WorkoutFilter.push:
+      case WorkoutFilter.push:
         return 'Push';
-      case _WorkoutFilter.pull:
+      case WorkoutFilter.pull:
         return 'Pull';
-      case _WorkoutFilter.legs:
+      case WorkoutFilter.legs:
         return 'Legs';
-      case _WorkoutFilter.core:
+      case WorkoutFilter.core:
         return 'Core';
     }
   }
 
-  bool _matchesFilter(_DayWorkoutSummary s) {
-    if (_selectedFilter == _WorkoutFilter.all) return true;
+  bool _matchesFilter(DayWorkoutSummary s) {
+    if (_selectedFilter == WorkoutFilter.all) return true;
     final label = s.dayTypeLabel.trim().toLowerCase();
     switch (_selectedFilter) {
-      case _WorkoutFilter.all:
+      case WorkoutFilter.all:
         return true;
-      case _WorkoutFilter.push:
+      case WorkoutFilter.push:
         return label == 'push';
-      case _WorkoutFilter.pull:
+      case WorkoutFilter.pull:
         return label == 'pull';
-      case _WorkoutFilter.legs:
+      case WorkoutFilter.legs:
         return label == 'legs';
-      case _WorkoutFilter.core:
+      case WorkoutFilter.core:
         return label == 'core';
     }
   }
 
   String _formatDate(DateTime d) => '${d.month}/${d.day}/${d.year}';
 
-  List<MapEntry<DateTime, _DayWorkoutSummary>> _filteredEntries() {
-    final list = summaryByDay.entries.where((e) => _matchesFilter(e.value)).toList()
-      ..sort((a, b) => b.key.compareTo(a.key));
+  List<MapEntry<DateTime, DayWorkoutSummary>> _filteredEntries() {
+    final list =
+        summaryByDay.entries.where((e) => _matchesFilter(e.value)).toList()
+          ..sort((a, b) => b.key.compareTo(a.key));
     return list;
   }
 
   String _buildShareText(
-    List<MapEntry<DateTime, _DayWorkoutSummary>> entries, {
+    List<MapEntry<DateTime, DayWorkoutSummary>> entries, {
     String? titleOverride,
   }) {
     final filterName = _filterLabel(_selectedFilter);
     final b = StringBuffer();
 
-    final title = titleOverride ?? 'Fit Quest — Workout Summary for ${_shareHandle()} ($filterName)';
+    final title =
+        titleOverride ??
+        'Fit Quest — Workout Summary for ${_shareHandle()} ($filterName)';
     b.writeln(title);
     b.writeln('');
 
@@ -418,9 +433,12 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
       final durationText = ' • ${s.workoutDurationMinutes} min';
       b.writeln('${_formatDate(date)}$durationText — ${s.dayTypeLabel}');
 
-      final muscles = s.muscleGroupCounts.entries.toList()..sort((a, b) => b.value.compareTo(a.value));
+      final muscles = s.muscleGroupCounts.entries.toList()
+        ..sort((a, b) => b.value.compareTo(a.value));
       if (muscles.isNotEmpty) {
-        b.writeln('Muscles: ${muscles.map((e) => '${e.key}(${e.value})').join(', ')}');
+        b.writeln(
+          'Muscles: ${muscles.map((e) => '${e.key}(${e.value})').join(', ')}',
+        );
       }
 
       if (s.exerciseNames.isNotEmpty) {
@@ -438,7 +456,7 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
   }
 
   Future<void> _shareEntries(
-    List<MapEntry<DateTime, _DayWorkoutSummary>> entries, {
+    List<MapEntry<DateTime, DayWorkoutSummary>> entries, {
     String? subject,
   }) async {
     await _loadUsernameIfNeeded();
@@ -473,20 +491,30 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
                   Row(
                     children: [
                       Expanded(
-                        child: Text('Select one or more days to share.',
-                            style: Theme.of(context).textTheme.bodyMedium),
+                        child: Text(
+                          'Select one or more days to share.',
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
                       ),
                     ],
                   ),
                   const SizedBox(height: 8),
                   Row(
                     children: [
-                      TextButton(onPressed: () => toggleAll(true), child: const Text('Select all')),
+                      TextButton(
+                        onPressed: () => toggleAll(true),
+                        child: const Text('Select all'),
+                      ),
                       const SizedBox(width: 8),
-                      TextButton(onPressed: () => toggleAll(false), child: const Text('Clear')),
+                      TextButton(
+                        onPressed: () => toggleAll(false),
+                        child: const Text('Clear'),
+                      ),
                       const Spacer(),
-                      Text('${selected.length}/${entries.length}',
-                          style: Theme.of(context).textTheme.bodySmall),
+                      Text(
+                        '${selected.length}/${entries.length}',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
                     ],
                   ),
                   const Divider(height: 16),
@@ -502,7 +530,11 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
                         final isChecked = selected.contains(day);
 
                         final subtitleParts = <String>[];
-                        if (s.exerciseNames.isNotEmpty) subtitleParts.add('${s.exerciseNames.length} exercises');
+                        if (s.exerciseNames.isNotEmpty) {
+                          subtitleParts.add(
+                            '${s.exerciseNames.length} exercises',
+                          );
+                        }
                         subtitleParts.add('${s.workoutDurationMinutes} min');
                         subtitleParts.add(s.dayTypeLabel);
 
@@ -528,13 +560,17 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
               ),
             ),
             actions: [
-              TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Cancel'),
+              ),
               TextButton(
                 onPressed: () async {
                   Navigator.pop(context);
                   await _shareEntries(
                     entries,
-                    subject: 'Workout Summary (${_filterLabel(_selectedFilter)})',
+                    subject:
+                        'Workout Summary (${_filterLabel(_selectedFilter)})',
                   );
                 },
                 child: const Text('Share all shown'),
@@ -545,11 +581,14 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 onPressed: selected.isEmpty
                     ? null
                     : () async {
-                        final picked = entries.where((e) => selected.contains(e.key)).toList();
+                        final picked = entries
+                            .where((e) => selected.contains(e.key))
+                            .toList();
                         Navigator.pop(context);
                         await _shareEntries(
                           picked,
-                          subject: 'Workout Summary (${_filterLabel(_selectedFilter)})',
+                          subject:
+                              'Workout Summary (${_filterLabel(_selectedFilter)})',
                         );
                       },
               ),
@@ -562,7 +601,7 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   Widget _buildFilterBar() {
     return Row(
-      children: _WorkoutFilter.values.map((f) {
+      children: WorkoutFilter.values.map((f) {
         final isSelected = _selectedFilter == f;
         return Expanded(
           child: Padding(
@@ -570,11 +609,19 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
             child: OutlinedButton(
               style: OutlinedButton.styleFrom(
                 padding: const EdgeInsets.symmetric(vertical: 10),
-                backgroundColor: isSelected ? Theme.of(context).colorScheme.primary.withOpacity(0.15) : null,
+                backgroundColor: isSelected
+                    ? Theme.of(
+                        context,
+                      ).colorScheme.primary.withValues(alpha: 0.15)
+                    : null,
                 side: BorderSide(
-                  color: isSelected ? Theme.of(context).colorScheme.primary : Theme.of(context).dividerColor,
+                  color: isSelected
+                      ? Theme.of(context).colorScheme.primary
+                      : Theme.of(context).dividerColor,
                 ),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
               ),
               onPressed: () => setState(() => _selectedFilter = f),
               child: FittedBox(
@@ -583,7 +630,9 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
                   _filterLabel(f),
                   style: TextStyle(
                     fontWeight: isSelected ? FontWeight.bold : FontWeight.w600,
-                    color: isSelected ? Theme.of(context).colorScheme.primary : null,
+                    color: isSelected
+                        ? Theme.of(context).colorScheme.primary
+                        : null,
                   ),
                 ),
               ),
@@ -622,12 +671,15 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
       final sessions = await supabase
           .from('exercise_sessions')
-          .select('created_at, weight, reps, exercises!inner(id, name, type, primary_muscle_group)')
+          .select(
+            'created_at, weight, reps, exercises!inner(id, name, type, primary_muscle_group)',
+          )
           .eq('user_id', user.id)
           .order('created_at', ascending: false);
 
       final List<DateTime> workoutDays = [];
-      final Map<DateTime, Map<String, Map<String, dynamic>>> uniqueExercisesByDay = {};
+      final Map<DateTime, Map<String, Map<String, dynamic>>>
+      uniqueExercisesByDay = {};
       final Map<DateTime, Map<String, int>> setCountsByDayByName = {};
       final Map<DateTime, DateTime> firstSessionLocalByDay = {};
       final Map<DateTime, DateTime> lastSessionLocalByDay = {};
@@ -641,8 +693,12 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
         final currentFirst = firstSessionLocalByDay[day];
         final currentLast = lastSessionLocalByDay[day];
-        if (currentFirst == null || local.isBefore(currentFirst)) firstSessionLocalByDay[day] = local;
-        if (currentLast == null || local.isAfter(currentLast)) lastSessionLocalByDay[day] = local;
+        if (currentFirst == null || local.isBefore(currentFirst)) {
+          firstSessionLocalByDay[day] = local;
+        }
+        if (currentLast == null || local.isAfter(currentLast)) {
+          lastSessionLocalByDay[day] = local;
+        }
 
         final w = _numToDouble(row['weight']);
         final r = _numToInt(row['reps']);
@@ -652,8 +708,8 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
         final Map<String, dynamic> ex = exJoined is Map
             ? Map<String, dynamic>.from(exJoined)
             : (exJoined is List && exJoined.isNotEmpty)
-                ? Map<String, dynamic>.from(exJoined.first as Map)
-                : <String, dynamic>{};
+            ? Map<String, dynamic>.from(exJoined.first as Map)
+            : <String, dynamic>{};
 
         if (ex.isEmpty) continue;
 
@@ -666,12 +722,17 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
         final exName = (ex['name'] ?? '').toString().trim();
         if (exName.isNotEmpty) {
-          setCountsByDayByName[day]![exName] = (setCountsByDayByName[day]![exName] ?? 0) + 1;
+          setCountsByDayByName[day]![exName] =
+              (setCountsByDayByName[day]![exName] ?? 0) + 1;
         }
 
         final mg = (ex['primary_muscle_group'] ?? '').toString();
-        if (_isLegsGroup(mg)) legsVolumeByDay[day] = (legsVolumeByDay[day] ?? 0.0) + sessionVolume;
-        if (_isCoreGroup(mg)) coreVolumeByDay[day] = (coreVolumeByDay[day] ?? 0.0) + sessionVolume;
+        if (_isLegsGroup(mg)) {
+          legsVolumeByDay[day] = (legsVolumeByDay[day] ?? 0.0) + sessionVolume;
+        }
+        if (_isCoreGroup(mg)) {
+          coreVolumeByDay[day] = (coreVolumeByDay[day] ?? 0.0) + sessionVolume;
+        }
       }
 
       final orderedUniqueDays = <DateTime>[];
@@ -679,17 +740,19 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
         if (!orderedUniqueDays.contains(d)) orderedUniqueDays.add(d);
       }
 
-      final Map<DateTime, _DayWorkoutSummary> result = {};
+      final Map<DateTime, DayWorkoutSummary> result = {};
 
       for (final day in orderedUniqueDays) {
-        final uniqueExercises = (uniqueExercisesByDay[day] ?? {}).values.toList();
+        final uniqueExercises = (uniqueExercisesByDay[day] ?? {}).values
+            .toList();
 
-        final names = uniqueExercises
-            .map((e) => (e['name'] ?? '').toString())
-            .where((s) => s.trim().isNotEmpty)
-            .toSet()
-            .toList()
-          ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+        final names =
+            uniqueExercises
+                .map((e) => (e['name'] ?? '').toString())
+                .where((s) => s.trim().isNotEmpty)
+                .toSet()
+                .toList()
+              ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
 
         final Map<String, int> muscleCounts = {};
         int push = 0, pull = 0, legs = 0, core = 0;
@@ -731,10 +794,12 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
           if (durationMin < 0) durationMin = 0;
         }
 
-        result[day] = _DayWorkoutSummary(
+        result[day] = DayWorkoutSummary(
           day: day,
           exerciseNames: names,
-          exerciseSetCountsByName: Map<String, int>.from(setCountsByDayByName[day] ?? const {}),
+          exerciseSetCountsByName: Map<String, int>.from(
+            setCountsByDayByName[day] ?? const {},
+          ),
           muscleGroupCounts: muscleCounts,
           dayTypeLabel: label,
           workoutDurationMinutes: durationMin,
@@ -749,9 +814,9 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
       if (!mounted) return;
 
       setState(() => summaryByDay = {});
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to load workouts: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed to load workouts: $e')));
     } finally {
       if (mounted) setState(() => isLoading = false);
     }
@@ -784,7 +849,9 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
   }
 
   Future<void> _openSuggestRoutineDialog() async {
-    final minutesController = TextEditingController(text: _lastSuggestedMinutes.toString());
+    final minutesController = TextEditingController(
+      text: _lastSuggestedMinutes.toString(),
+    );
     SuggestedDayTypeChoice choice = _defaultChoice;
 
     final res = await showDialog<_SuggestDialogResult>(
@@ -811,7 +878,12 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 border: OutlineInputBorder(),
               ),
               items: SuggestedDayTypeChoice.values
-                  .map((c) => DropdownMenuItem(value: c, child: Text(_choiceLabel(c))))
+                  .map(
+                    (c) => DropdownMenuItem(
+                      value: c,
+                      child: Text(_choiceLabel(c)),
+                    ),
+                  )
                   .toList(),
               onChanged: (v) {
                 if (v == null) return;
@@ -821,12 +893,18 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
           ],
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
           ElevatedButton(
             onPressed: () {
               final m = int.tryParse(minutesController.text.trim());
               if (m == null || m <= 0) return;
-              Navigator.pop(context, _SuggestDialogResult(minutes: m, choice: choice));
+              Navigator.pop(
+                context,
+                _SuggestDialogResult(minutes: m, choice: choice),
+              );
             },
             child: const Text('Suggest'),
           ),
@@ -838,7 +916,11 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
     _lastSuggestedMinutes = res.minutes;
     await _persistSuggestedRoutineToPrefs();
 
-    await _buildSuggestedRoutine(minutes: res.minutes, choice: res.choice, randomize: false);
+    await _buildSuggestedRoutine(
+      minutes: res.minutes,
+      choice: res.choice,
+      randomize: false,
+    );
   }
 
   Future<void> _buildSuggestedRoutine({
@@ -867,15 +949,15 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
       await _persistSuggestedRoutineToPrefs();
 
       if (routine.exercises.isEmpty && routine.message != null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(routine.message!)),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(routine.message!)));
       }
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to build suggestion: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed to build suggestion: $e')));
     } finally {
       if (mounted) setState(() => _isSuggesting = false);
     }
@@ -893,8 +975,14 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
           'This will clear your current suggested routine. You can always generate another later.',
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-          ElevatedButton(onPressed: () => Navigator.pop(context, true), child: const Text('Remove')),
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Remove'),
+          ),
         ],
       ),
     );
@@ -920,12 +1008,14 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
             'Good news: Fit Quest now saves your current suggestion automatically.',
           ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Got it')),
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Got it'),
+            ),
           ],
         ),
       );
 
-      // Don’t block the back action permanently; after warning, allow normal behavior.
       // Persist just in case.
       await _persistSuggestedRoutineToPrefs();
     }
@@ -950,14 +1040,14 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
           children: [
             Row(
               children: [
-                const Icon(Icons.casino), // you can swap this to a custom icon later
+                const Icon(Icons.casino),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
                     'Suggested Routine',
                     style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.w800,
-                        ),
+                      fontWeight: FontWeight.w800,
+                    ),
                   ),
                 ),
                 IconButton(
@@ -971,12 +1061,18 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
             Row(
               children: [
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 4,
+                  ),
                   decoration: BoxDecoration(
                     border: Border.all(color: Theme.of(context).dividerColor),
                     borderRadius: BorderRadius.circular(16),
                   ),
-                  child: Text(title, style: const TextStyle(fontWeight: FontWeight.w700)),
+                  child: Text(
+                    title,
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
                 ),
                 const SizedBox(width: 10),
                 Text(
@@ -995,7 +1091,8 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
                     : () async {
                         await _buildSuggestedRoutine(
                           minutes: s.minutes,
-                          choice: SuggestedDayTypeChoice.auto, // ignored during randomize; type stays fixed
+                          choice: SuggestedDayTypeChoice
+                              .auto, // ignored during randomize; type stays fixed
                           randomize: true,
                         );
                       },
@@ -1008,20 +1105,27 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
               ...s.exercises.map((ex) {
                 final name = (ex['name'] ?? '').toString();
                 final mg = (ex['primary_muscle_group'] ?? '').toString();
-                final equipmentName = (ex['equipment_name'] ?? '').toString().trim();
+                final equipmentName = (ex['equipment_name'] ?? '')
+                    .toString()
+                    .trim();
 
                 return InkWell(
                   borderRadius: BorderRadius.circular(10),
                   onTap: () => _openExerciseSessionFromSuggestion(ex),
                   child: Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 6),
+                    padding: const EdgeInsets.symmetric(
+                      vertical: 8,
+                      horizontal: 6,
+                    ),
                     child: Row(
                       children: [
                         const Icon(Icons.play_arrow_rounded, size: 18),
                         const SizedBox(width: 8),
                         Expanded(
                           child: Text(
-                            equipmentName.isEmpty ? '$name ($mg)' : '$name ($mg)  •  $equipmentName',
+                            equipmentName.isEmpty
+                                ? '$name ($mg)'
+                                : '$name ($mg)  •  $equipmentName',
                             style: const TextStyle(fontWeight: FontWeight.w600),
                           ),
                         ),
@@ -1051,14 +1155,18 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
     final entries = _filteredEntries();
 
-    // Wrap entire page in a PopScope to show a warning once when leaving.
+    // ✅ BEFORE-pop handling: prevent pop, show warning once, then pop manually.
     return PopScope(
-      canPop: true,
-      onPopInvoked: (didPop) async {
-        // onPopInvoked runs after the pop attempt; for a "before pop" warning,
-        // we handle it by showing a dialog once (non-blocking) and persisting state.
-        if (!didPop) return;
-        await _handleBackPressedWithWarning();
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) async {
+        if (didPop) return;
+
+        final allow = await _handleBackPressedWithWarning();
+        if (!mounted) return;
+
+        if (allow) {
+          Navigator.of(context).pop(result);
+        }
       },
       child: Padding(
         padding: const EdgeInsets.all(16.0),
@@ -1067,13 +1175,20 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
             Row(
               children: [
                 Expanded(
-                  child: Text('Workout Summary', style: Theme.of(context).textTheme.headlineSmall),
+                  child: Text(
+                    'Workout Summary',
+                    style: Theme.of(context).textTheme.headlineSmall,
+                  ),
                 ),
                 IconButton(
                   tooltip: 'Suggest Routine',
                   onPressed: _isSuggesting ? null : _openSuggestRoutineDialog,
                   icon: _isSuggesting
-                      ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
                       : const Icon(Icons.casino),
                 ),
                 IconButton(
@@ -1118,19 +1233,37 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
                           Expanded(
                             child: Row(
                               children: [
-                                Text(_formatDate(date), style: const TextStyle(fontWeight: FontWeight.bold)),
+                                Text(
+                                  _formatDate(date),
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
                                 const SizedBox(width: 8),
-                                Text('${s.workoutDurationMinutes} min', style: Theme.of(context).textTheme.bodySmall),
+                                Text(
+                                  '${s.workoutDurationMinutes} min',
+                                  style: Theme.of(context).textTheme.bodySmall,
+                                ),
                               ],
                             ),
                           ),
                           Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 4,
+                            ),
                             decoration: BoxDecoration(
-                              border: Border.all(color: Theme.of(context).dividerColor),
+                              border: Border.all(
+                                color: Theme.of(context).dividerColor,
+                              ),
                               borderRadius: BorderRadius.circular(16),
                             ),
-                            child: Text(s.dayTypeLabel, style: const TextStyle(fontWeight: FontWeight.w600)),
+                            child: Text(
+                              s.dayTypeLabel,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
                           ),
                         ],
                       ),
@@ -1141,9 +1274,14 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
                           runSpacing: 8,
                           children: muscleEntries.map((e) {
                             return Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 10,
+                                vertical: 6,
+                              ),
                               decoration: BoxDecoration(
-                                color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                                color: Theme.of(
+                                  context,
+                                ).colorScheme.surfaceContainerHighest,
                                 borderRadius: BorderRadius.circular(16),
                               ),
                               child: Text('${e.key}: ${e.value}'),
@@ -1171,8 +1309,5 @@ class _SuggestDialogResult {
   final int minutes;
   final SuggestedDayTypeChoice choice;
 
-  _SuggestDialogResult({
-    required this.minutes,
-    required this.choice,
-  });
+  _SuggestDialogResult({required this.minutes, required this.choice});
 }

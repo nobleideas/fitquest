@@ -253,7 +253,7 @@ class _AuthPageState extends State<AuthPage> {
                     width: double.infinity,
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: Colors.green.withOpacity(0.12),
+                      color: Colors.green.withValues(alpha: 0.12),
                       borderRadius: BorderRadius.circular(10),
                     ),
                     child: Text(successMessage!, style: const TextStyle(color: Colors.green)),
@@ -266,7 +266,7 @@ class _AuthPageState extends State<AuthPage> {
                     width: double.infinity,
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: Colors.red.withOpacity(0.10),
+                      color: Colors.red.withValues(alpha: 0.10),
                       borderRadius: BorderRadius.circular(10),
                     ),
                     child: Text(errorMessage!, style: const TextStyle(color: Colors.red)),

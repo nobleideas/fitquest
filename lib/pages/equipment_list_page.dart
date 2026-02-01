@@ -21,18 +21,6 @@ class EquipmentListPageState extends State<EquipmentListPage> {
   /// Equipment IDs that have at least one exercise session today
   Set<String> equipmentWithSessionsToday = {};
 
-  // ---------- PRIMARY MUSCLE GROUP FILTER ----------
-  // Used for filtering logic if you need it elsewhere
-  static const List<String> _muscleFilters = [
-    'All',
-    'Chest',
-    'Shoulders',
-    'Back',
-    'Arms',
-    'Legs',
-    'Core',
-  ];
-
   // Used ONLY for display placement (3 cols x 3 rows)
   // Core forced to column 2 row 3 via null placeholders
   static const List<String?> _muscleFiltersGrid = [
@@ -171,32 +159,33 @@ class EquipmentListPageState extends State<EquipmentListPage> {
 
   /// Build mapping: equipment_id -> {primary_muscle_group...}
   Future<Map<String, Set<String>>> _loadEquipmentMuscleGroups(
-    List<String> equipmentIds,
-  ) async {
-    if (equipmentIds.isEmpty) return {};
+  List<String> equipmentIds,
+) async {
+  if (equipmentIds.isEmpty) return {};
 
-    // NOTE: Assumes exercises has columns: equipment_id, primary_muscle_group
-    final rows = await supabase
-        .from('exercises')
-        .select('equipment_id, primary_muscle_group')
-        .inFilter('equipment_id', equipmentIds);
+  final rowsRaw = await supabase
+      .from('exercises')
+      .select('equipment_id, primary_muscle_group')
+      .inFilter('equipment_id', equipmentIds);
 
-    final map = <String, Set<String>>{};
+  final rows = rowsRaw.whereType<Map<String, dynamic>>().toList();
 
-    for (final row in rows) {
-      if (row is! Map) continue;
+  final map = <String, Set<String>>{};
 
-      final eqId = row['equipment_id']?.toString();
-      if (eqId == null || eqId.isEmpty) continue;
+  for (final row in rows) {
+    final eqId = row['equipment_id']?.toString();
+    if (eqId == null || eqId.isEmpty) continue;
 
-      final muscle = _normalizeMuscle(row['primary_muscle_group']);
-      if (muscle.isEmpty) continue;
+    final muscle = _normalizeMuscle(row['primary_muscle_group']);
+    if (muscle.isEmpty) continue;
 
-      map.putIfAbsent(eqId, () => <String>{}).add(muscle);
-    }
-
-    return map;
+    map.putIfAbsent(eqId, () => <String>{}).add(muscle);
   }
+
+  return map;
+}
+
+
 
   /// Because exercise_sessions references exercise_id,
   /// we join to exercises to get exercises.equipment_id

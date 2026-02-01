@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import '../services/equipment_service.dart';
-import 'equipment_list_page.dart';
 
 class ScanPage extends StatefulWidget {
   const ScanPage({super.key});

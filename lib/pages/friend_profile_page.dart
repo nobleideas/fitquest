@@ -414,7 +414,7 @@ class _HistoryTabState extends State<_HistoryTab> {
             style: OutlinedButton.styleFrom(
               padding: const EdgeInsets.symmetric(vertical: 10),
               backgroundColor: isSummary
-                  ? Theme.of(context).colorScheme.primary.withOpacity(0.15)
+                  ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.15)
                   : null,
               side: BorderSide(
                 color: isSummary
@@ -443,7 +443,7 @@ class _HistoryTabState extends State<_HistoryTab> {
             style: OutlinedButton.styleFrom(
               padding: const EdgeInsets.symmetric(vertical: 10),
               backgroundColor: isDetailed
-                  ? Theme.of(context).colorScheme.primary.withOpacity(0.15)
+                  ? Theme.of(context).colorScheme.primary.withValues(alpha: 0.15)
                   : null,
               side: BorderSide(
                 color: isDetailed
