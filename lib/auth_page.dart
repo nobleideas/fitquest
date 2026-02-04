@@ -111,7 +111,7 @@ class _AuthPageState extends State<AuthPage> {
     try {
       await supabase.auth.resetPasswordForEmail(
         email,
-        redirectTo: 'https://supabase-auth-sigma.vercel.app/#/reset-password',
+        redirectTo: 'https://app.fitquest.space/#/reset-password',
       );
       _setSuccess("Check your email for a password reset link.");
     } on AuthException catch (e) {
