@@ -17,6 +17,9 @@ class _AuthPageState extends State<AuthPage> {
   bool isLoading = false;
   bool awaitingConfirmation = false;
 
+  // NEW: show/hide password toggle
+  bool _obscurePassword = true;
+
   String? errorMessage;
   String? successMessage;
 
@@ -203,10 +206,21 @@ class _AuthPageState extends State<AuthPage> {
 
                 TextField(
                   controller: passwordController,
-                  obscureText: true,
-                  decoration: const InputDecoration(
+                  obscureText: _obscurePassword,
+                  decoration: InputDecoration(
                     labelText: 'Password',
-                    border: OutlineInputBorder(),
+                    border: const OutlineInputBorder(),
+                    suffixIcon: IconButton(
+                      tooltip: _obscurePassword ? 'Show password' : 'Hide password',
+                      icon: Icon(
+                        _obscurePassword ? Icons.visibility : Icons.visibility_off,
+                      ),
+                      onPressed: () {
+                        setState(() {
+                          _obscurePassword = !_obscurePassword;
+                        });
+                      },
+                    ),
                   ),
                 ),
                 const SizedBox(height: 12),
@@ -256,7 +270,10 @@ class _AuthPageState extends State<AuthPage> {
                       color: Colors.green.withValues(alpha: 0.12),
                       borderRadius: BorderRadius.circular(10),
                     ),
-                    child: Text(successMessage!, style: const TextStyle(color: Colors.green)),
+                    child: Text(
+                      successMessage!,
+                      style: const TextStyle(color: Colors.green),
+                    ),
                   ),
                 ],
 
@@ -269,7 +286,10 @@ class _AuthPageState extends State<AuthPage> {
                       color: Colors.red.withValues(alpha: 0.10),
                       borderRadius: BorderRadius.circular(10),
                     ),
-                    child: Text(errorMessage!, style: const TextStyle(color: Colors.red)),
+                    child: Text(
+                      errorMessage!,
+                      style: const TextStyle(color: Colors.red),
+                    ),
                   ),
                 ],
               ],
