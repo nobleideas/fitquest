@@ -25,8 +25,6 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
   // --- Last 3 recorded days (stable day-key approach avoids timezone/dup bugs)
   List<String> last3DayKeys = []; // "YYYY-MM-DD"
   Map<String, List<Map<String, dynamic>>> sessionsByDayKey = {};
-
-  // total volume per day key
   Map<String, double> volumeByDayKey = {};
 
   // -------- Profile Goal / Suggestions --------
@@ -86,6 +84,19 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
     if (v is int) return v;
     if (v is num) return v.toInt();
     return int.tryParse(v.toString()) ?? 0;
+  }
+
+  double _roundTo(double value, double step) {
+    if (step <= 0) return value;
+    return (value / step).round() * step;
+  }
+
+  double _median(List<double> values) {
+    if (values.isEmpty) return 0;
+    final sorted = [...values]..sort();
+    final mid = sorted.length ~/ 2;
+    if (sorted.length.isOdd) return sorted[mid];
+    return (sorted[mid - 1] + sorted[mid]) / 2.0;
   }
 
   // ---------- Load user goal ----------
@@ -162,112 +173,143 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
     await _loadLast3DaysAndSessions();
   }
 
-  // ---------- Suggestion logic (volume-based) ----------
+  // ---------- NEW Suggestion logic (working-set anchored + goal-driven) ----------
   void _computeSuggestion() {
     final goal = (_userGoal ?? '').toLowerCase().trim();
 
-    int goalReps;
-    int goalSets;
-    double progressionMultiplier;
+    int targetReps;
+    int targetSets;
 
     switch (goal) {
       case 'gain_strength':
-        goalReps = 5;
-        goalSets = 5;
-        progressionMultiplier = 1.02;
+        targetReps = 5;
+        targetSets = 5;
         break;
       case 'gain_mass':
-        goalReps = 10;
-        goalSets = 4;
-        progressionMultiplier = 1.01;
+        targetReps = 10;
+        targetSets = 4;
         break;
       case 'lose_weight':
-        goalReps = 12;
-        goalSets = 4;
-        progressionMultiplier = 0.97;
+        targetReps = 12;
+        targetSets = 4;
         break;
       default:
-        goalReps = 8;
-        goalSets = 4;
-        progressionMultiplier = 1.01;
+        targetReps = 8;
+        targetSets = 4;
         break;
     }
 
-    // ✅ IMPORTANT: use the most recent day that is NOT today
+    // Use the most recent day that is NOT today
     final todayKey = _todayKey();
     final referenceKey = last3DayKeys.firstWhere(
       (k) => k != todayKey,
       orElse: () => '',
     );
 
-    // If no history day besides today -> no weight, but reps/sets by goal
     if (referenceKey.isEmpty) {
       if (!mounted) return;
       setState(() {
         _suggestedWeight = null;
-        _suggestedReps = goalReps;
-        _suggestedSets = goalSets;
+        _suggestedReps = targetReps;
+        _suggestedSets = targetSets;
         _suggestionNote =
-            "Not enough prior days for this exercise to suggest weight yet — reps/sets suggested from your goal.";
+            "No prior training day found yet for this exercise (excluding today). Showing reps/sets from your goal.";
       });
       return;
     }
 
-    final recentSessions = sessionsByDayKey[referenceKey] ?? const [];
-    final recentVolume = volumeByDayKey[referenceKey] ?? 0.0;
-
-    if (recentSessions.isEmpty || recentVolume <= 0.0) {
+    final sessions = sessionsByDayKey[referenceKey] ?? const [];
+    if (sessions.isEmpty) {
       if (!mounted) return;
       setState(() {
         _suggestedWeight = null;
-        _suggestedReps = goalReps;
-        _suggestedSets = goalSets;
+        _suggestedReps = targetReps;
+        _suggestedSets = targetSets;
         _suggestionNote =
-            "Not enough prior volume to suggest weight — reps/sets suggested from your goal.";
+            "No usable session history on ${_formatDate(_dateFromDayKey(referenceKey))}. Showing reps/sets from your goal.";
       });
       return;
     }
 
-    final reps = goalReps.clamp(1, 30);
-    final sets = goalSets.clamp(1, 12);
+    // Parse sets
+    final sets = sessions
+        .map((s) => (
+              weight: _numToDouble(s['weight']),
+              reps: _numToInt(s['reps']),
+            ))
+        .where((x) => x.weight > 0 && x.reps > 0)
+        .toList();
 
-    final denom = (reps * sets).toDouble();
-    double baseWeight = (recentVolume / denom) * progressionMultiplier;
+    if (sets.isEmpty) {
+      if (!mounted) return;
+      setState(() {
+        _suggestedWeight = null;
+        _suggestedReps = targetReps;
+        _suggestedSets = targetSets;
+        _suggestionNote =
+            "Not enough valid sets to estimate a working weight. Showing reps/sets from your goal.";
+      });
+      return;
+    }
 
-    // Round weight to nearest 2.5
-    const roundTo = 2.5;
-    double roundedWeight = (baseWeight / roundTo).round() * roundTo;
-    if (roundedWeight <= 0) roundedWeight = baseWeight;
+    final maxW = sets.map((x) => x.weight).reduce((a, b) => a > b ? a : b);
 
-    final volText = recentVolume.toStringAsFixed(0);
+    // Filter “working sets” and ignore likely warmups:
+    // keep anything at or above 85% of max weight for that day.
+    final working = sets.where((x) => x.weight >= (0.85 * maxW)).toList();
 
+    // Fallback: if filter too strict, use the top 3 heaviest sets.
+    if (working.isEmpty) {
+      final sorted = [...sets]..sort((a, b) => b.weight.compareTo(a.weight));
+      working.addAll(sorted.take(sorted.length >= 3 ? 3 : sorted.length));
+    }
+
+    final workingWeights = working.map((x) => x.weight).toList();
+    final workingMedianWeight = _median(workingWeights);
+
+    // Determine if you “hit” the target last time:
+    // Count sets near your working weight where reps >= targetReps.
+    final nearWorking = working.where((x) => x.weight >= (0.95 * workingMedianWeight)).toList();
+    final goodSets = nearWorking.where((x) => x.reps >= targetReps).length;
+
+    // Progression step
+    // Default 2.5; bump to 5 if you clearly exceeded reps.
+    double step = 2.5;
+    final crushedSets = nearWorking.where((x) => x.reps >= (targetReps + 2)).length;
+    if (crushedSets >= (targetSets >= 3 ? 3 : targetSets)) {
+      step = 5.0;
+    }
+
+    // Suggest weight:
+    // If you hit at least targetSets good sets last time, add step; else keep.
+    double suggested = workingMedianWeight;
+    final progressed = goodSets >= targetSets;
+    if (progressed) {
+      suggested = workingMedianWeight + step;
+    }
+
+    // Round to nearest 2.5 (your plates reality)
+    suggested = _roundTo(suggested, 2.5);
+
+    final refDate = _formatDate(_dateFromDayKey(referenceKey));
+    final goalText = goal.isEmpty ? "default" : goal.replaceAll('_', ' ');
     final note =
-        "Based on your most recent prior day volume ($volText), distributed as $sets sets × $reps reps${goal.isNotEmpty ? " (${goal.replaceAll('_', ' ')})" : ""}.";
+        "Based on your working sets on $refDate (ignoring warmups). "
+        "Estimated working weight: ${workingMedianWeight.toStringAsFixed(workingMedianWeight % 1 == 0 ? 0 : 1)}. "
+        "You hit $goodSets set(s) at ${targetReps} reps or more near that weight, so next session is ${progressed ? "a small increase" : "the same weight"} "
+        "for $targetSets×$targetReps ($goalText).";
 
     if (!mounted) return;
     setState(() {
-      _suggestedWeight = roundedWeight;
-      _suggestedReps = reps;
-      _suggestedSets = sets;
+      _suggestedWeight = suggested > 0 ? suggested : null;
+      _suggestedReps = targetReps;
+      _suggestedSets = targetSets;
       _suggestionNote = note;
     });
   }
 
-  void _applySuggestionToInputs() {
-    if (_suggestedWeight != null) {
-      final w = _suggestedWeight!;
-      final decimals = (w % 1 == 0) ? 0 : 1;
-      weightController.text = w.toStringAsFixed(decimals);
-    }
-    if (_suggestedReps != null) {
-      repsController.text = _suggestedReps.toString();
-    }
-  }
-
   // ---------- VIDEO: helpers ----------
   Future<String?> _rpcResolveExerciseVideoUrl(String sourceExerciseId) async {
-    // This expects you to have the SECURITY DEFINER RPC:
-    // public.get_exercise_video_url(p_exercise_id uuid) returns text
     try {
       final client = Supabase.instance.client;
       final res = await client.rpc(
@@ -275,7 +317,6 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
         params: {'p_exercise_id': sourceExerciseId},
       );
 
-      // Usually res is a String. But handle common shapes safely.
       if (res == null) return null;
 
       if (res is String) {
@@ -294,7 +335,6 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
       }
 
       if (res is Map) {
-        // might be {get_exercise_video_url: "..."}
         final v = (res.values.isNotEmpty ? res.values.first : '').toString().trim();
         return v.isEmpty ? null : v;
       }
@@ -314,16 +354,13 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
   Future<void> _loadExistingFormVideo() async {
     final client = Supabase.instance.client;
 
-    // Get freshest fields: prefer passed-in, then DB
     final passedMyUrl = (widget.exercise['video_url'] as String?)?.trim();
-    final passedSource = (widget.exercise['video_source_exercise_id'] ?? '')
-        .toString()
-        .trim();
+    final passedSource =
+        (widget.exercise['video_source_exercise_id'] ?? '').toString().trim();
 
     String? myUrl = (passedMyUrl != null && passedMyUrl.isNotEmpty) ? passedMyUrl : null;
     String? sourceId = passedSource.isNotEmpty ? passedSource : null;
 
-    // If caller didn’t include fields, fetch from DB
     if (myUrl == null && sourceId == null) {
       final data = await client
           .from('exercises')
@@ -341,15 +378,12 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
     _myVideoUrl = myUrl;
     _sourceExerciseId = sourceId;
 
-    // Priority:
-    // 1) If I have my own video_url -> show it
     if (myUrl != null && myUrl.isNotEmpty) {
       _formVideoUrl = myUrl;
       await _initVideoPlayerFromUrl(myUrl);
       return;
     }
 
-    // 2) Else if imported -> resolve via RPC (so it works w/ RLS)
     if (sourceId != null && sourceId.isNotEmpty) {
       final srcUrl = await _rpcResolveExerciseVideoUrl(sourceId);
 
@@ -359,7 +393,6 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
         return;
       }
 
-      // source deleted or not accessible -> disappear automatically
       await _clearVideoControllerState();
       if (!mounted) return;
       setState(() {
@@ -368,7 +401,6 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
       return;
     }
 
-    // 3) Nothing
     await _clearVideoControllerState();
     if (!mounted) return;
     setState(() => _formVideoUrl = null);
@@ -396,7 +428,6 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
 
       await _clearVideoControllerState();
 
-      // ✅ Web uses blob/URL string, mobile uses File
       if (kIsWeb) {
         _videoController = VideoPlayerController.networkUrl(Uri.parse(video.path));
       } else {
@@ -427,8 +458,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
     try {
       final client = Supabase.instance.client;
 
-      // bucket id must match exactly
-      final bucketId = 'exercise_form_video';
+      const bucketId = 'exercise_form_video';
       final bucket = client.storage.from(bucketId);
 
       final ext = p.extension(video.name).isNotEmpty ? p.extension(video.name) : '.mp4';
@@ -447,7 +477,6 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
 
       final publicUrl = bucket.getPublicUrl(storagePath);
 
-      // ✅ If user uploads their own video, it should override imports
       await client
           .from('exercises')
           .update({
@@ -476,7 +505,6 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
     }
   }
 
-  // remove existing form video (DB + best-effort storage delete)
   String? _tryExtractStoragePathFromPublicUrl(String url, String bucketId) {
     try {
       final marker = '/storage/v1/object/public/$bucketId/';
@@ -519,17 +547,13 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
 
     try {
       final client = Supabase.instance.client;
-
-      // Capture my current stored url (only attempt storage delete if it was mine)
       final myUrl = (_myVideoUrl ?? '').trim();
 
-      // 1) Clear DB (removes both local and imported reference)
       await client
           .from('exercises')
           .update({'video_url': null, 'video_source_exercise_id': null})
           .eq('id', widget.exercise['id']);
 
-      // 2) Best-effort delete storage object IF it was my uploaded public url
       const bucketId = 'exercise_form_video';
       if (myUrl.isNotEmpty) {
         final bucket = client.storage.from(bucketId);
@@ -537,9 +561,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
         if (storagePath != null) {
           try {
             await bucket.remove([storagePath]);
-          } catch (_) {
-            // ignore; DB cleared is the main goal
-          }
+          } catch (_) {}
         }
       }
 
@@ -660,19 +682,18 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
                         children: [
                           const Icon(Icons.auto_awesome),
                           const SizedBox(width: 8),
-                          Text(
-                            "Suggested Next Session",
-                            style: Theme.of(context).textTheme.titleMedium,
-                          ),
-                          const Spacer(),
-                          TextButton(
-                            onPressed: _applySuggestionToInputs,
-                            child: const Text("Use suggestion"),
+                          Expanded(
+                            child: Text(
+                              "Suggested Next Session",
+                              style: Theme.of(context).textTheme.titleMedium,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
                           ),
                         ],
                       ),
                       if (_suggestionNote != null) ...[
-                        const SizedBox(height: 4),
+                        const SizedBox(height: 6),
                         Text(
                           _suggestionNote!,
                           style: Theme.of(context).textTheme.bodySmall,
@@ -699,7 +720,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
                       ),
                       const SizedBox(height: 6),
                       Text(
-                        "Tip: Log $_suggestedSets sets using the reps above${_suggestedWeight == null ? '' : ' (and weight).'}",
+                        "Tip: Aim for $_suggestedSets × $_suggestedReps${_suggestedWeight == null ? '' : ' at the suggested weight.'}",
                         style: Theme.of(context).textTheme.bodySmall,
                       ),
                     ],
@@ -807,7 +828,6 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
               ],
             ),
 
-            // Remove video button (works for both local + imported)
             if (((_formVideoUrl ?? '').trim().isNotEmpty) ||
                 ((_sourceExerciseId ?? '').trim().isNotEmpty)) ...[
               const SizedBox(height: 10),

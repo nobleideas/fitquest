@@ -32,8 +32,11 @@ class _MainShellState extends State<MainShell> {
   void initState() {
     super.initState();
 
-    // ✅ register push token once when the app shell starts
-    PushTokenService.instance.initAndRegister();
+    // ✅ Register push token once when the app shell starts.
+    // Run after first frame to avoid any startup jank/crash risk.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      PushTokenService.instance.initAndRegister();
+    });
   }
 
   String get _title {
@@ -50,15 +53,9 @@ class _MainShellState extends State<MainShell> {
   }
 
   void _onTap(int i) {
-    if (i == 0) {
-      _homeKey.currentState?.refresh();
-    }
-    if (i == 1) {
-      _equipmentKey.currentState?.refresh();
-    }
-    if (i == 2) {
-      _profileKey.currentState?.refresh();
-    }
+    if (i == 0) _homeKey.currentState?.refresh();
+    if (i == 1) _equipmentKey.currentState?.refresh();
+    if (i == 2) _profileKey.currentState?.refresh();
 
     setState(() => _index = i);
   }
