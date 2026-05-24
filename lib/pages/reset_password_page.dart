@@ -15,24 +15,61 @@ class _ResetPasswordPageState extends State<ResetPasswordPage> {
   final confirmPasswordController = TextEditingController();
 
   String? message;
+
   bool isSaving = false;
+  bool isLoadingSession = true;
+
+  bool showNewPassword = false;
+  bool showConfirmPassword = false;
 
   @override
   void initState() {
     super.initState();
+    _recoverSessionFromResetLink();
+  }
 
-    // After the user clicks the email link, Supabase will redirect here and
-    // the web client should have a recovery session available.
-    // We'll show a helpful message if not.
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      final session = supabase.auth.currentSession;
-      if (session == null) {
-        setState(() {
-          message =
-              "This reset link is not active in this browser session. Please open the newest reset email link again.";
-        });
+  Future<void> _recoverSessionFromResetLink() async {
+    try {
+      // Grab the URL the user opened
+      final uri = Uri.base;
+
+      // Supabase sends ?code=...
+      final code = uri.queryParameters['code'];
+
+      // Exchange code for a real auth session
+      if (code != null && code.isNotEmpty) {
+        await supabase.auth.exchangeCodeForSession(code);
       }
-    });
+
+      final session = supabase.auth.currentSession;
+
+      if (!mounted) return;
+
+      setState(() {
+        isLoadingSession = false;
+
+        if (session == null) {
+          message =
+              "This reset link is not active. Please request a new password reset email and open the newest link.";
+        } else {
+          message = null;
+        }
+      });
+    } on AuthException catch (e) {
+      if (!mounted) return;
+
+      setState(() {
+        isLoadingSession = false;
+        message = e.message;
+      });
+    } catch (e) {
+      if (!mounted) return;
+
+      setState(() {
+        isLoadingSession = false;
+        message = e.toString();
+      });
+    }
   }
 
   Future<void> _setNewPassword() async {
@@ -40,15 +77,32 @@ class _ResetPasswordPageState extends State<ResetPasswordPage> {
     final p2 = confirmPasswordController.text.trim();
 
     if (p1.isEmpty || p2.isEmpty) {
-      setState(() => message = "Please enter and confirm your new password.");
+      setState(() {
+        message = "Please enter and confirm your new password.";
+      });
       return;
     }
+
     if (p1 != p2) {
-      setState(() => message = "Passwords do not match.");
+      setState(() {
+        message = "Passwords do not match.";
+      });
       return;
     }
+
     if (p1.length < 6) {
-      setState(() => message = "Password must be at least 6 characters.");
+      setState(() {
+        message = "Password must be at least 6 characters.";
+      });
+      return;
+    }
+
+    // Safety check
+    if (supabase.auth.currentSession == null) {
+      setState(() {
+        message =
+            "Your reset session is missing. Please request a new reset email.";
+      });
       return;
     }
 
@@ -58,24 +112,36 @@ class _ResetPasswordPageState extends State<ResetPasswordPage> {
     });
 
     try {
-      // This updates the password for the currently recovered session.
-      await supabase.auth.updateUser(UserAttributes(password: p1));
+      await supabase.auth.updateUser(
+        UserAttributes(password: p1),
+      );
 
       if (!mounted) return;
+
       setState(() {
-        message = "Password updated! You can go back and log in.";
+        message = "Password updated successfully!";
       });
 
-      // Optional: send them back to the normal auth flow
+      // Optional auto-navigation back to login
       // Navigator.of(context).pushNamedAndRemoveUntil('/', (_) => false);
     } on AuthException catch (e) {
       if (!mounted) return;
-      setState(() => message = e.message);
+
+      setState(() {
+        message = e.message;
+      });
     } catch (e) {
       if (!mounted) return;
-      setState(() => message = e.toString());
+
+      setState(() {
+        message = e.toString();
+      });
     } finally {
-      if (mounted) setState(() => isSaving = false);
+      if (mounted) {
+        setState(() {
+          isSaving = false;
+        });
+      }
     }
   }
 
@@ -88,8 +154,13 @@ class _ResetPasswordPageState extends State<ResetPasswordPage> {
 
   @override
   Widget build(BuildContext context) {
+    final bool isSuccess =
+        message?.toLowerCase().contains("success") ?? false;
+
     return Scaffold(
-      appBar: AppBar(title: const Text("Reset Password")),
+      appBar: AppBar(
+        title: const Text("Reset Password"),
+      ),
       body: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
@@ -98,57 +169,92 @@ class _ResetPasswordPageState extends State<ResetPasswordPage> {
               "Enter a new password for your account.",
               style: TextStyle(fontSize: 16),
             ),
+
             const SizedBox(height: 16),
 
-            TextField(
-              controller: newPasswordController,
-              obscureText: true,
-              decoration: const InputDecoration(
-                labelText: "New Password",
-                border: OutlineInputBorder(),
+            if (isLoadingSession)
+              const CircularProgressIndicator()
+            else ...[
+              TextField(
+                controller: newPasswordController,
+                obscureText: !showNewPassword,
+                decoration: InputDecoration(
+                  labelText: "New Password",
+                  border: const OutlineInputBorder(),
+                  suffixIcon: IconButton(
+                    icon: Icon(
+                      showNewPassword
+                          ? Icons.visibility_off
+                          : Icons.visibility,
+                    ),
+                    onPressed: () {
+                      setState(() {
+                        showNewPassword = !showNewPassword;
+                      });
+                    },
+                  ),
+                ),
               ),
-            ),
-            const SizedBox(height: 12),
 
-            TextField(
-              controller: confirmPasswordController,
-              obscureText: true,
-              decoration: const InputDecoration(
-                labelText: "Confirm New Password",
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 12),
+              const SizedBox(height: 12),
 
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                onPressed: isSaving ? null : _setNewPassword,
-                child: isSaving
-                    ? const SizedBox(
-                        height: 18,
-                        width: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Text("Save New Password"),
+              TextField(
+                controller: confirmPasswordController,
+                obscureText: !showConfirmPassword,
+                decoration: InputDecoration(
+                  labelText: "Confirm New Password",
+                  border: const OutlineInputBorder(),
+                  suffixIcon: IconButton(
+                    icon: Icon(
+                      showConfirmPassword
+                          ? Icons.visibility_off
+                          : Icons.visibility,
+                    ),
+                    onPressed: () {
+                      setState(() {
+                        showConfirmPassword = !showConfirmPassword;
+                      });
+                    },
+                  ),
+                ),
               ),
-            ),
+
+              const SizedBox(height: 12),
+
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: isSaving ? null : _setNewPassword,
+                  child: isSaving
+                      ? const SizedBox(
+                          height: 18,
+                          width: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                          ),
+                        )
+                      : const Text("Save New Password"),
+                ),
+              ),
+            ],
 
             TextButton(
               onPressed: () {
-                Navigator.of(context).pushNamedAndRemoveUntil('/', (_) => false);
+                Navigator.of(context).pushNamedAndRemoveUntil(
+                  '/',
+                  (_) => false,
+                );
               },
               child: const Text("Back to Login"),
             ),
 
             if (message != null) ...[
               const SizedBox(height: 12),
+
               Text(
                 message!,
                 style: TextStyle(
-                  color: message!.toLowerCase().contains("updated")
-                      ? Colors.green
-                      : Colors.red,
+                  color: isSuccess ? Colors.green : Colors.red,
                 ),
               ),
             ],

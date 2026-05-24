@@ -3,15 +3,42 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 class EquipmentService {
   final supabase = Supabase.instance.client;
 
-  Future<List<dynamic>> getAllEquipment() async {
-    return await supabase.from('equipment').select().order('name');
+  Future<List<dynamic>> getAllEquipment({String? kind}) async {
+    final normalizedKind = kind?.trim().toLowerCase();
+
+    var query = supabase.from('equipment').select();
+
+    if (normalizedKind != null && normalizedKind.isNotEmpty) {
+      if (normalizedKind != 'equipment' && normalizedKind != 'routine') {
+        throw ArgumentError(
+          'Invalid kind filter: $kind. Must be "equipment" or "routine".',
+        );
+      }
+      query = query.eq('kind', normalizedKind);
+    }
+
+    return await query.order('name');
   }
 
-  /// ✅ Insert equipment and return the created row (so we can get id)
-  Future<Map<String, dynamic>> insertEquipment(String name) async {
+  /// ✅ Insert equipment/routine and return the created row (so we can get id)
+  /// `kind` should be 'equipment' or 'routine'
+  Future<Map<String, dynamic>> insertEquipment(
+    String name, {
+    String kind = 'equipment',
+  }) async {
+    final normalizedKind = kind.trim().toLowerCase();
+    if (normalizedKind != 'equipment' && normalizedKind != 'routine') {
+      throw ArgumentError(
+        'Invalid kind: $kind. Must be "equipment" or "routine".',
+      );
+    }
+
     final res = await supabase
         .from('equipment')
-        .insert({'name': name})
+        .insert({
+          'name': name,
+          'kind': normalizedKind,
+        })
         .select()
         .single();
 

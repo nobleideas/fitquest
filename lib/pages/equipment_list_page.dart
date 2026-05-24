@@ -21,8 +21,6 @@ class EquipmentListPageState extends State<EquipmentListPage> {
   /// Equipment IDs that have at least one exercise session today
   Set<String> equipmentWithSessionsToday = {};
 
-  // Used ONLY for display placement (3 cols x 3 rows)
-  // Core forced to column 2 row 3 via null placeholders
   static const List<String?> _muscleFiltersGrid = [
     'All',
     'Chest',
@@ -30,17 +28,20 @@ class EquipmentListPageState extends State<EquipmentListPage> {
     'Back',
     'Arms',
     'Legs',
-    null, // row 3 col 1 (empty)
-    'Core', // row 3 col 2 ✅
-    null, // row 3 col 3 (empty)
+    null,
+    'Core',
+    null,
   ];
 
   String _selectedMuscle = 'All';
 
+  // ✅ NEW: kind filter (all / equipment / routine)
+  static const List<String> _kindFilters = ['All', 'Equipment', 'Routines'];
+  String _selectedKind = 'All';
+
   /// Map equipmentId -> set of muscle group keys (lowercase normalized)
   final Map<String, Set<String>> _equipmentMuscleGroups = {};
 
-  // ✅ allow MainShell to refresh Equipment tab on selection
   Future<void> refresh() async {
     await _loadEquipment();
   }
@@ -53,8 +54,6 @@ class EquipmentListPageState extends State<EquipmentListPage> {
 
   String _normalizeMuscle(dynamic value) {
     final v = (value ?? '').toString().trim().toLowerCase();
-
-    // Normalize common variants
     switch (v) {
       case 'shoulder':
       case 'shoulders':
@@ -74,21 +73,46 @@ class EquipmentListPageState extends State<EquipmentListPage> {
       case 'abdominals':
         return 'core';
       default:
-        return v; // unknown values still stored, but won't match your filters
+        return v;
     }
   }
 
   String _selectedMuscleKey() => _normalizeMuscle(_selectedMuscle);
 
+  String _kindValue(Map<String, dynamic> item) {
+    return (item['kind'] ?? 'equipment').toString().toLowerCase().trim();
+  }
+
+  bool _matchesKindFilter(Map<String, dynamic> item) {
+    if (_selectedKind == 'All') return true;
+
+    final k = _kindValue(item);
+    if (_selectedKind == 'Equipment') return k != 'routine';
+    if (_selectedKind == 'Routines') return k == 'routine';
+    return true;
+  }
+
   List<Map<String, dynamic>> get _filteredEquipment {
-    if (_selectedMuscle == 'All') return equipmentList;
+    // First filter by kind (All/Equipment/Routines)
+    final byKind = equipmentList.where(_matchesKindFilter).toList();
+
+    // Then filter by muscle group (only meaningful if exercises exist; routines with no exercises will drop out)
+    if (_selectedMuscle == 'All') return byKind;
 
     final key = _selectedMuscleKey();
-    return equipmentList.where((e) {
+    return byKind.where((e) {
       final id = e['id']?.toString() ?? '';
       final groups = _equipmentMuscleGroups[id];
       return groups != null && groups.contains(key);
     }).toList();
+  }
+
+  String _kindLabel(Map<String, dynamic> item) {
+    return _kindValue(item) == 'routine' ? 'Routine' : 'Equipment';
+  }
+
+  IconData _kindIcon(Map<String, dynamic> item) {
+    return _kindValue(item) == 'routine' ? Icons.view_list : Icons.fitness_center;
   }
 
   Future<void> _loadEquipment() async {
@@ -98,17 +122,15 @@ class EquipmentListPageState extends State<EquipmentListPage> {
     try {
       final list = await _equipmentService.getAllEquipment();
 
-      // Keep alphabetical sorting, but show "used today" equipment first (also alphabetical).
       final sorted = List<Map<String, dynamic>>.from(list)
         ..sort(
           (a, b) => (a['name'] as String).toLowerCase().compareTo(
-            (b['name'] as String).toLowerCase(),
-          ),
+                (b['name'] as String).toLowerCase(),
+              ),
         );
 
       final todaySet = await _loadEquipmentIdsWithSessionsToday();
 
-      // Reorder: used today (alpha) first, then the rest (alpha)
       final usedToday = <Map<String, dynamic>>[];
       final notUsedToday = <Map<String, dynamic>>[];
 
@@ -123,7 +145,6 @@ class EquipmentListPageState extends State<EquipmentListPage> {
 
       final ordered = [...usedToday, ...notUsedToday];
 
-      // ✅ Load equipment -> muscle groups mapping based on exercises assigned to equipment
       final ids = ordered
           .map((e) => e['id']?.toString() ?? '')
           .where((id) => id.isNotEmpty)
@@ -151,44 +172,38 @@ class EquipmentListPageState extends State<EquipmentListPage> {
         isLoading = false;
       });
 
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Failed to load equipment: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to load equipment: $e')),
+      );
     }
   }
 
-  /// Build mapping: equipment_id -> {primary_muscle_group...}
   Future<Map<String, Set<String>>> _loadEquipmentMuscleGroups(
-  List<String> equipmentIds,
-) async {
-  if (equipmentIds.isEmpty) return {};
+    List<String> equipmentIds,
+  ) async {
+    if (equipmentIds.isEmpty) return {};
 
-  final rowsRaw = await supabase
-      .from('exercises')
-      .select('equipment_id, primary_muscle_group')
-      .inFilter('equipment_id', equipmentIds);
+    final rowsRaw = await supabase
+        .from('exercises')
+        .select('equipment_id, primary_muscle_group')
+        .inFilter('equipment_id', equipmentIds);
 
-  final rows = rowsRaw.whereType<Map<String, dynamic>>().toList();
+    final rows = rowsRaw.whereType<Map<String, dynamic>>().toList();
+    final map = <String, Set<String>>{};
 
-  final map = <String, Set<String>>{};
+    for (final row in rows) {
+      final eqId = row['equipment_id']?.toString();
+      if (eqId == null || eqId.isEmpty) continue;
 
-  for (final row in rows) {
-    final eqId = row['equipment_id']?.toString();
-    if (eqId == null || eqId.isEmpty) continue;
+      final muscle = _normalizeMuscle(row['primary_muscle_group']);
+      if (muscle.isEmpty) continue;
 
-    final muscle = _normalizeMuscle(row['primary_muscle_group']);
-    if (muscle.isEmpty) continue;
+      map.putIfAbsent(eqId, () => <String>{}).add(muscle);
+    }
 
-    map.putIfAbsent(eqId, () => <String>{}).add(muscle);
+    return map;
   }
 
-  return map;
-}
-
-
-
-  /// Because exercise_sessions references exercise_id,
-  /// we join to exercises to get exercises.equipment_id
   Future<Set<String>> _loadEquipmentIdsWithSessionsToday() async {
     final user = supabase.auth.currentUser;
     if (user == null) return {};
@@ -197,7 +212,6 @@ class EquipmentListPageState extends State<EquipmentListPage> {
     final startLocal = DateTime(nowLocal.year, nowLocal.month, nowLocal.day);
     final endLocal = startLocal.add(const Duration(days: 1));
 
-    // Convert to UTC for consistent filtering with timestamptz
     final startUtc = startLocal.toUtc().toIso8601String();
     final endUtc = endLocal.toUtc().toIso8601String();
 
@@ -229,16 +243,47 @@ class EquipmentListPageState extends State<EquipmentListPage> {
     return ids;
   }
 
-  Future<void> _addEquipment() async {
+  Future<void> _addEquipmentOrRoutine() async {
+    final kind = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.fitness_center),
+                title: const Text('Add Equipment'),
+                onTap: () => Navigator.pop(context, 'equipment'),
+              ),
+              ListTile(
+                leading: const Icon(Icons.view_list),
+                title: const Text('Create Routine'),
+                onTap: () => Navigator.pop(context, 'routine'),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
+
+    if (kind == null) return;
+    await _addNamedItem(kind: kind);
+  }
+
+  Future<void> _addNamedItem({required String kind}) async {
     final controller = TextEditingController();
+    final kindTitle = kind == 'routine' ? 'Routine' : 'Equipment';
 
     await showDialog(
       context: context,
       builder: (_) => AlertDialog(
-        title: const Text("Add New Equipment"),
+        title: Text('Add New $kindTitle'),
         content: TextField(
           controller: controller,
-          decoration: const InputDecoration(labelText: "Equipment Name"),
+          decoration: InputDecoration(labelText: '$kindTitle Name'),
         ),
         actions: [
           TextButton(
@@ -250,16 +295,17 @@ class EquipmentListPageState extends State<EquipmentListPage> {
               final name = controller.text.trim();
               if (name.isEmpty) return;
 
-              await _equipmentService.insertEquipment(name);
+              await _equipmentService.insertEquipment(name, kind: kind);
 
               if (!mounted) return;
               Navigator.pop(context);
 
-              await _loadEquipment(); // reload list + today's highlights + muscle map
+              await _loadEquipment();
               if (!mounted) return;
+
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(
-                  content: Text('Added equipment: $name'),
+                  content: Text('Added $kindTitle: $name'),
                   behavior: SnackBarBehavior.floating,
                   duration: const Duration(seconds: 2),
                 ),
@@ -272,7 +318,6 @@ class EquipmentListPageState extends State<EquipmentListPage> {
     );
   }
 
-  // ---------- EDIT EQUIPMENT NAME ----------
   Future<void> _editEquipmentName(Map<String, dynamic> equipment) async {
     final equipmentId = equipment['id']?.toString() ?? '';
     final currentName = (equipment['name'] ?? '').toString();
@@ -281,11 +326,11 @@ class EquipmentListPageState extends State<EquipmentListPage> {
     await showDialog(
       context: context,
       builder: (_) => AlertDialog(
-        title: const Text("Edit Equipment Name"),
+        title: const Text("Edit Name"),
         content: TextField(
           controller: controller,
           autofocus: true,
-          decoration: const InputDecoration(labelText: "Equipment Name"),
+          decoration: const InputDecoration(labelText: "Name"),
         ),
         actions: [
           TextButton(
@@ -322,21 +367,18 @@ class EquipmentListPageState extends State<EquipmentListPage> {
     );
   }
 
-  // ---------- DELETE EQUIPMENT FLOW ----------
   Future<void> _deleteEquipmentFlow(Map<String, dynamic> equipment) async {
     final equipmentId = equipment['id']?.toString() ?? '';
-    final equipmentName = (equipment['name'] ?? 'this equipment').toString();
+    final equipmentName = (equipment['name'] ?? 'this item').toString();
 
-    final exerciseCount = await _equipmentService.getExerciseCountForEquipment(
-      equipmentId,
-    );
+    final exerciseCount =
+        await _equipmentService.getExerciseCountForEquipment(equipmentId);
 
-    // If no exercises attached: simple confirm delete
     if (exerciseCount == 0) {
       final confirm = await showDialog<bool>(
         context: context,
         builder: (_) => AlertDialog(
-          title: const Text("Delete Equipment?"),
+          title: const Text("Delete?"),
           content: Text('Are you sure you want to delete “$equipmentName”?'),
           actions: [
             TextButton(
@@ -365,7 +407,7 @@ class EquipmentListPageState extends State<EquipmentListPage> {
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Deleted equipment: $equipmentName'),
+          content: Text('Deleted: $equipmentName'),
           behavior: SnackBarBehavior.floating,
           duration: const Duration(seconds: 2),
         ),
@@ -373,21 +415,19 @@ class EquipmentListPageState extends State<EquipmentListPage> {
       return;
     }
 
-    // If exercises attached: offer move OR delete anyway
     final action = await showDialog<String>(
       context: context,
       builder: (_) => AlertDialog(
         title: const Text("Exercises Attached"),
         content: Text(
           '“$equipmentName” has $exerciseCount exercise${exerciseCount == 1 ? '' : 's'} attached.\n\n'
-          'You can move those exercise${exerciseCount == 1 ? '' : 's'} to another equipment, or delete everything anyway.',
+          'You can move those exercise${exerciseCount == 1 ? '' : 's'} to another equipment/routine, or delete everything anyway.',
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, 'cancel'),
             child: const Text("Cancel"),
           ),
-          // Destructive-looking button
           TextButton(
             onPressed: () => Navigator.pop(context, 'delete_anyway'),
             style: TextButton.styleFrom(
@@ -460,24 +500,21 @@ class EquipmentListPageState extends State<EquipmentListPage> {
     }
   }
 
-  // ---------- MOVE ALL EXERCISES THEN DELETE ----------
   Future<void> _moveAllExercisesThenDeleteEquipment({
     required String fromEquipmentId,
     required String fromEquipmentName,
     required int exerciseCount,
   }) async {
-    // Load equipment list for dropdown (exclude the one being deleted)
     final equipmentListDynamic = await _equipmentService.getAllEquipment();
-    final equipmentOptions =
-        equipmentListDynamic
-            .map((e) => Map<String, dynamic>.from(e as Map))
-            .where((e) => e['id'].toString() != fromEquipmentId)
-            .toList()
-          ..sort(
-            (a, b) => (a['name'] as String).toLowerCase().compareTo(
+    final equipmentOptions = equipmentListDynamic
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .where((e) => e['id'].toString() != fromEquipmentId)
+        .toList()
+      ..sort(
+        (a, b) => (a['name'] as String).toLowerCase().compareTo(
               (b['name'] as String).toLowerCase(),
             ),
-          );
+      );
 
     String? selectedEquipmentId;
     String? targetEquipmentName;
@@ -491,9 +528,8 @@ class EquipmentListPageState extends State<EquipmentListPage> {
             final typedName = newEquipmentController.text.trim();
 
             final canMove =
-                (selectedEquipmentId != null &&
-                    selectedEquipmentId!.isNotEmpty) ||
-                typedName.isNotEmpty;
+                (selectedEquipmentId != null && selectedEquipmentId!.isNotEmpty) ||
+                    typedName.isNotEmpty;
 
             return AlertDialog(
               title: Text(
@@ -503,7 +539,7 @@ class EquipmentListPageState extends State<EquipmentListPage> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const Text('Move to existing equipment:'),
+                  const Text('Move to existing equipment/routine:'),
                   const SizedBox(height: 8),
                   DropdownButtonFormField<String>(
                     value: selectedEquipmentId,
@@ -515,34 +551,30 @@ class EquipmentListPageState extends State<EquipmentListPage> {
                           child: Text(e['name'].toString()),
                         ),
                     ],
-                    // 🔒 Disable dropdown while typing new equipment name
                     onChanged: newEquipmentController.text.isNotEmpty
                         ? null
                         : (val) {
                             setDialogState(() {
                               selectedEquipmentId = val;
-                              if (val != null) {
-                                newEquipmentController.text = '';
-                              }
+                              if (val != null) newEquipmentController.text = '';
                             });
                           },
                     decoration: const InputDecoration(
                       border: OutlineInputBorder(),
-                      hintText: 'Select equipment',
+                      hintText: 'Select equipment/routine',
                     ),
                   ),
                   const SizedBox(height: 16),
                   const Divider(),
                   const SizedBox(height: 8),
-                  const Text('Or create a new equipment:'),
+                  const Text('Or create a new equipment/routine:'),
                   const SizedBox(height: 8),
                   TextField(
                     controller: newEquipmentController,
-                    // 🔒 Disable text field if dropdown selected
                     enabled: selectedEquipmentId == null,
                     decoration: const InputDecoration(
                       border: OutlineInputBorder(),
-                      labelText: 'New equipment name',
+                      labelText: 'New equipment/routine name',
                     ),
                     onChanged: (_) {
                       setDialogState(() {
@@ -563,22 +595,18 @@ class EquipmentListPageState extends State<EquipmentListPage> {
                   onPressed: canMove
                       ? () async {
                           String targetEquipmentId;
-
                           final typed = newEquipmentController.text.trim();
 
                           if (typed.isNotEmpty) {
-                            // Create new equipment and move
-                            final created = await _equipmentService
-                                .insertEquipment(typed);
+                            final created =
+                                await _equipmentService.insertEquipment(typed);
                             targetEquipmentId = created['id'].toString();
                             targetEquipmentName = created['name'].toString();
                           } else {
                             targetEquipmentId = selectedEquipmentId!;
                             targetEquipmentName = equipmentOptions
-                                .firstWhere(
-                                  (e) =>
-                                      e['id'].toString() == selectedEquipmentId,
-                                )['name']
+                                .firstWhere((e) =>
+                                    e['id'].toString() == selectedEquipmentId)['name']
                                 .toString();
                           }
 
@@ -587,12 +615,9 @@ class EquipmentListPageState extends State<EquipmentListPage> {
                             toEquipmentId: targetEquipmentId,
                           );
 
-                          await _equipmentService.deleteEquipment(
-                            fromEquipmentId,
-                          );
+                          await _equipmentService.deleteEquipment(fromEquipmentId);
 
                           if (!mounted) return;
-
                           Navigator.pop(context, true);
 
                           ScaffoldMessenger.of(context).showSnackBar(
@@ -616,17 +641,11 @@ class EquipmentListPageState extends State<EquipmentListPage> {
     );
 
     if (moved != true) return;
-
-    // Refresh list + today's highlights after successful operation
     if (!mounted) return;
     await _loadEquipment();
   }
 
-  // ---------- MENU HANDLER ----------
-  Future<void> _onMenuSelected(
-    String value,
-    Map<String, dynamic> equipment,
-  ) async {
+  Future<void> _onMenuSelected(String value, Map<String, dynamic> equipment) async {
     switch (value) {
       case 'edit':
         await _editEquipmentName(equipment);
@@ -637,7 +656,28 @@ class EquipmentListPageState extends State<EquipmentListPage> {
     }
   }
 
-  // ✅ Two-row, always-visible filter bar (no horizontal scrolling)
+  // ✅ NEW: kind filter bar (All / Equipment / Routines)
+  Widget _buildKindFilterBar() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+      child: Wrap(
+        spacing: 8,
+        children: _kindFilters.map((label) {
+          final selected = _selectedKind == label;
+          return ChoiceChip(
+            label: Text(label),
+            selected: selected,
+            onSelected: (_) {
+              setState(() {
+                _selectedKind = label;
+              });
+            },
+          );
+        }).toList(),
+      ),
+    );
+  }
+
   Widget _buildMuscleFilterBar() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
@@ -649,15 +689,12 @@ class EquipmentListPageState extends State<EquipmentListPage> {
           final totalGap = gap * (cols - 1);
           final cellWidth = (constraints.maxWidth - totalGap) / cols;
 
-          // Pick a fixed height that looks good across devices.
-          // If you want slightly taller, bump to 40.
           const cellHeight = 36.0;
 
           return Wrap(
             spacing: gap,
             runSpacing: gap,
             children: _muscleFiltersGrid.map((label) {
-              // Placeholder cell to force Core into col 2 row 3
               if (label == null) {
                 return SizedBox(width: cellWidth, height: cellHeight);
               }
@@ -668,14 +705,13 @@ class EquipmentListPageState extends State<EquipmentListPage> {
                 width: cellWidth,
                 height: cellHeight,
                 child: FittedBox(
-                  fit: BoxFit
-                      .scaleDown, // prevents text overflow on small screens
+                  fit: BoxFit.scaleDown,
                   child: ChoiceChip(
                     materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                     visualDensity: VisualDensity.compact,
                     labelPadding: const EdgeInsets.symmetric(horizontal: 10),
                     label: SizedBox(
-                      width: cellWidth, // makes label area consistent
+                      width: cellWidth,
                       child: Text(
                         label,
                         textAlign: TextAlign.center,
@@ -703,6 +739,7 @@ class EquipmentListPageState extends State<EquipmentListPage> {
             ? const Center(child: CircularProgressIndicator())
             : Column(
                 children: [
+                  _buildKindFilterBar(), // ✅ NEW
                   _buildMuscleFilterBar(),
                   Expanded(
                     child: RefreshIndicator(
@@ -713,23 +750,30 @@ class EquipmentListPageState extends State<EquipmentListPage> {
                         itemBuilder: (context, index) {
                           final equipment = _filteredEquipment[index];
                           final equipmentId = equipment['id']?.toString() ?? '';
-                          final hasSessionToday = equipmentWithSessionsToday
-                              .contains(equipmentId);
+                          final hasSessionToday =
+                              equipmentWithSessionsToday.contains(equipmentId);
+
+                          final kindLabel = _kindLabel(equipment);
+                          final kindValue = _kindValue(equipment);
 
                           return ListTile(
+                            leading: Icon(
+                              _kindIcon(equipment),
+                              color: hasSessionToday
+                                  ? Theme.of(context).colorScheme.primary
+                                  : null,
+                            ),
                             title: Text(
                               equipment['name'],
                               style: hasSessionToday
                                   ? TextStyle(
                                       fontWeight: FontWeight.bold,
-                                      color: Theme.of(
-                                        context,
-                                      ).colorScheme.primary,
+                                      color: Theme.of(context).colorScheme.primary,
                                     )
                                   : null,
                             ),
                             subtitle: Text(
-                              "QR: ${equipment['qr_code'] ?? 'N/A'}",
+                              '$kindLabel • QR: ${equipment['qr_code'] ?? 'N/A'}',
                             ),
                             trailing: Row(
                               mainAxisSize: MainAxisSize.min,
@@ -763,11 +807,11 @@ class EquipmentListPageState extends State<EquipmentListPage> {
                                   builder: (_) => ExerciseListPage(
                                     equipmentId: equipment['id'],
                                     equipmentName: equipment['name'],
+                                    equipmentKind: kindValue,
                                   ),
                                 ),
                               );
 
-                              // Refresh on return so highlight updates immediately
                               await _loadEquipment();
                             },
                           );
@@ -781,8 +825,8 @@ class EquipmentListPageState extends State<EquipmentListPage> {
           right: 16,
           bottom: 16,
           child: FloatingActionButton(
-            onPressed: _addEquipment,
-            tooltip: 'Add Equipment',
+            onPressed: _addEquipmentOrRoutine,
+            tooltip: 'Add Equipment or Routine',
             child: const Icon(Icons.add),
           ),
         ),
