@@ -8,10 +8,14 @@ class ExerciseListPage extends StatefulWidget {
   final String equipmentId;
   final String equipmentName;
 
+  /// ✅ 'equipment' or 'routine' (defaults to 'equipment')
+  final String equipmentKind;
+
   const ExerciseListPage({
     super.key,
     required this.equipmentId,
     required this.equipmentName,
+    this.equipmentKind = 'equipment',
   });
 
   @override
@@ -27,11 +31,18 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
   final _exerciseService = ExerciseService();
   final _equipmentService = EquipmentService();
 
-  /// Exercise IDs that have at least one session today (for this equipment)
+  /// Exercise IDs that have at least one session today (for this equipment/routine)
   Set<String> exercisesWithSessionsToday = {};
 
-  /// ✅ For imported exercises: which *source* exercises still have a video_url
+  /// (Keeping your existing video cache logic untouched)
   final Set<String> _sourceExercisesWithVideo = {};
+
+  /// ✅ normalized kind helpers
+  String get _kind => widget.equipmentKind.toLowerCase().trim() == 'routine'
+      ? 'routine'
+      : 'equipment';
+  bool get _isRoutine => _kind == 'routine';
+  String get _kindTitle => _isRoutine ? 'routine' : 'equipment';
 
   @override
   void initState() {
@@ -56,10 +67,8 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
   }
 
   bool _hasFormVideo(Map<String, dynamic> ex) {
-    // ✅ Local video saved on THIS exercise row
     if (_hasDirectVideo(ex)) return true;
 
-    // ✅ Imported: only show as "has video" if source still has video_url
     final srcId = _sourceId(ex);
     if (srcId.isEmpty) return false;
 
@@ -70,9 +79,21 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
     setState(() => isLoading = true);
 
     try {
-      final list = await _exerciseService.getExercisesForEquipment(
-        widget.equipmentId,
-      );
+      List<Map<String, dynamic>> list;
+
+      if (_isRoutine) {
+        // ✅ Routine: load via routine_items
+        list = await _exerciseService.getExercisesForRoutine(widget.equipmentId);
+      } else {
+        // ✅ Equipment: load by equipment_id
+        final raw = await _exerciseService.getExercisesForEquipment(widget.equipmentId);
+        list = raw is List
+            ? raw
+                .whereType<Map>()
+                .map((e) => Map<String, dynamic>.from(e))
+                .toList()
+            : <Map<String, dynamic>>[];
+      }
 
       // Base alphabetical sort (case-insensitive)
       final sorted = List<Map<String, dynamic>>.from(list)
@@ -83,7 +104,7 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
         );
 
       // ✅ Determine which exercises were used today
-      final todaySet = await _loadExerciseIdsWithSessionsToday();
+      final todaySet = await _loadExerciseIdsWithSessionsToday(sorted);
 
       // ✅ Verify imported video sources still exist
       await _refreshSourceVideoCache(sorted);
@@ -125,15 +146,12 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
     }
   }
 
-  /// ✅ Build a cache of source exercise IDs that *currently* have a video_url.
-  /// This prevents the icon from showing when the original friend deleted the video.
   Future<void> _refreshSourceVideoCache(List<Map<String, dynamic>> exList) async {
     _sourceExercisesWithVideo.clear();
 
     final sourceIds = <String>{};
 
     for (final ex in exList) {
-      // Only care about imported exercises that do NOT have a direct local video
       if (_hasDirectVideo(ex)) continue;
 
       final srcId = _sourceId(ex);
@@ -142,8 +160,6 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
 
     if (sourceIds.isEmpty) return;
 
-    // Supabase "in" can be picky about size; but your lists are usually small.
-    // If you ever hit large lists, we can chunk this.
     final rows = await supabase
         .from('exercises')
         .select('id, video_url')
@@ -158,8 +174,12 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
     }
   }
 
-  /// Load exercise IDs (for this equipment) that have at least one session today.
-  Future<Set<String>> _loadExerciseIdsWithSessionsToday() async {
+  /// ✅ Today-set logic:
+  /// - Equipment: filter by exercises.equipment_id (your old behavior)
+  /// - Routine: filter by exercise_id IN (routine exercise ids)
+  Future<Set<String>> _loadExerciseIdsWithSessionsToday(
+    List<Map<String, dynamic>> currentExerciseList,
+  ) async {
     final user = supabase.auth.currentUser;
     if (user == null) return {};
 
@@ -167,28 +187,57 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
     final startLocal = DateTime(nowLocal.year, nowLocal.month, nowLocal.day);
     final endLocal = startLocal.add(const Duration(days: 1));
 
-    // Convert to UTC for consistent filtering with timestamptz
     final startUtc = startLocal.toUtc().toIso8601String();
     final endUtc = endLocal.toUtc().toIso8601String();
 
+    if (!_isRoutine) {
+      final rows = await supabase
+          .from('exercise_sessions')
+          .select('exercise_id, created_at, exercises!inner(id, equipment_id)')
+          .eq('user_id', user.id)
+          .eq('exercises.equipment_id', widget.equipmentId)
+          .gte('created_at', startUtc)
+          .lt('created_at', endUtc);
+
+      final ids = <String>{};
+      for (final row in rows) {
+        final exId = row['exercise_id'];
+        if (exId != null) ids.add(exId.toString());
+      }
+      return ids;
+    }
+
+    // ✅ Routine
+    final routineExerciseIds = currentExerciseList
+        .map((e) => (e['id'] ?? '').toString())
+        .where((s) => s.isNotEmpty)
+        .toList();
+
+    if (routineExerciseIds.isEmpty) return {};
+
     final rows = await supabase
         .from('exercise_sessions')
-        .select('exercise_id, created_at, exercises!inner(id, equipment_id)')
+        .select('exercise_id, created_at')
         .eq('user_id', user.id)
-        .eq('exercises.equipment_id', widget.equipmentId)
+        .inFilter('exercise_id', routineExerciseIds)
         .gte('created_at', startUtc)
         .lt('created_at', endUtc);
 
     final ids = <String>{};
-    for (final row in rows) {
-      final exId = row['exercise_id'];
-      if (exId != null) ids.add(exId.toString());
+    if (rows is List) {
+      for (final row in rows) {
+        if (row is Map && row['exercise_id'] != null) {
+          ids.add(row['exercise_id'].toString());
+        }
+      }
     }
-
     return ids;
   }
 
-  // ---------- ADD EXERCISE ----------
+  // ---------------------------------------------------------------------------
+  // ADD EXERCISE (new)
+  // ---------------------------------------------------------------------------
+
   Future<void> _addExercise() async {
     final nameController = TextEditingController();
 
@@ -263,12 +312,25 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
                     final name = nameController.text.trim();
                     if (name.isEmpty) return;
 
-                    await _exerciseService.insertExercise(
+                    // ✅ Minimal fix:
+                    // Create the exercise row (still uses equipment_id = current container id)
+                    // THEN if we're in a routine, ALSO link it into routine_items so it appears.
+                    final created = await _exerciseService.insertExerciseReturningRow(
                       name: name,
                       primaryMuscleGroup: primaryMuscleGroup,
                       type: type,
                       equipmentId: widget.equipmentId,
                     );
+
+                    if (_isRoutine) {
+                      final exId = (created['id'] ?? '').toString();
+                      if (exId.isNotEmpty) {
+                        await _exerciseService.addExerciseToRoutine(
+                          routineId: widget.equipmentId,
+                          exerciseId: exId,
+                        );
+                      }
+                    }
 
                     if (!mounted) return;
                     Navigator.pop(context);
@@ -284,7 +346,238 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
     );
   }
 
-  // ---------- EDIT EXERCISE NAME ----------
+  // ---------------------------------------------------------------------------
+  // ADD EXISTING EXERCISE(S) TO ROUTINE (NO DUPLICATES - just routine_items links)
+  // ---------------------------------------------------------------------------
+
+  Future<List<Map<String, dynamic>>> _loadMyAllExercises() async {
+    final rows = await supabase
+        .from('exercises')
+        .select('id, name, primary_muscle_group, type, equipment_id, video_url, video_source_exercise_id');
+
+    final list = rows is List
+        ? rows
+            .whereType<Map>()
+            .map((e) => Map<String, dynamic>.from(e))
+            .toList()
+        : <Map<String, dynamic>>[];
+
+    list.sort((a, b) {
+      final an = (a['name'] ?? '').toString().toLowerCase();
+      final bn = (b['name'] ?? '').toString().toLowerCase();
+      return an.compareTo(bn);
+    });
+
+    return list;
+  }
+
+  Future<void> _addExistingExercisesToRoutine() async {
+    if (!_isRoutine) return;
+
+    final all = await _loadMyAllExercises();
+    if (!mounted) return;
+
+    if (all.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          behavior: SnackBarBehavior.floating,
+          content: Text("You don’t have any exercises yet to add."),
+        ),
+      );
+      return;
+    }
+
+    // ✅ current routine exercise IDs (so we don't offer duplicates)
+    final existingIds = exercises
+        .map((e) => (e['id'] ?? '').toString())
+        .where((s) => s.isNotEmpty)
+        .toSet();
+
+    final selectable = all.where((ex) {
+      final id = (ex['id'] ?? '').toString();
+      return id.isNotEmpty && !existingIds.contains(id);
+    }).toList();
+
+    if (selectable.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          behavior: SnackBarBehavior.floating,
+          content: Text("All your exercises are already in this routine."),
+        ),
+      );
+      return;
+    }
+
+    final selected = <int>{};
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) {
+        return StatefulBuilder(
+          builder: (context, setLocal) {
+            void toggle(int i) {
+              setLocal(() {
+                if (selected.contains(i)) {
+                  selected.remove(i);
+                } else {
+                  selected.add(i);
+                }
+              });
+            }
+
+            void selectAll() {
+              setLocal(() {
+                selected
+                  ..clear()
+                  ..addAll(List.generate(selectable.length, (i) => i));
+              });
+            }
+
+            void clear() {
+              setLocal(() => selected.clear());
+            }
+
+            return AlertDialog(
+              title: const Text("Add existing exercises"),
+              content: SizedBox(
+                width: double.maxFinite,
+                height: 420,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Row(
+                      children: [
+                        TextButton(onPressed: selectAll, child: const Text("Select all")),
+                        TextButton(onPressed: clear, child: const Text("Clear")),
+                        const Spacer(),
+                        Text("${selected.length} selected"),
+                      ],
+                    ),
+                    const Divider(height: 1),
+                    const SizedBox(height: 8),
+                    Expanded(
+                      child: ListView.separated(
+                        itemCount: selectable.length,
+                        separatorBuilder: (_, __) => const Divider(height: 1),
+                        itemBuilder: (context, i) {
+                          final ex = selectable[i];
+                          final name = (ex['name'] ?? '').toString();
+                          final mg = (ex['primary_muscle_group'] ?? '').toString();
+                          final type = (ex['type'] ?? '').toString();
+                          final isSel = selected.contains(i);
+
+                          return ListTile(
+                            dense: true,
+                            leading: Icon(isSel ? Icons.check_circle : Icons.circle_outlined),
+                            title: Text(name),
+                            subtitle: Text("$mg • $type"),
+                            onTap: () => toggle(i),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context, false),
+                  child: const Text("Cancel"),
+                ),
+                ElevatedButton(
+                  onPressed: selected.isEmpty ? null : () => Navigator.pop(context, true),
+                  child: const Text("Add"),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    if (confirmed != true || selected.isEmpty) return;
+
+    int added = 0;
+    int skipped = 0;
+
+    for (final idx in selected) {
+      final ex = selectable[idx];
+      final exId = (ex['id'] ?? '').toString();
+      if (exId.isEmpty) {
+        skipped++;
+        continue;
+      }
+
+      try {
+        await _exerciseService.addExerciseToRoutine(
+          routineId: widget.equipmentId,
+          exerciseId: exId,
+        );
+        added++;
+      } catch (_) {
+        skipped++;
+      }
+    }
+
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 3),
+        content: Text(
+          skipped > 0
+              ? "Added $added exercise(s) to this routine • Skipped $skipped"
+              : "Added $added exercise(s) to this routine",
+        ),
+      ),
+    );
+
+    await _loadExercises();
+  }
+
+  Future<void> _showAddOptionsIfRoutine() async {
+    if (!_isRoutine) {
+      await _addExercise();
+      return;
+    }
+
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (_) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.add),
+                title: const Text("Add New Exercise"),
+                onTap: () => Navigator.pop(context, 'new'),
+              ),
+              ListTile(
+                leading: const Icon(Icons.playlist_add),
+                title: const Text("Add Existing Exercise(s)"),
+                onTap: () => Navigator.pop(context, 'existing'),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
+
+    if (choice == 'new') {
+      await _addExercise();
+    } else if (choice == 'existing') {
+      await _addExistingExercisesToRoutine();
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // EDIT / MOVE / DELETE
+  // ---------------------------------------------------------------------------
+
   Future<void> _editExerciseName(Map<String, dynamic> exercise) async {
     final currentName = (exercise['name'] ?? '').toString();
     final controller = TextEditingController(text: currentName);
@@ -326,20 +619,16 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
     );
   }
 
-  // ---------- MOVE EXERCISE ----------
   Future<void> _moveExercise(Map<String, dynamic> exercise) async {
     final exerciseId = exercise['id'].toString();
     final exerciseName = (exercise['name'] ?? 'Exercise').toString();
     String? targetEquipmentName;
 
     final equipmentListDynamic = await _equipmentService.getAllEquipment();
-    final equipmentList =
-        equipmentListDynamic.map((e) => Map<String, dynamic>.from(e as Map)).toList()
-          ..sort(
-            (a, b) => (a['name'] as String).toLowerCase().compareTo(
-                  (b['name'] as String).toLowerCase(),
-                ),
-          );
+    final equipmentList = equipmentListDynamic
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .toList()
+      ..sort((a, b) => (a['name'] as String).toLowerCase().compareTo((b['name'] as String).toLowerCase()));
 
     String? selectedEquipmentId;
     final newEquipmentController = TextEditingController();
@@ -350,9 +639,7 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
         return StatefulBuilder(
           builder: (context, setDialogState) {
             final newName = newEquipmentController.text.trim();
-            final canMove =
-                (selectedEquipmentId != null && selectedEquipmentId!.isNotEmpty) ||
-                    newName.isNotEmpty;
+            final canMove = (selectedEquipmentId != null && selectedEquipmentId!.isNotEmpty) || newName.isNotEmpty;
 
             return AlertDialog(
               title: Text('Move “$exerciseName”'),
@@ -360,7 +647,7 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const Text('Move to existing equipment:'),
+                  const Text('Move to existing equipment/routine:'),
                   const SizedBox(height: 8),
                   DropdownButtonFormField<String>(
                     value: selectedEquipmentId,
@@ -382,20 +669,20 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
                           },
                     decoration: const InputDecoration(
                       border: OutlineInputBorder(),
-                      hintText: 'Select equipment',
+                      hintText: 'Select equipment/routine',
                     ),
                   ),
                   const SizedBox(height: 16),
                   const Divider(),
                   const SizedBox(height: 8),
-                  const Text('Or create a new equipment:'),
+                  const Text('Or create a new equipment/routine:'),
                   const SizedBox(height: 8),
                   TextField(
                     controller: newEquipmentController,
                     enabled: selectedEquipmentId == null,
                     decoration: const InputDecoration(
                       border: OutlineInputBorder(),
-                      labelText: 'New equipment name',
+                      labelText: 'New equipment/routine name',
                     ),
                     onChanged: (_) {
                       setDialogState(() {
@@ -420,8 +707,7 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
                           final typedName = newEquipmentController.text.trim();
 
                           if (typedName.isNotEmpty) {
-                            final created =
-                                await _equipmentService.insertEquipment(typedName);
+                            final created = await _equipmentService.insertEquipment(typedName);
                             targetEquipmentId = created['id'].toString();
                             targetEquipmentName = created['name'].toString();
                           } else {
@@ -435,6 +721,11 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
                             exerciseId: exerciseId,
                             equipmentId: targetEquipmentId,
                           );
+
+                          if (_isRoutine) {
+                            // Optional: keep it in the routine after moving "home"
+                            // (We do nothing here; routine membership is routine_items.)
+                          }
 
                           if (!mounted) return;
                           Navigator.pop(context);
@@ -460,13 +751,35 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
     );
   }
 
-  // ---------- DELETE EXERCISE ----------
   Future<void> _deleteExercise(Map<String, dynamic> exercise) async {
     final name = (exercise['name'] ?? 'this exercise').toString();
     final exerciseId = exercise['id'].toString();
 
     final sessionCount = await _exerciseService.getSessionCountForExercise(exerciseId);
 
+    if (_isRoutine) {
+      // ✅ IMPORTANT CHANGE:
+      // Deleting from routine means "remove from routine_items" ONLY.
+      // This is always allowed, even if there are sessions, because sessions belong to the exercise.
+      await _exerciseService.removeExerciseFromRoutine(
+        routineId: widget.equipmentId,
+        exerciseId: exerciseId,
+      );
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 2),
+          content: Text('Removed “$name” from this routine.'),
+        ),
+      );
+
+      await _loadExercises();
+      return;
+    }
+
+    // Equipment delete behavior stays the same as your current approach
     final confirm = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
@@ -493,13 +806,21 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
 
     if (confirm != true) return;
 
-    await _exerciseService.deleteExerciseCascade(exerciseId);
-
-    if (!mounted) return;
-    await _loadExercises();
+    try {
+      await _exerciseService.deleteExerciseCascadeSafe(exerciseId);
+      if (!mounted) return;
+      await _loadExercises();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(e.toString()),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
   }
 
-  // ---------- MENU HANDLER ----------
   Future<void> _onMenuSelected(String value, Map<String, dynamic> exercise) async {
     switch (value) {
       case 'edit':
@@ -516,12 +837,14 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
 
   @override
   Widget build(BuildContext context) {
+    final emptyText = "No exercises available for this $_kindTitle.";
+
     return Scaffold(
       appBar: AppBar(title: Text(widget.equipmentName)),
       body: isLoading
           ? const Center(child: CircularProgressIndicator())
           : exercises.isEmpty
-              ? const Center(child: Text("No exercises available for this equipment."))
+              ? Center(child: Text(emptyText))
               : RefreshIndicator(
                   onRefresh: _loadExercises,
                   child: ListView.builder(
@@ -564,7 +887,7 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
                               onSelected: (value) => _onMenuSelected(value, exercise),
                               itemBuilder: (context) => const [
                                 PopupMenuItem(value: 'edit', child: Text('Edit name')),
-                                PopupMenuItem(value: 'move', child: Text('Move to equipment…')),
+                                PopupMenuItem(value: 'move', child: Text('Move to equipment/routine…')),
                                 PopupMenuItem(value: 'delete', child: Text('Delete')),
                               ],
                             ),
@@ -584,7 +907,7 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
                   ),
                 ),
       floatingActionButton: FloatingActionButton(
-        onPressed: _addExercise,
+        onPressed: _showAddOptionsIfRoutine,
         child: const Icon(Icons.add),
       ),
     );

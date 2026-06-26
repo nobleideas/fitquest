@@ -44,7 +44,7 @@ class _MainShellState extends State<MainShell> {
       case 0:
         return 'Fit Quest';
       case 1:
-        return 'My Equipment';
+        return 'Equipment/Routines';
       case 2:
         return 'My Profile';
       default:
@@ -75,7 +75,7 @@ class _MainShellState extends State<MainShell> {
           BottomNavigationBarItem(icon: Icon(Icons.home), label: 'Home'),
           BottomNavigationBarItem(
             icon: Icon(Icons.fitness_center),
-            label: 'Equipment',
+            label: 'Equipment/Routines',
           ),
           BottomNavigationBarItem(icon: Icon(Icons.person), label: 'Profile'),
         ],
