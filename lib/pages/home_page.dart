@@ -963,6 +963,83 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
   }
 
+
+  Future<void> _randomizeSuggestedExerciseAt(int index) async {
+    final current = _suggestedRoutine;
+    if (current == null || _isSuggesting) return;
+    if (index < 0 || index >= current.exercises.length) return;
+
+    setState(() => _isSuggesting = true);
+
+    try {
+      final randomizedRoutine = await _suggestionService.buildRoutine(
+        minutes: current.minutes,
+        choice: SuggestedDayTypeChoice.auto,
+        randomize: true,
+        fixedDayTypeForRandomize: current.dayType,
+      );
+
+      if (!mounted) return;
+
+      if (randomizedRoutine.exercises.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              randomizedRoutine.message ?? 'No replacement exercise available.',
+            ),
+          ),
+        );
+        return;
+      }
+
+      final existingIds = current.exercises.asMap().entries
+          .where((entry) => entry.key != index)
+          .map((entry) => (entry.value['id'] ?? '').toString())
+          .where((id) => id.trim().isNotEmpty)
+          .toSet();
+
+      final currentExerciseId = (current.exercises[index]['id'] ?? '')
+          .toString();
+
+      Map<String, dynamic>? replacement;
+      for (final candidate in randomizedRoutine.exercises) {
+        final candidateId = (candidate['id'] ?? '').toString();
+        if (candidateId.trim().isEmpty) continue;
+        if (candidateId == currentExerciseId) continue;
+        if (existingIds.contains(candidateId)) continue;
+        replacement = Map<String, dynamic>.from(candidate);
+        break;
+      }
+
+      replacement ??= Map<String, dynamic>.from(
+        randomizedRoutine.exercises.first,
+      );
+
+      final updatedExercises = current.exercises
+          .map((ex) => Map<String, dynamic>.from(ex))
+          .toList();
+      updatedExercises[index] = replacement;
+
+      setState(
+        () => _suggestedRoutine = SuggestedRoutine(
+          minutes: current.minutes,
+          dayType: current.dayType,
+          exercises: updatedExercises,
+          message: current.message,
+        ),
+      );
+
+      await _persistSuggestedRoutineToPrefs();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to randomize exercise: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _isSuggesting = false);
+    }
+  }
+
   Future<void> _confirmAndClearSuggestedRoutine() async {
     final hasRoutine = _suggestedRoutine != null;
     if (!hasRoutine) return;
@@ -1102,7 +1179,9 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
             if (s.exercises.isEmpty)
               Text(s.message ?? 'No suggestions available.')
             else
-              ...s.exercises.map((ex) {
+              ...s.exercises.asMap().entries.map((entry) {
+                final index = entry.key;
+                final ex = entry.value;
                 final name = (ex['name'] ?? '').toString();
                 final mg = (ex['primary_muscle_group'] ?? '').toString();
                 final equipmentName = (ex['equipment_name'] ?? '')
@@ -1119,6 +1198,20 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
                     ),
                     child: Row(
                       children: [
+                        IconButton(
+                          tooltip: 'Randomize this exercise',
+                          onPressed: _isSuggesting
+                              ? null
+                              : () => _randomizeSuggestedExerciseAt(index),
+                          icon: const Icon(Icons.shuffle, size: 18),
+                          padding: EdgeInsets.zero,
+                          constraints: const BoxConstraints(
+                            minWidth: 32,
+                            minHeight: 32,
+                          ),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                        const SizedBox(width: 4),
                         const Icon(Icons.play_arrow_rounded, size: 18),
                         const SizedBox(width: 8),
                         Expanded(
