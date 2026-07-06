@@ -945,7 +945,7 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
         randomize: randomize,
         fixedDayTypeForRandomize: fixedType,
       );
-      final routine = await _maybeIncludePullShoulderExercise(builtRoutine);
+      final routine = await _rebalancePushPullRoutineByMuscleGroup(builtRoutine);
 
       if (!mounted) return;
       _individualRandomizeHistoryBySlot.clear();
@@ -974,16 +974,39 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
     return (value ?? '').toString().trim().toLowerCase();
   }
 
-  bool _isShoulderGroupValue(dynamic value) {
+  String _canonicalMuscleGroup(dynamic value) {
     final mg = _normalizedMuscleGroup(value);
-    return mg == 'shoulder' || mg == 'shoulders' || mg == 'delts';
+    if (mg == 'shoulder' ||
+        mg == 'shoulders' ||
+        mg == 'delt' ||
+        mg == 'delts' ||
+        mg == 'deltoid' ||
+        mg == 'deltoids') {
+      return 'shoulders';
+    }
+    if (mg == 'arm' ||
+        mg == 'arms' ||
+        mg == 'bicep' ||
+        mg == 'biceps' ||
+        mg == 'tricep' ||
+        mg == 'triceps') {
+      return 'arms';
+    }
+    if (mg == 'chest' || mg == 'pec' || mg == 'pecs') return 'chest';
+    if (mg == 'back' || mg == 'lats' || mg == 'lat') return 'back';
+    if (mg == 'leg' || mg == 'legs') return 'legs';
+    if (mg == 'core' || mg == 'abs' || mg == 'abdominals') return 'core';
+    return mg;
+  }
+
+  bool _isShoulderGroupValue(dynamic value) {
+    return _canonicalMuscleGroup(value) == 'shoulders';
   }
 
   bool _muscleGroupsMatch(dynamic a, dynamic b) {
-    final left = _normalizedMuscleGroup(a);
-    final right = _normalizedMuscleGroup(b);
-    if (left == right) return true;
-    return _isShoulderGroupValue(left) && _isShoulderGroupValue(right);
+    final left = _canonicalMuscleGroup(a);
+    final right = _canonicalMuscleGroup(b);
+    return left.isNotEmpty && left == right;
   }
 
   String _suggestedDayTypeToExerciseType(SuggestedDayType dayType) {
@@ -997,6 +1020,29 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
   }
 
+  List<String> _balancedMuscleGroupsForRoutine({
+    required SuggestedDayType dayType,
+    required int exerciseCount,
+  }) {
+    if (exerciseCount <= 0) return <String>[];
+
+    final groups = switch (dayType) {
+      SuggestedDayType.push => <String>['chest', 'shoulders', 'arms'],
+      SuggestedDayType.pull => <String>['back', 'shoulders', 'arms'],
+      SuggestedDayType.legsCore => <String>[],
+    };
+
+    if (groups.isEmpty) return <String>[];
+
+    final result = <String>[];
+    var groupIndex = 0;
+    while (result.length < exerciseCount) {
+      result.add(groups[groupIndex % groups.length]);
+      groupIndex++;
+    }
+    return result;
+  }
+
   String _individualRandomizeHistoryKey({
     required SuggestedDayType dayType,
     required int index,
@@ -1006,43 +1052,20 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
     return '${dayType.name}:$index:$exerciseType:$muscleGroup';
   }
 
-  Future<List<Map<String, dynamic>>> _loadReplacementCandidates({
-    required String muscleGroup,
-    required String exerciseType,
+  Future<Map<String, dynamic>> _loadExerciseHistoryForCandidates({
+    required Set<String> candidateIds,
   }) async {
     final user = supabase.auth.currentUser;
-    if (user == null) return <Map<String, dynamic>>[];
-
-    final normalizedMuscleGroup = muscleGroup.trim().toLowerCase();
-    final normalizedExerciseType = exerciseType.trim().toLowerCase();
-    if (normalizedMuscleGroup.isEmpty || normalizedExerciseType.isEmpty) {
-      return <Map<String, dynamic>>[];
+    if (user == null || candidateIds.isEmpty) {
+      return {
+        'setCountsByExerciseId': <String, int>{},
+        'lastCompletedByExerciseId': <String, DateTime>{},
+      };
     }
-
-    final exerciseRows = await supabase
-        .from('exercises')
-        .select('id, name, type, primary_muscle_group')
-        .eq('user_id', user.id)
-        .eq('type', normalizedExerciseType);
-
-    final candidates = <Map<String, dynamic>>[];
-    for (final row in exerciseRows) {
-      final ex = Map<String, dynamic>.from(row as Map);
-      if (_muscleGroupsMatch(
-        ex['primary_muscle_group'],
-        normalizedMuscleGroup,
-      )) {
-        candidates.add(ex);
-      }
-    }
-
-    if (candidates.isEmpty) return candidates;
 
     final sessionRows = await supabase
         .from('exercise_sessions')
-        .select(
-          'created_at, exercises!inner(id, type, primary_muscle_group)',
-        )
+        .select('created_at, exercises!inner(id)')
         .eq('user_id', user.id)
         .order('created_at', ascending: true);
 
@@ -1059,17 +1082,7 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
           : <String, dynamic>{};
 
       final id = (ex['id'] ?? '').toString();
-      if (id.isEmpty) continue;
-      if ((ex['type'] ?? '').toString().trim().toLowerCase() !=
-          normalizedExerciseType) {
-        continue;
-      }
-      if (!_muscleGroupsMatch(
-        ex['primary_muscle_group'],
-        normalizedMuscleGroup,
-      )) {
-        continue;
-      }
+      if (id.isEmpty || !candidateIds.contains(id)) continue;
 
       setCountsByExerciseId[id] = (setCountsByExerciseId[id] ?? 0) + 1;
 
@@ -1080,95 +1093,155 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
       }
     }
 
+    return {
+      'setCountsByExerciseId': setCountsByExerciseId,
+      'lastCompletedByExerciseId': lastCompletedByExerciseId,
+    };
+  }
+
+  void _sortExercisesBySuggestionPriority(
+    List<Map<String, dynamic>> candidates, {
+    required Map<String, int> setCountsByExerciseId,
+    required Map<String, DateTime> lastCompletedByExerciseId,
+  }) {
     candidates.sort((a, b) {
       final aId = (a['id'] ?? '').toString();
       final bId = (b['id'] ?? '').toString();
 
-      final aSets = setCountsByExerciseId[aId] ?? 0;
-      final bSets = setCountsByExerciseId[bId] ?? 0;
-      final setCompare = aSets.compareTo(bSets);
-      if (setCompare != 0) return setCompare;
-
       final aLast = lastCompletedByExerciseId[aId];
       final bLast = lastCompletedByExerciseId[bId];
+
+      // Never completed exercises have top priority.
       if (aLast == null && bLast != null) return -1;
       if (aLast != null && bLast == null) return 1;
+
+      // Then choose the exercise completed the longest time ago.
       if (aLast != null && bLast != null) {
         final lastCompare = aLast.compareTo(bLast);
         if (lastCompare != 0) return lastCompare;
       }
 
+      // If dates tie, choose the exercise with fewer total logged sets.
+      final aSets = setCountsByExerciseId[aId] ?? 0;
+      final bSets = setCountsByExerciseId[bId] ?? 0;
+      final setCompare = aSets.compareTo(bSets);
+      if (setCompare != 0) return setCompare;
+
       final aName = (a['name'] ?? '').toString().toLowerCase();
       final bName = (b['name'] ?? '').toString().toLowerCase();
       return aName.compareTo(bName);
     });
+  }
+
+  Future<List<Map<String, dynamic>>> _loadReplacementCandidates({
+    required String muscleGroup,
+    required String exerciseType,
+  }) async {
+    final user = supabase.auth.currentUser;
+    if (user == null) return <Map<String, dynamic>>[];
+
+    final canonicalMuscleGroup = _canonicalMuscleGroup(muscleGroup);
+    final normalizedExerciseType = exerciseType.trim().toLowerCase();
+    if (canonicalMuscleGroup.isEmpty || normalizedExerciseType.isEmpty) {
+      return <Map<String, dynamic>>[];
+    }
+
+    final exerciseRows = await supabase
+        .from('exercises')
+        .select('id, name, type, primary_muscle_group')
+        .eq('user_id', user.id)
+        .eq('type', normalizedExerciseType);
+
+    final candidates = <Map<String, dynamic>>[];
+    for (final row in exerciseRows) {
+      final ex = Map<String, dynamic>.from(row as Map);
+      if (_canonicalMuscleGroup(ex['primary_muscle_group']) ==
+          canonicalMuscleGroup) {
+        candidates.add(ex);
+      }
+    }
+
+    if (candidates.isEmpty) return candidates;
+
+    final candidateIds = candidates
+        .map((ex) => (ex['id'] ?? '').toString())
+        .where((id) => id.trim().isNotEmpty)
+        .toSet();
+    final history = await _loadExerciseHistoryForCandidates(
+      candidateIds: candidateIds,
+    );
+
+    _sortExercisesBySuggestionPriority(
+      candidates,
+      setCountsByExerciseId:
+          Map<String, int>.from(history['setCountsByExerciseId'] as Map),
+      lastCompletedByExerciseId: Map<String, DateTime>.from(
+        history['lastCompletedByExerciseId'] as Map,
+      ),
+    );
 
     return candidates;
   }
 
-  Future<SuggestedRoutine> _maybeIncludePullShoulderExercise(
+  Future<SuggestedRoutine> _rebalancePushPullRoutineByMuscleGroup(
     SuggestedRoutine routine,
   ) async {
-    if (routine.dayType != SuggestedDayType.pull || routine.exercises.isEmpty) {
+    if (routine.exercises.isEmpty) return routine;
+    if (routine.dayType != SuggestedDayType.push &&
+        routine.dayType != SuggestedDayType.pull) {
       return routine;
     }
 
-    final alreadyHasShoulders = routine.exercises.any(
-      (ex) => _isShoulderGroupValue(ex['primary_muscle_group']),
+    final exerciseType = _suggestedDayTypeToExerciseType(routine.dayType);
+    if (exerciseType.isEmpty) return routine;
+
+    final desiredGroups = _balancedMuscleGroupsForRoutine(
+      dayType: routine.dayType,
+      exerciseCount: routine.exercises.length,
     );
-    if (alreadyHasShoulders) return routine;
+    if (desiredGroups.isEmpty) return routine;
 
-    final existingIds = routine.exercises
-        .map((ex) => (ex['id'] ?? '').toString())
-        .where((id) => id.trim().isNotEmpty)
-        .toSet();
-
-    final shoulderCandidates = await _loadReplacementCandidates(
-      muscleGroup: 'shoulders',
-      exerciseType: 'pull',
-    );
-
-    Map<String, dynamic>? replacement;
-    for (final candidate in shoulderCandidates) {
-      final id = (candidate['id'] ?? '').toString();
-      if (id.isEmpty || existingIds.contains(id)) continue;
-      replacement = Map<String, dynamic>.from(candidate);
-      break;
+    final candidatesByGroup = <String, List<Map<String, dynamic>>>{};
+    for (final group in desiredGroups.toSet()) {
+      candidatesByGroup[group] = await _loadReplacementCandidates(
+        muscleGroup: group,
+        exerciseType: exerciseType,
+      );
     }
 
-    if (replacement == null) return routine;
+    final usedIds = <String>{};
+    final balancedExercises = <Map<String, dynamic>>[];
 
-    final updatedExercises = routine.exercises
-        .map((ex) => Map<String, dynamic>.from(ex))
-        .toList();
+    for (final group in desiredGroups) {
+      final candidates = candidatesByGroup[group] ?? <Map<String, dynamic>>[];
+      Map<String, dynamic>? picked;
 
-    int replaceIndex = updatedExercises.length - 1;
-    final muscleCounts = <String, int>{};
-    for (final ex in updatedExercises) {
-      final mg = _normalizedMuscleGroup(ex['primary_muscle_group']);
-      if (mg.isNotEmpty) muscleCounts[mg] = (muscleCounts[mg] ?? 0) + 1;
-    }
-
-    int highestCount = -1;
-    for (int i = 0; i < updatedExercises.length; i++) {
-      final mg = _normalizedMuscleGroup(updatedExercises[i]['primary_muscle_group']);
-      final count = muscleCounts[mg] ?? 0;
-      if (count > highestCount) {
-        highestCount = count;
-        replaceIndex = i;
+      for (final candidate in candidates) {
+        final id = (candidate['id'] ?? '').toString();
+        if (id.trim().isEmpty || usedIds.contains(id)) continue;
+        picked = Map<String, dynamic>.from(candidate);
+        usedIds.add(id);
+        break;
       }
+
+      // If the user does not have enough exercises in a group, keep the
+      // original suggestion for that slot instead of shrinking the routine.
+      picked ??= routine.exercises.length > balancedExercises.length
+          ? Map<String, dynamic>.from(routine.exercises[balancedExercises.length])
+          : null;
+
+      if (picked != null) balancedExercises.add(picked);
     }
 
-    updatedExercises[replaceIndex] = replacement;
+    if (balancedExercises.isEmpty) return routine;
 
     return SuggestedRoutine(
       minutes: routine.minutes,
       dayType: routine.dayType,
-      exercises: updatedExercises,
+      exercises: balancedExercises,
       message: routine.message,
     );
   }
-
 
   Future<void> _randomizeSuggestedExerciseAt(int index) async {
     final current = _suggestedRoutine;
