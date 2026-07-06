@@ -1034,13 +1034,44 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
     if (groups.isEmpty) return <String>[];
 
+    final baseCount = exerciseCount ~/ groups.length;
+    var remainder = exerciseCount % groups.length;
     final result = <String>[];
-    var groupIndex = 0;
-    while (result.length < exerciseCount) {
-      result.add(groups[groupIndex % groups.length]);
-      groupIndex++;
+
+    // Keep the same grouped layout the original push day used:
+    // chest/back first, then shoulders, then arms. Extra exercises go to the
+    // earlier groups first, so 8 exercises becomes 3 / 3 / 2.
+    for (final group in groups) {
+      final countForGroup = baseCount + (remainder > 0 ? 1 : 0);
+      if (remainder > 0) remainder--;
+      for (var i = 0; i < countForGroup; i++) {
+        result.add(group);
+      }
     }
+
     return result;
+  }
+
+  String _desiredMuscleGroupForRoutineSlot({
+    required SuggestedRoutine routine,
+    required int index,
+  }) {
+    final desiredGroups = _balancedMuscleGroupsForRoutine(
+      dayType: routine.dayType,
+      exerciseCount: routine.exercises.length,
+    );
+
+    if (index >= 0 && index < desiredGroups.length) {
+      return desiredGroups[index];
+    }
+
+    if (index >= 0 && index < routine.exercises.length) {
+      return _canonicalMuscleGroup(
+        routine.exercises[index]['primary_muscle_group'],
+      );
+    }
+
+    return '';
   }
 
   String _individualRandomizeHistoryKey({
@@ -1058,7 +1089,6 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
     final user = supabase.auth.currentUser;
     if (user == null || candidateIds.isEmpty) {
       return {
-        'setCountsByExerciseId': <String, int>{},
         'lastCompletedByExerciseId': <String, DateTime>{},
       };
     }
@@ -1069,7 +1099,6 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
         .eq('user_id', user.id)
         .order('created_at', ascending: true);
 
-    final setCountsByExerciseId = <String, int>{};
     final lastCompletedByExerciseId = <String, DateTime>{};
 
     for (final row in sessionRows) {
@@ -1084,8 +1113,6 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
       final id = (ex['id'] ?? '').toString();
       if (id.isEmpty || !candidateIds.contains(id)) continue;
 
-      setCountsByExerciseId[id] = (setCountsByExerciseId[id] ?? 0) + 1;
-
       final createdAtRaw = session['created_at'];
       if (createdAtRaw != null) {
         final createdAt = DateTime.tryParse(createdAtRaw.toString());
@@ -1094,14 +1121,12 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
 
     return {
-      'setCountsByExerciseId': setCountsByExerciseId,
       'lastCompletedByExerciseId': lastCompletedByExerciseId,
     };
   }
 
   void _sortExercisesBySuggestionPriority(
     List<Map<String, dynamic>> candidates, {
-    required Map<String, int> setCountsByExerciseId,
     required Map<String, DateTime> lastCompletedByExerciseId,
   }) {
     candidates.sort((a, b) {
@@ -1121,12 +1146,8 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
         if (lastCompare != 0) return lastCompare;
       }
 
-      // If dates tie, choose the exercise with fewer total logged sets.
-      final aSets = setCountsByExerciseId[aId] ?? 0;
-      final bSets = setCountsByExerciseId[bId] ?? 0;
-      final setCompare = aSets.compareTo(bSets);
-      if (setCompare != 0) return setCompare;
-
+      // Reps, weight, and set count are intentionally ignored. Any completed
+      // session record counts the same. Name is only a stable tie-breaker.
       final aName = (a['name'] ?? '').toString().toLowerCase();
       final bName = (b['name'] ?? '').toString().toLowerCase();
       return aName.compareTo(bName);
@@ -1173,8 +1194,6 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
     _sortExercisesBySuggestionPriority(
       candidates,
-      setCountsByExerciseId:
-          Map<String, int>.from(history['setCountsByExerciseId'] as Map),
       lastCompletedByExerciseId: Map<String, DateTime>.from(
         history['lastCompletedByExerciseId'] as Map,
       ),
@@ -1224,11 +1243,23 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
         break;
       }
 
-      // If the user does not have enough exercises in a group, keep the
-      // original suggestion for that slot instead of shrinking the routine.
-      picked ??= routine.exercises.length > balancedExercises.length
-          ? Map<String, dynamic>.from(routine.exercises[balancedExercises.length])
-          : null;
+      // If there are not enough unused exercises in this muscle group, only
+      // keep the original slot if it already matches the desired group. This
+      // prevents a shoulder slot from silently becoming back/arms.
+      if (picked == null && routine.exercises.length > balancedExercises.length) {
+        final original = Map<String, dynamic>.from(
+          routine.exercises[balancedExercises.length],
+        );
+        final originalId = (original['id'] ?? '').toString();
+        final originalGroup = _canonicalMuscleGroup(
+          original['primary_muscle_group'],
+        );
+
+        if (originalGroup == group && !usedIds.contains(originalId)) {
+          picked = original;
+          if (originalId.trim().isNotEmpty) usedIds.add(originalId);
+        }
+      }
 
       if (picked != null) balancedExercises.add(picked);
     }
@@ -1250,9 +1281,13 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
     final currentExercise = current.exercises[index];
     final currentExerciseId = (currentExercise['id'] ?? '').toString();
-    final currentMuscleGroup = _normalizedMuscleGroup(
-      currentExercise['primary_muscle_group'],
+    final desiredSlotMuscleGroup = _desiredMuscleGroupForRoutineSlot(
+      routine: current,
+      index: index,
     );
+    final currentMuscleGroup = desiredSlotMuscleGroup.isNotEmpty
+        ? desiredSlotMuscleGroup
+        : _canonicalMuscleGroup(currentExercise['primary_muscle_group']);
     final currentExerciseType = (currentExercise['type'] ?? '')
         .toString()
         .trim()
