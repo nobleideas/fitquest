@@ -969,6 +969,22 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
     if (current == null || _isSuggesting) return;
     if (index < 0 || index >= current.exercises.length) return;
 
+    final currentExercise = current.exercises[index];
+    final currentExerciseId = (currentExercise['id'] ?? '').toString();
+    final currentMuscleGroup = (currentExercise['primary_muscle_group'] ?? '')
+        .toString()
+        .trim()
+        .toLowerCase();
+
+    if (currentMuscleGroup.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('This exercise does not have a muscle group assigned.'),
+        ),
+      );
+      return;
+    }
+
     setState(() => _isSuggesting = true);
 
     try {
@@ -998,22 +1014,31 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
           .where((id) => id.trim().isNotEmpty)
           .toSet();
 
-      final currentExerciseId = (current.exercises[index]['id'] ?? '')
-          .toString();
-
       Map<String, dynamic>? replacement;
       for (final candidate in randomizedRoutine.exercises) {
         final candidateId = (candidate['id'] ?? '').toString();
+        final candidateMuscleGroup = (candidate['primary_muscle_group'] ?? '')
+            .toString()
+            .trim()
+            .toLowerCase();
+
         if (candidateId.trim().isEmpty) continue;
         if (candidateId == currentExerciseId) continue;
         if (existingIds.contains(candidateId)) continue;
+        if (candidateMuscleGroup != currentMuscleGroup) continue;
+
         replacement = Map<String, dynamic>.from(candidate);
         break;
       }
 
-      replacement ??= Map<String, dynamic>.from(
-        randomizedRoutine.exercises.first,
-      );
+      if (replacement == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('No replacement exercise available for this muscle group.'),
+          ),
+        );
+        return;
+      }
 
       final updatedExercises = current.exercises
           .map((ex) => Map<String, dynamic>.from(ex))
