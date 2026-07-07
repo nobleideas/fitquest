@@ -88,11 +88,17 @@ class ProfilePageState extends State<ProfilePage> {
     final acceptedFriendsFuture = supabase.rpc('get_accepted_friends');
     final incomingRequestsFuture = supabase.rpc('get_incoming_friend_requests');
 
+    final exerciseVideoStatsFuture = supabase
+        .from('exercises')
+        .select('id, video_url')
+        .eq('user_id', user.id);
+
     final results = await Future.wait<dynamic>([
       profileFuture,
       volumeFuture,
       acceptedFriendsFuture,
       incomingRequestsFuture,
+      exerciseVideoStatsFuture,
     ]);
 
     final profile = Map<String, dynamic>.from(results[0] as Map);
@@ -116,11 +122,24 @@ class ProfilePageState extends State<ProfilePage> {
         ? List<Map<String, dynamic>>.from(results[3] as List)
         : <Map<String, dynamic>>[];
 
+    final exercises = (results[4] is List)
+        ? List<Map<String, dynamic>>.from(results[4] as List)
+        : <Map<String, dynamic>>[];
+
+    final totalExercises = exercises.length;
+
+    final videosUploaded = exercises.where((e) {
+      final videoUrl = (e['video_url'] ?? '').toString().trim();
+      return videoUrl.isNotEmpty;
+    }).length;
+
     return {
       'profile': profile,
       'volume': volRow,
       'acceptedFriends': acceptedFriends,
       'incomingRequests': incomingRequests,
+      'totalExercises': totalExercises,
+      'videosUploaded': videosUploaded,
     };
   }
 
@@ -301,6 +320,8 @@ class ProfilePageState extends State<ProfilePage> {
         final vol = snapshot.data!['volume'] as Map<String, dynamic>;
         final acceptedFriends = snapshot.data!['acceptedFriends'] as List<Map<String, dynamic>>;
         final incomingRequests = snapshot.data!['incomingRequests'] as List<Map<String, dynamic>>;
+        final totalExercises = snapshot.data!['totalExercises'] as int;
+        final videosUploaded = snapshot.data!['videosUploaded'] as int;
 
         final totalVol = _numToDouble(vol['total_volume']);
         final level = _computeLevel(totalVol);
@@ -377,6 +398,37 @@ class ProfilePageState extends State<ProfilePage> {
                                   ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
                                   : const Icon(Icons.edit),
                               label: const Text("Edit"),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+
+                    const SizedBox(height: 12),
+
+                    // -------- Exercise Video Analytics --------
+                    Card(
+                      elevation: 2,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      child: Padding(
+                        padding: const EdgeInsets.all(14),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Icon(Icons.video_library_outlined),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Text(
+                                    "Exercise Videos",
+                                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                                  ),
+                                  const SizedBox(height: 6),
+                                  Text("$videosUploaded of $totalExercises exercises have videos"),
+                                ],
+                              ),
                             ),
                           ],
                         ),
