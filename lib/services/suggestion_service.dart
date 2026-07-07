@@ -52,20 +52,9 @@ class SuggestionService {
         ? fixedDayTypeForRandomize
         : await _resolveSuggestedDayType(choice);
 
-    // Load data needed for fairness + exclusions.
-    final allExercises = await _loadMyExercises(user.id);
-    if (allExercises.isEmpty) {
-      return SuggestedRoutine(
-        dayType: dayType,
-        minutes: minutes,
-        exercises: const [],
-        message: 'No exercises found.',
-      );
-    }
-
     final sessionsWindow = await _loadRecentSessionsWindow(user.id, days: 120);
 
-    // Exclude: exercises used on MOST RECENT day of this same type.
+    // Exclude exercises used on the most recent day of this same day type.
     final DateTime? lastSameTypeDay = _mostRecentDayForTypeFromSessions(
       sessionsWindow,
       dayType,
@@ -78,22 +67,13 @@ class SuggestionService {
       );
     }
 
-    // Fairness metric A: distinct local days in last 30 days
-    final daysUsed30 = await _loadDaysUsed30ByExerciseId(user.id);
-
-    // Tie-breaker: last performed time
-    final lastPerformedById = _lastPerformedByExerciseIdFromSessions(
-      sessionsWindow,
-    );
-
-    // Build pool per constraints.
-    final pool = _buildEligiblePool(
-      allExercises: allExercises,
+    final exerciseType = _suggestedDayTypeToExerciseType(dayType);
+    final desiredGroups = _balancedMuscleGroupsForRoutine(
       dayType: dayType,
-      excludeIds: excludeIds,
+      exerciseCount: totalExercisesTarget,
     );
 
-    if (pool.isEmpty) {
+    if (desiredGroups.isEmpty) {
       return SuggestedRoutine(
         dayType: dayType,
         minutes: minutes,
@@ -102,78 +82,65 @@ class SuggestionService {
       );
     }
 
-    // Group by canonical muscle group and decide how many to take from each group.
-    final byGroup = <String, List<Map<String, dynamic>>>{};
-    for (final ex in pool) {
-      final mg = _canonicalMuscleGroup(
-        (ex['primary_muscle_group'] ?? '').toString(),
-      );
-      if (mg.isEmpty) continue;
-      byGroup.putIfAbsent(mg, () => []).add(ex);
-    }
-
-    final groupsWanted = _groupsForDayType(dayType);
-    final groupsAvailable = groupsWanted
-        .where((g) => (byGroup[g]?.isNotEmpty ?? false))
-        .toList();
-
-    if (groupsAvailable.isEmpty) {
-      return SuggestedRoutine(
-        dayType: dayType,
-        minutes: minutes,
-        exercises: const [],
-        message: 'No suggestions available.',
+    final candidatesByGroup = <String, List<Map<String, dynamic>>>{};
+    for (final group in desiredGroups.toSet()) {
+      candidatesByGroup[group] = await _loadReplacementCandidates(
+        muscleGroup: group,
+        exerciseType: exerciseType,
+        excludeIds: excludeIds,
       );
     }
 
-    // Distribute target roughly evenly across available groups.
-    final base = totalExercisesTarget ~/ groupsAvailable.length;
-    final rem = totalExercisesTarget % groupsAvailable.length;
-
-    final takeCount = <String, int>{};
-    for (int i = 0; i < groupsAvailable.length; i++) {
-      takeCount[groupsAvailable[i]] = base + (i < rem ? 1 : 0);
-    }
-
-    // Pick exercises: fairness-first, randomize = weighted sampling (still fairness-biased).
+    final usedIds = <String>{};
     final picked = <Map<String, dynamic>>[];
 
-    for (final g in groupsAvailable) {
-      final list = List<Map<String, dynamic>>.from(byGroup[g] ?? const []);
-      final need = takeCount[g] ?? 0;
-      if (need <= 0 || list.isEmpty) continue;
-
-      list.sort((a, b) => _compareFairA(a, b, daysUsed30, lastPerformedById));
-
-      if (randomize) {
-        picked.addAll(_weightedSampleNoReplace(list, need, daysUsed30));
-      } else {
-        picked.addAll(list.take(need));
-      }
-    }
-
-    // Fill any remaining from the whole pool, still fairness-first / weighted.
-    if (picked.length < totalExercisesTarget) {
-      final already = picked
-          .map((e) => (e['id'] ?? '').toString())
-          .where((s) => s.isNotEmpty)
-          .toSet();
-
-      final remaining = pool.where((ex) {
-        final id = (ex['id'] ?? '').toString();
-        return id.isNotEmpty && !already.contains(id);
-      }).toList();
-
-      remaining.sort(
-        (a, b) => _compareFairA(a, b, daysUsed30, lastPerformedById),
+    for (final group in desiredGroups) {
+      final candidates = List<Map<String, dynamic>>.from(
+        candidatesByGroup[group] ?? const [],
       );
 
-      final need = totalExercisesTarget - picked.length;
+      if (randomize && candidates.length > 1) {
+        _softShuffleCandidates(candidates);
+      }
 
-      if (randomize) {
-        picked.addAll(_weightedSampleNoReplace(remaining, need, daysUsed30));
-      } else {
-        picked.addAll(remaining.take(need));
+      Map<String, dynamic>? selected;
+      for (final candidate in candidates) {
+        final id = (candidate['id'] ?? '').toString();
+        if (id.trim().isEmpty || usedIds.contains(id)) continue;
+
+        selected = Map<String, dynamic>.from(candidate);
+        usedIds.add(id);
+        break;
+      }
+
+      if (selected != null) picked.add(selected);
+    }
+
+    // If exclusions left the routine short, fill from equipment exercises in the
+    // correct day type while keeping the same no-duplicates rule.
+    if (picked.length < totalExercisesTarget) {
+      final fallbackCandidates = <Map<String, dynamic>>[];
+      for (final group in desiredGroups.toSet()) {
+        fallbackCandidates.addAll(
+          await _loadReplacementCandidates(
+            muscleGroup: group,
+            exerciseType: exerciseType,
+          ),
+        );
+      }
+
+      if (randomize && fallbackCandidates.length > 1) {
+        _softShuffleCandidates(fallbackCandidates);
+      }
+
+      for (final candidate in fallbackCandidates) {
+        if (picked.length >= totalExercisesTarget) break;
+
+        final id = (candidate['id'] ?? '').toString();
+        if (id.trim().isEmpty || usedIds.contains(id)) continue;
+
+        picked.add(Map<String, dynamic>.from(candidate));
+        usedIds.add(id);
       }
     }
 
@@ -194,6 +161,216 @@ class SuggestionService {
       exercises: finalPicked,
       message: null,
     );
+  }
+
+  Future<SuggestedRoutine> rebalancePushPullRoutineByMuscleGroup(
+    SuggestedRoutine routine,
+  ) async {
+    if (routine.exercises.isEmpty) return routine;
+    if (routine.dayType != SuggestedDayType.push &&
+        routine.dayType != SuggestedDayType.pull) {
+      return routine;
+    }
+
+    final exerciseType = _suggestedDayTypeToExerciseType(routine.dayType);
+    if (exerciseType.isEmpty) return routine;
+
+    final desiredGroups = _balancedMuscleGroupsForRoutine(
+      dayType: routine.dayType,
+      exerciseCount: routine.exercises.length,
+    );
+    if (desiredGroups.isEmpty) return routine;
+
+    final candidatesByGroup = <String, List<Map<String, dynamic>>>{};
+    for (final group in desiredGroups.toSet()) {
+      candidatesByGroup[group] = await _loadReplacementCandidates(
+        muscleGroup: group,
+        exerciseType: exerciseType,
+      );
+    }
+
+    final usedIds = <String>{};
+    final balancedExercises = <Map<String, dynamic>>[];
+
+    for (final group in desiredGroups) {
+      final candidates = candidatesByGroup[group] ?? <Map<String, dynamic>>[];
+      Map<String, dynamic>? picked;
+
+      for (final candidate in candidates) {
+        final id = (candidate['id'] ?? '').toString();
+        if (id.trim().isEmpty || usedIds.contains(id)) continue;
+        picked = Map<String, dynamic>.from(candidate);
+        usedIds.add(id);
+        break;
+      }
+
+      // If there are not enough unused exercises in this muscle group, only
+      // keep the original slot if it already matches the desired group. This
+      // prevents a shoulder slot from silently becoming back/arms.
+      if (picked == null && routine.exercises.length > balancedExercises.length) {
+        final original = Map<String, dynamic>.from(
+          routine.exercises[balancedExercises.length],
+        );
+        final originalId = (original['id'] ?? '').toString();
+        final originalGroup = _canonicalMuscleGroup(
+          original['primary_muscle_group'],
+        );
+
+        if (originalGroup == group && !usedIds.contains(originalId)) {
+          picked = original;
+          if (originalId.trim().isNotEmpty) usedIds.add(originalId);
+        }
+      }
+
+      if (picked != null) balancedExercises.add(picked);
+    }
+
+    if (balancedExercises.isEmpty) return routine;
+
+    return SuggestedRoutine(
+      minutes: routine.minutes,
+      dayType: routine.dayType,
+      exercises: balancedExercises,
+      message: routine.message,
+    );
+  }
+
+  Future<SuggestedRoutine> randomizeExerciseInRoutine({
+    required SuggestedRoutine routine,
+    required int index,
+    required Map<String, Set<String>> individualRandomizeHistoryBySlot,
+  }) async {
+    if (index < 0 || index >= routine.exercises.length) return routine;
+
+    final currentExercise = routine.exercises[index];
+    final currentExerciseId = (currentExercise['id'] ?? '').toString();
+
+    final desiredSlotMuscleGroup = desiredMuscleGroupForRoutineSlot(
+      routine: routine,
+      index: index,
+    );
+    final currentMuscleGroup = desiredSlotMuscleGroup.isNotEmpty
+        ? desiredSlotMuscleGroup
+        : _canonicalMuscleGroup(currentExercise['primary_muscle_group']);
+
+    final currentExerciseType = (currentExercise['type'] ?? '')
+        .toString()
+        .trim()
+        .toLowerCase();
+    final fallbackExerciseType = _suggestedDayTypeToExerciseType(
+      routine.dayType,
+    );
+    final exerciseType = currentExerciseType.isNotEmpty
+        ? currentExerciseType
+        : fallbackExerciseType;
+
+    if (currentMuscleGroup.isEmpty || exerciseType.isEmpty) return routine;
+
+    final candidates = await _loadReplacementCandidates(
+      muscleGroup: currentMuscleGroup,
+      exerciseType: exerciseType,
+    );
+
+    final existingIds = routine.exercises.asMap().entries
+        .where((entry) => entry.key != index)
+        .map((entry) => (entry.value['id'] ?? '').toString())
+        .where((id) => id.trim().isNotEmpty)
+        .toSet();
+
+    final historyKey = individualRandomizeHistoryKey(
+      dayType: routine.dayType,
+      index: index,
+      muscleGroup: currentMuscleGroup,
+      exerciseType: exerciseType,
+    );
+
+    final usedIds = individualRandomizeHistoryBySlot.putIfAbsent(
+      historyKey,
+      () => <String>{},
+    );
+
+    if (currentExerciseId.trim().isNotEmpty) usedIds.add(currentExerciseId);
+
+    List<Map<String, dynamic>> available = candidates.where((candidate) {
+      final candidateId = (candidate['id'] ?? '').toString();
+      if (candidateId.trim().isEmpty) return false;
+      if (candidateId == currentExerciseId) return false;
+      if (existingIds.contains(candidateId)) return false;
+      if (usedIds.contains(candidateId)) return false;
+      return true;
+    }).toList();
+
+    // Once every valid replacement has been shown, start a new cycle while
+    // still avoiding the current exercise and duplicates already in the routine.
+    if (available.isEmpty) {
+      usedIds.clear();
+      if (currentExerciseId.trim().isNotEmpty) usedIds.add(currentExerciseId);
+
+      available = candidates.where((candidate) {
+        final candidateId = (candidate['id'] ?? '').toString();
+        if (candidateId.trim().isEmpty) return false;
+        if (candidateId == currentExerciseId) return false;
+        if (existingIds.contains(candidateId)) return false;
+        return true;
+      }).toList();
+    }
+
+    if (available.isEmpty) return routine;
+
+    final replacement = Map<String, dynamic>.from(available.first);
+    final replacementId = (replacement['id'] ?? '').toString();
+    if (replacementId.trim().isNotEmpty) usedIds.add(replacementId);
+
+    final updatedExercises = routine.exercises
+        .map((ex) => Map<String, dynamic>.from(ex))
+        .toList();
+    updatedExercises[index] = replacement;
+
+    return SuggestedRoutine(
+      minutes: routine.minutes,
+      dayType: routine.dayType,
+      exercises: updatedExercises,
+      message: routine.message,
+    );
+  }
+
+  String individualRandomizeHistoryKey({
+    required SuggestedDayType dayType,
+    required int index,
+    required String muscleGroup,
+    required String exerciseType,
+  }) {
+    return '${dayType.name}:$index:$exerciseType:$muscleGroup';
+  }
+
+  String desiredMuscleGroupForRoutineSlot({
+    required SuggestedRoutine routine,
+    required int index,
+  }) {
+    final desiredGroups = _balancedMuscleGroupsForRoutine(
+      dayType: routine.dayType,
+      exerciseCount: routine.exercises.length,
+    );
+
+    if (index >= 0 && index < desiredGroups.length) {
+      return desiredGroups[index];
+    }
+
+    if (index >= 0 && index < routine.exercises.length) {
+      return _canonicalMuscleGroup(
+        routine.exercises[index]['primary_muscle_group'],
+      );
+    }
+
+    return '';
+  }
+
+  String canonicalMuscleGroup(dynamic value) => _canonicalMuscleGroup(value);
+
+  bool muscleGroupsMatch(dynamic a, dynamic b) {
+    final left = _canonicalMuscleGroup(a);
+    final right = _canonicalMuscleGroup(b);
+    return left.isNotEmpty && left == right;
   }
 
   // ---------- Day type rotation / override ----------
@@ -237,217 +414,267 @@ class SuggestionService {
       case SuggestedDayType.push:
         return const ['chest', 'shoulders', 'arms'];
       case SuggestedDayType.pull:
-        return const ['back', 'arms'];
+        return const ['back', 'shoulders', 'arms'];
       case SuggestedDayType.legsCore:
         return const ['legs', 'core'];
     }
   }
 
-  // ---------- Fairness (A) ----------
-
-  Future<Map<String, int>> _loadDaysUsed30ByExerciseId(String userId) async {
-    final sinceUtc = DateTime.now()
-        .toUtc()
-        .subtract(const Duration(days: 30))
-        .toIso8601String();
-
-    final rowsRaw = await supabase
-        .from('exercise_sessions')
-        .select('exercise_id, created_at')
-        .eq('user_id', userId)
-        .gte('created_at', sinceUtc);
-
-    final rows = List<Map<String, dynamic>>.from(rowsRaw as List);
-
-    final Map<String, Set<String>> daySets = {};
-
-    for (final r in rows) {
-      final id = (r['exercise_id'] ?? '').toString();
-      if (id.isEmpty) continue;
-
-      final dt = DateTime.tryParse((r['created_at'] ?? '').toString());
-      if (dt == null) continue;
-
-      final local = dt.toLocal();
-      final dayKey = _dayKeyLocal(local);
-
-      daySets.putIfAbsent(id, () => <String>{}).add(dayKey);
+  String _suggestedDayTypeToExerciseType(SuggestedDayType dayType) {
+    switch (dayType) {
+      case SuggestedDayType.push:
+        return 'push';
+      case SuggestedDayType.pull:
+        return 'pull';
+      case SuggestedDayType.legsCore:
+        return '';
     }
-
-    return {for (final e in daySets.entries) e.key: e.value.length};
   }
 
-  int _compareFairA(
-    Map<String, dynamic> a,
-    Map<String, dynamic> b,
-    Map<String, int> daysUsed30,
-    Map<String, DateTime> lastPerformed,
-  ) {
-    final aId = (a['id'] ?? '').toString();
-    final bId = (b['id'] ?? '').toString();
-
-    final aDays = daysUsed30[aId] ?? 0;
-    final bDays = daysUsed30[bId] ?? 0;
-    if (aDays != bDays) return aDays.compareTo(bDays);
-
-    final never = DateTime.fromMillisecondsSinceEpoch(0);
-    final aLast = lastPerformed[aId] ?? never;
-    final bLast = lastPerformed[bId] ?? never;
-    final t = aLast.compareTo(bLast);
-    if (t != 0) return t;
-
-    final an = (a['name'] ?? '').toString().toLowerCase();
-    final bn = (b['name'] ?? '').toString().toLowerCase();
-    return an.compareTo(bn);
-  }
-
-  // Weighted random: favors under-used in last 30 days.
-  List<Map<String, dynamic>> _weightedSampleNoReplace(
-    List<Map<String, dynamic>> items,
-    int k,
-    Map<String, int> daysUsed30,
-  ) {
-    final rng = Random(DateTime.now().microsecondsSinceEpoch);
-    final pool = List<Map<String, dynamic>>.from(items);
-    final out = <Map<String, dynamic>>[];
-
-    while (out.length < k && pool.isNotEmpty) {
-      final picked = _weightedPickOne(pool, daysUsed30, rng);
-      if (picked == null) break;
-
-      out.add(picked);
-      final pickedId = (picked['id'] ?? '').toString();
-      pool.removeWhere((e) => (e['id'] ?? '').toString() == pickedId);
-    }
-
-    return out;
-  }
-
-  Map<String, dynamic>? _weightedPickOne(
-    List<Map<String, dynamic>> items,
-    Map<String, int> daysUsed30,
-    Random rng,
-  ) {
-    if (items.isEmpty) return null;
-
-    double total = 0;
-    final weights = <double>[];
-
-    for (final ex in items) {
-      final id = (ex['id'] ?? '').toString();
-      final d = daysUsed30[id] ?? 0;
-
-      // ✅ A: distinct workout-days distribution
-      final w = 1.0 / (1.0 + d); // 0 days => 1.0, 4 days => 0.2
-      weights.add(w);
-      total += w;
-    }
-
-    var roll = rng.nextDouble() * total;
-    for (int i = 0; i < items.length; i++) {
-      roll -= weights[i];
-      if (roll <= 0) return items[i];
-    }
-
-    return items.last;
-  }
-
-  // ---------- Eligibility rules ----------
-
-  List<Map<String, dynamic>> _buildEligiblePool({
-    required List<Map<String, dynamic>> allExercises,
+  List<String> _balancedMuscleGroupsForRoutine({
     required SuggestedDayType dayType,
-    required Set<String> excludeIds,
+    required int exerciseCount,
   }) {
-    final wantedGroups = _groupsForDayType(dayType);
+    if (exerciseCount <= 0) return <String>[];
 
-    return allExercises.where((ex) {
-      final id = (ex['id'] ?? '').toString();
-      if (id.isEmpty) return false;
-      if (excludeIds.contains(id)) return false;
+    final groups = _groupsForDayType(dayType);
+    if (groups.isEmpty) return <String>[];
 
-      final name = (ex['name'] ?? '').toString().trim();
-      if (name.isEmpty) return false;
+    final baseCount = exerciseCount ~/ groups.length;
+    var remainder = exerciseCount % groups.length;
+    final result = <String>[];
 
-      final mg = _canonicalMuscleGroup(
-        (ex['primary_muscle_group'] ?? '').toString(),
-      );
-      if (!wantedGroups.contains(mg)) return false;
-
-      // Push/Pull days must match "type" column.
-      if (dayType == SuggestedDayType.push) {
-        return (ex['type'] ?? '').toString().toLowerCase() == 'push';
+    // Keep the same grouped layout the original push day used:
+    // chest/back first, then shoulders/core, then arms. Extra exercises go to
+    // earlier groups first, so 8 upper-body exercises becomes 3 / 3 / 2.
+    for (final group in groups) {
+      final countForGroup = baseCount + (remainder > 0 ? 1 : 0);
+      if (remainder > 0) remainder--;
+      for (var i = 0; i < countForGroup; i++) {
+        result.add(group);
       }
-      if (dayType == SuggestedDayType.pull) {
-        return (ex['type'] ?? '').toString().toLowerCase() == 'pull';
-      }
+    }
 
-      // Legs/Core day: muscle group only (type can be push/pull in your schema).
-      return true;
-    }).toList();
+    return result;
   }
 
-  String _canonicalMuscleGroup(String mg) {
-    final g = mg.trim().toLowerCase();
+  // ---------- Candidate loading / priority ----------
 
-    if (g.isEmpty) {
-      return '';
+  Future<Map<String, dynamic>> _loadExerciseHistoryForCandidates({
+    required Set<String> candidateIds,
+  }) async {
+    final user = supabase.auth.currentUser;
+    if (user == null || candidateIds.isEmpty) {
+      return {
+        'lastCompletedByExerciseId': <String, DateTime>{},
+      };
     }
 
-    // Your exact values
-    if (g == 'legs') {
-      return 'legs';
+    final sessionRows = await supabase
+        .from('exercise_sessions')
+        .select('created_at, exercises!inner(id)')
+        .eq('user_id', user.id)
+        .order('created_at', ascending: true);
+
+    final lastCompletedByExerciseId = <String, DateTime>{};
+
+    for (final row in sessionRows) {
+      final session = Map<String, dynamic>.from(row as Map);
+      final exJoined = session['exercises'];
+      final Map<String, dynamic> ex = exJoined is Map
+          ? Map<String, dynamic>.from(exJoined)
+          : (exJoined is List && exJoined.isNotEmpty)
+          ? Map<String, dynamic>.from(exJoined.first as Map)
+          : <String, dynamic>{};
+
+      final id = (ex['id'] ?? '').toString();
+      if (id.isEmpty || !candidateIds.contains(id)) continue;
+
+      final createdAtRaw = session['created_at'];
+      if (createdAtRaw != null) {
+        final createdAt = DateTime.tryParse(createdAtRaw.toString());
+        if (createdAt != null) lastCompletedByExerciseId[id] = createdAt;
+      }
     }
 
-    if (g == 'core') {
-      return 'core';
+    return {
+      'lastCompletedByExerciseId': lastCompletedByExerciseId,
+    };
+  }
+
+  void _sortExercisesBySuggestionPriority(
+    List<Map<String, dynamic>> candidates, {
+    required Map<String, DateTime> lastCompletedByExerciseId,
+  }) {
+    candidates.sort((a, b) {
+      final aId = (a['id'] ?? '').toString();
+      final bId = (b['id'] ?? '').toString();
+
+      final aLast = lastCompletedByExerciseId[aId];
+      final bLast = lastCompletedByExerciseId[bId];
+
+      // Never completed exercises have top priority.
+      if (aLast == null && bLast != null) return -1;
+      if (aLast != null && bLast == null) return 1;
+
+      // Then choose the exercise completed the longest time ago.
+      if (aLast != null && bLast != null) {
+        final lastCompare = aLast.compareTo(bLast);
+        if (lastCompare != 0) return lastCompare;
+      }
+
+      // Reps, weight, and set count are intentionally ignored. Any completed
+      // session record counts the same. Name is only a stable tie-breaker.
+      final aName = (a['name'] ?? '').toString().toLowerCase();
+      final bName = (b['name'] ?? '').toString().toLowerCase();
+      return aName.compareTo(bName);
+    });
+  }
+
+  void _softShuffleCandidates(List<Map<String, dynamic>> candidates) {
+    // Keeps the least-recently-completed priority meaningful while still making
+    // full-routine randomize feel different. It only shuffles within small
+    // priority bands instead of ignoring completion history completely.
+    final rng = Random(DateTime.now().microsecondsSinceEpoch);
+
+    for (var start = 0; start < candidates.length; start += 3) {
+      final end = min(start + 3, candidates.length);
+      final band = candidates.sublist(start, end)..shuffle(rng);
+      for (var i = 0; i < band.length; i++) {
+        candidates[start + i] = band[i];
+      }
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> _loadReplacementCandidates({
+    required String muscleGroup,
+    required String exerciseType,
+    Set<String> excludeIds = const <String>{},
+  }) async {
+    final user = supabase.auth.currentUser;
+    if (user == null) return <Map<String, dynamic>>[];
+
+    final canonicalMuscleGroup = _canonicalMuscleGroup(muscleGroup);
+    final normalizedExerciseType = exerciseType.trim().toLowerCase();
+
+    if (canonicalMuscleGroup.isEmpty) {
+      return <Map<String, dynamic>>[];
     }
 
-    // Upper body mapping (you said: chest, shoulders, arms, back)
-    if (g.contains('chest') || g.contains('pec')) {
-      return 'chest';
+    final dynamic exerciseRows = normalizedExerciseType.isEmpty
+        ? await supabase
+              .from('exercises')
+              .select('''
+                id,
+                name,
+                type,
+                primary_muscle_group,
+                equipment_id,
+                video_url,
+                equipment:equipment_id (
+                  name,
+                  kind
+                )
+              ''')
+              .eq('user_id', user.id)
+        : await supabase
+              .from('exercises')
+              .select('''
+                id,
+                name,
+                type,
+                primary_muscle_group,
+                equipment_id,
+                video_url,
+                equipment:equipment_id (
+                  name,
+                  kind
+                )
+              ''')
+              .eq('user_id', user.id)
+              .eq('type', normalizedExerciseType);
+
+    final candidates = <Map<String, dynamic>>[];
+
+    for (final row in exerciseRows) {
+      final ex = Map<String, dynamic>.from(row as Map);
+      final id = (ex['id'] ?? '').toString();
+
+      if (id.trim().isEmpty || excludeIds.contains(id)) continue;
+
+      final equipment = ex['equipment'] == null
+          ? <String, dynamic>{}
+          : Map<String, dynamic>.from(ex['equipment'] as Map);
+
+      // Only standalone equipment exercises are allowed in suggested routines.
+      // Exercises that live inside a routine are intentionally excluded.
+      if ((equipment['kind'] ?? '').toString().toLowerCase() != 'equipment') {
+        continue;
+      }
+
+      ex['equipment_name'] = (equipment['name'] ?? '').toString();
+
+      if (_canonicalMuscleGroup(ex['primary_muscle_group']) ==
+          canonicalMuscleGroup) {
+        candidates.add(ex);
+      }
     }
 
-    if (g.contains('shoulder') || g.contains('delt')) {
+    if (candidates.isEmpty) return candidates;
+
+    final candidateIds = candidates
+        .map((ex) => (ex['id'] ?? '').toString())
+        .where((id) => id.trim().isNotEmpty)
+        .toSet();
+
+    final history = await _loadExerciseHistoryForCandidates(
+      candidateIds: candidateIds,
+    );
+
+    _sortExercisesBySuggestionPriority(
+      candidates,
+      lastCompletedByExerciseId: Map<String, DateTime>.from(
+        history['lastCompletedByExerciseId'] as Map,
+      ),
+    );
+
+    return candidates;
+  }
+
+  // ---------- Muscle group helpers ----------
+
+  String _canonicalMuscleGroup(dynamic value) {
+    final mg = (value ?? '').toString().trim().toLowerCase();
+
+    if (mg == 'shoulder' ||
+        mg == 'shoulders' ||
+        mg == 'delt' ||
+        mg == 'delts' ||
+        mg == 'deltoid' ||
+        mg == 'deltoids') {
       return 'shoulders';
     }
-
-    if (g.contains('arm') ||
-        g.contains('bicep') ||
-        g.contains('tricep') ||
-        g.contains('forearm')) {
+    if (mg == 'arm' ||
+        mg == 'arms' ||
+        mg == 'bicep' ||
+        mg == 'biceps' ||
+        mg == 'tricep' ||
+        mg == 'triceps' ||
+        mg == 'forearm' ||
+        mg == 'forearms') {
       return 'arms';
     }
-
-    if (g.contains('back') || g.contains('lat') || g.contains('trap')) {
+    if (mg == 'chest' || mg == 'pec' || mg == 'pecs') return 'chest';
+    if (mg == 'back' ||
+        mg == 'lats' ||
+        mg == 'lat' ||
+        mg == 'trap' ||
+        mg == 'traps') {
       return 'back';
     }
-
-    return g;
-  }
-
-  // ---------- Exercise loading ----------
-
-  Future<List<Map<String, dynamic>>> _loadMyExercises(String userId) async {
-    final rowsRaw = await supabase
-        .from('exercises')
-        .select(
-          'id, name, type, primary_muscle_group, video_url, equipment:equipment_id(name)',
-        )
-        .eq('user_id', userId);
-
-    final list = List<Map<String, dynamic>>.from(rowsRaw as List);
-
-    for (final ex in list) {
-      final equipment = ex['equipment'];
-      if (equipment is Map) {
-        ex['equipment_name'] = (equipment['name'] ?? '').toString();
-      } else {
-        ex['equipment_name'] = '';
-      }
-    }
-
-    return list;
+    if (mg == 'leg' || mg == 'legs') return 'legs';
+    if (mg == 'core' || mg == 'abs' || mg == 'abdominals') return 'core';
+    return mg;
   }
 
   // ---------- Session window helpers (used for type detection + exclusions) ----------
@@ -509,18 +736,6 @@ class SuggestionService {
     }
 
     return out;
-  }
-
-  Map<String, DateTime> _lastPerformedByExerciseIdFromSessions(
-    List<_SessionRow> sessions,
-  ) {
-    final Map<String, DateTime> last = {};
-    for (final s in sessions) {
-      if (!last.containsKey(s.exerciseId)) {
-        last[s.exerciseId] = s.createdAtLocal;
-      }
-    }
-    return last;
   }
 
   Set<String> _exerciseIdsUsedOnLocalDay(
