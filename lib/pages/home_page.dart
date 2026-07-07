@@ -1155,52 +1155,75 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
   }
 
   Future<List<Map<String, dynamic>>> _loadReplacementCandidates({
-    required String muscleGroup,
-    required String exerciseType,
-  }) async {
-    final user = supabase.auth.currentUser;
-    if (user == null) return <Map<String, dynamic>>[];
+  required String muscleGroup,
+  required String exerciseType,
+}) async {
+  final user = supabase.auth.currentUser;
+  if (user == null) return <Map<String, dynamic>>[];
 
-    final canonicalMuscleGroup = _canonicalMuscleGroup(muscleGroup);
-    final normalizedExerciseType = exerciseType.trim().toLowerCase();
-    if (canonicalMuscleGroup.isEmpty || normalizedExerciseType.isEmpty) {
-      return <Map<String, dynamic>>[];
-    }
+  final canonicalMuscleGroup = _canonicalMuscleGroup(muscleGroup);
+  final normalizedExerciseType = exerciseType.trim().toLowerCase();
 
-    final exerciseRows = await supabase
-        .from('exercises')
-        .select('id, name, type, primary_muscle_group')
-        .eq('user_id', user.id)
-        .eq('type', normalizedExerciseType);
-
-    final candidates = <Map<String, dynamic>>[];
-    for (final row in exerciseRows) {
-      final ex = Map<String, dynamic>.from(row as Map);
-      if (_canonicalMuscleGroup(ex['primary_muscle_group']) ==
-          canonicalMuscleGroup) {
-        candidates.add(ex);
-      }
-    }
-
-    if (candidates.isEmpty) return candidates;
-
-    final candidateIds = candidates
-        .map((ex) => (ex['id'] ?? '').toString())
-        .where((id) => id.trim().isNotEmpty)
-        .toSet();
-    final history = await _loadExerciseHistoryForCandidates(
-      candidateIds: candidateIds,
-    );
-
-    _sortExercisesBySuggestionPriority(
-      candidates,
-      lastCompletedByExerciseId: Map<String, DateTime>.from(
-        history['lastCompletedByExerciseId'] as Map,
-      ),
-    );
-
-    return candidates;
+  if (canonicalMuscleGroup.isEmpty || normalizedExerciseType.isEmpty) {
+    return <Map<String, dynamic>>[];
   }
+
+  final exerciseRows = await supabase
+      .from('exercises')
+      .select('''
+        id,
+        name,
+        type,
+        primary_muscle_group,
+        equipment_id,
+        equipment:equipment_id (
+          kind
+        )
+      ''')
+      .eq('user_id', user.id)
+      .eq('type', normalizedExerciseType);
+
+  final candidates = <Map<String, dynamic>>[];
+
+  for (final row in exerciseRows) {
+    final ex = Map<String, dynamic>.from(row as Map);
+
+    final equipment =
+        ex['equipment'] == null
+            ? <String, dynamic>{}
+            : Map<String, dynamic>.from(ex['equipment']);
+
+    // Ignore exercises that belong to a routine.
+    if ((equipment['kind'] ?? '').toString().toLowerCase() != 'equipment') {
+      continue;
+    }
+
+    if (_canonicalMuscleGroup(ex['primary_muscle_group']) ==
+        canonicalMuscleGroup) {
+      candidates.add(ex);
+    }
+  }
+
+  if (candidates.isEmpty) return candidates;
+
+  final candidateIds = candidates
+      .map((ex) => (ex['id'] ?? '').toString())
+      .where((id) => id.trim().isNotEmpty)
+      .toSet();
+
+  final history = await _loadExerciseHistoryForCandidates(
+    candidateIds: candidateIds,
+  );
+
+  _sortExercisesBySuggestionPriority(
+    candidates,
+    lastCompletedByExerciseId: Map<String, DateTime>.from(
+      history['lastCompletedByExerciseId'] as Map,
+    ),
+  );
+
+  return candidates;
+}
 
   Future<SuggestedRoutine> _rebalancePushPullRoutineByMuscleGroup(
     SuggestedRoutine routine,
