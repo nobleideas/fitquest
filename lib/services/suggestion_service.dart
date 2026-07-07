@@ -291,29 +291,16 @@ class SuggestionService {
 
     if (currentExerciseId.trim().isNotEmpty) usedIds.add(currentExerciseId);
 
-    List<Map<String, dynamic>> available = candidates.where((candidate) {
+    // Do not let randomize-cycle history override completion priority.
+    // _loadReplacementCandidates already sorts candidates as:
+    // never completed first, then completed longest ago, then name.
+    final available = candidates.where((candidate) {
       final candidateId = (candidate['id'] ?? '').toString();
       if (candidateId.trim().isEmpty) return false;
       if (candidateId == currentExerciseId) return false;
       if (existingIds.contains(candidateId)) return false;
-      if (usedIds.contains(candidateId)) return false;
       return true;
     }).toList();
-
-    // Once every valid replacement has been shown, start a new cycle while
-    // still avoiding the current exercise and duplicates already in the routine.
-    if (available.isEmpty) {
-      usedIds.clear();
-      if (currentExerciseId.trim().isNotEmpty) usedIds.add(currentExerciseId);
-
-      available = candidates.where((candidate) {
-        final candidateId = (candidate['id'] ?? '').toString();
-        if (candidateId.trim().isEmpty) return false;
-        if (candidateId == currentExerciseId) return false;
-        if (existingIds.contains(candidateId)) return false;
-        return true;
-      }).toList();
-    }
 
     if (available.isEmpty) return routine;
 
