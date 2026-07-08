@@ -26,8 +26,6 @@ class SuggestionService {
 
   SuggestionService(this.supabase);
 
-  // ---------- Public API ----------
-
   Future<SuggestedRoutine> buildRoutine({
     required int minutes,
     required SuggestedDayTypeChoice choice,
@@ -66,6 +64,7 @@ class SuggestionService {
     }
 
     final exerciseType = _suggestedDayTypeToExerciseType(dayType);
+
     final desiredGroups = _balancedMuscleGroupsForRoutine(
       dayType: dayType,
       exerciseCount: totalExercisesTarget,
@@ -81,6 +80,7 @@ class SuggestionService {
     }
 
     final candidatesByGroup = <String, List<Map<String, dynamic>>>{};
+
     for (final group in desiredGroups.toSet()) {
       candidatesByGroup[group] = await _loadReplacementCandidates(
         muscleGroup: group,
@@ -102,6 +102,7 @@ class SuggestionService {
       }
 
       Map<String, dynamic>? selected;
+
       for (final candidate in candidates) {
         final id = (candidate['id'] ?? '').toString();
         if (id.trim().isEmpty || usedIds.contains(id)) continue;
@@ -116,6 +117,7 @@ class SuggestionService {
 
     if (picked.length < totalExercisesTarget) {
       final fallbackCandidates = <Map<String, dynamic>>[];
+
       for (final group in desiredGroups.toSet()) {
         fallbackCandidates.addAll(
           await _loadReplacementCandidates(
@@ -163,6 +165,7 @@ class SuggestionService {
     SuggestedRoutine routine,
   ) async {
     if (routine.exercises.isEmpty) return routine;
+
     if (routine.dayType != SuggestedDayType.push &&
         routine.dayType != SuggestedDayType.pull) {
       return routine;
@@ -175,9 +178,11 @@ class SuggestionService {
       dayType: routine.dayType,
       exerciseCount: routine.exercises.length,
     );
+
     if (desiredGroups.isEmpty) return routine;
 
     final candidatesByGroup = <String, List<Map<String, dynamic>>>{};
+
     for (final group in desiredGroups.toSet()) {
       candidatesByGroup[group] = await _loadReplacementCandidates(
         muscleGroup: group,
@@ -195,6 +200,7 @@ class SuggestionService {
       for (final candidate in candidates) {
         final id = (candidate['id'] ?? '').toString();
         if (id.trim().isEmpty || usedIds.contains(id)) continue;
+
         picked = Map<String, dynamic>.from(candidate);
         usedIds.add(id);
         break;
@@ -204,6 +210,7 @@ class SuggestionService {
         final original = Map<String, dynamic>.from(
           routine.exercises[balancedExercises.length],
         );
+
         final originalId = (original['id'] ?? '').toString();
         final originalGroup = _canonicalMuscleGroup(
           original['primary_muscle_group'],
@@ -361,18 +368,19 @@ class SuggestionService {
     return left.isNotEmpty && left == right;
   }
 
-  // ---------- Day type rotation / override ----------
-
   Future<SuggestedDayType> _resolveSuggestedDayType(
     SuggestedDayTypeChoice choice,
   ) async {
     switch (choice) {
       case SuggestedDayTypeChoice.push:
         return SuggestedDayType.push;
+
       case SuggestedDayTypeChoice.pull:
         return SuggestedDayType.pull;
+
       case SuggestedDayTypeChoice.legsCore:
         return SuggestedDayType.legsCore;
+
       case SuggestedDayTypeChoice.auto:
         final user = supabase.auth.currentUser;
         if (user == null) return SuggestedDayType.push;
@@ -381,6 +389,7 @@ class SuggestionService {
           user.id,
           days: 120,
         );
+
         final lastType = _lastCompletedTypeFromSessions(sessionsWindow);
         return _nextRotationType(lastType);
     }
@@ -390,8 +399,10 @@ class SuggestionService {
     switch (last) {
       case SuggestedDayType.push:
         return SuggestedDayType.pull;
+
       case SuggestedDayType.pull:
         return SuggestedDayType.legsCore;
+
       case SuggestedDayType.legsCore:
         return SuggestedDayType.push;
     }
@@ -401,8 +412,10 @@ class SuggestionService {
     switch (t) {
       case SuggestedDayType.push:
         return const ['chest', 'shoulders', 'arms'];
+
       case SuggestedDayType.pull:
         return const ['back', 'shoulders', 'arms'];
+
       case SuggestedDayType.legsCore:
         return const ['legs', 'core'];
     }
@@ -412,8 +425,10 @@ class SuggestionService {
     switch (dayType) {
       case SuggestedDayType.push:
         return 'push';
+
       case SuggestedDayType.pull:
         return 'pull';
+
       case SuggestedDayType.legsCore:
         return '';
     }
@@ -430,6 +445,7 @@ class SuggestionService {
 
     final baseCount = exerciseCount ~/ groups.length;
     var remainder = exerciseCount % groups.length;
+
     final result = <String>[];
 
     for (final group in groups) {
@@ -444,74 +460,66 @@ class SuggestionService {
     return result;
   }
 
-  // ---------- Candidate loading / priority ----------
-
-  Future<Map<String, dynamic>> _loadExerciseHistoryForCandidates({
+  Future<Map<String, DateTime>> _loadLastSetDateByExerciseId({
     required Set<String> candidateIds,
   }) async {
     final user = supabase.auth.currentUser;
+
     if (user == null || candidateIds.isEmpty) {
-      return {
-        'lastCompletedByExerciseId': <String, DateTime>{},
-      };
+      return <String, DateTime>{};
     }
 
-    final sessionRows = await supabase
+    final rows = await supabase
         .from('exercise_sessions')
-        .select('created_at, exercises!inner(id)')
+        .select('exercise_id, created_at')
         .eq('user_id', user.id)
-        .order('created_at', ascending: true);
+        .inFilter('exercise_id', candidateIds.toList())
+        .order('created_at', ascending: false);
 
-    final lastCompletedByExerciseId = <String, DateTime>{};
+    final lastSetDateByExerciseId = <String, DateTime>{};
 
-    for (final row in sessionRows) {
+    for (final row in rows) {
       final session = Map<String, dynamic>.from(row as Map);
-      final exJoined = session['exercises'];
 
-      final Map<String, dynamic> ex = exJoined is Map
-          ? Map<String, dynamic>.from(exJoined)
-          : (exJoined is List && exJoined.isNotEmpty)
-          ? Map<String, dynamic>.from(exJoined.first as Map)
-          : <String, dynamic>{};
+      final exerciseId = (session['exercise_id'] ?? '').toString();
+      if (exerciseId.trim().isEmpty) continue;
 
-      final id = (ex['id'] ?? '').toString();
-      if (id.isEmpty || !candidateIds.contains(id)) continue;
+      if (lastSetDateByExerciseId.containsKey(exerciseId)) continue;
 
-      final createdAtRaw = session['created_at'];
-      if (createdAtRaw != null) {
-        final createdAt = DateTime.tryParse(createdAtRaw.toString());
-        if (createdAt != null) {
-          lastCompletedByExerciseId[id] = createdAt;
-        }
+      final createdAt = DateTime.tryParse(
+        (session['created_at'] ?? '').toString(),
+      );
+
+      if (createdAt != null) {
+        lastSetDateByExerciseId[exerciseId] = createdAt;
       }
     }
 
-    return {
-      'lastCompletedByExerciseId': lastCompletedByExerciseId,
-    };
+    return lastSetDateByExerciseId;
   }
 
-  void _sortExercisesBySuggestionPriority(
+  void _sortSameMuscleCandidatesByLastSetDate(
     List<Map<String, dynamic>> candidates, {
-    required Map<String, DateTime> lastCompletedByExerciseId,
+    required Map<String, DateTime> lastSetDateByExerciseId,
   }) {
     candidates.sort((a, b) {
       final aId = (a['id'] ?? '').toString();
       final bId = (b['id'] ?? '').toString();
 
-      final aLast = lastCompletedByExerciseId[aId];
-      final bLast = lastCompletedByExerciseId[bId];
+      final aLastSetDate = lastSetDateByExerciseId[aId];
+      final bLastSetDate = lastSetDateByExerciseId[bId];
 
-      if (aLast == null && bLast != null) return -1;
-      if (aLast != null && bLast == null) return 1;
+      if (aLastSetDate == null && bLastSetDate != null) return -1;
+      if (aLastSetDate != null && bLastSetDate == null) return 1;
 
-      if (aLast != null && bLast != null) {
-        final lastCompare = aLast.compareTo(bLast);
-        if (lastCompare != 0) return lastCompare;
+      if (aLastSetDate != null && bLastSetDate != null) {
+        final compare = aLastSetDate.compareTo(bLastSetDate);
+        if (compare != 0) return compare;
       }
 
       final aName = (a['name'] ?? '').toString().toLowerCase();
       final bName = (b['name'] ?? '').toString().toLowerCase();
+
       return aName.compareTo(bName);
     });
   }
@@ -581,9 +589,15 @@ class SuggestionService {
 
     for (final row in exerciseRows) {
       final ex = Map<String, dynamic>.from(row as Map);
-      final id = (ex['id'] ?? '').toString();
 
+      final id = (ex['id'] ?? '').toString();
       if (id.trim().isEmpty || excludeIds.contains(id)) continue;
+
+      final exerciseMuscleGroup = _canonicalMuscleGroup(
+        ex['primary_muscle_group'],
+      );
+
+      if (exerciseMuscleGroup != canonicalMuscleGroup) continue;
 
       final equipment = ex['equipment'] == null
           ? <String, dynamic>{}
@@ -595,10 +609,7 @@ class SuggestionService {
 
       ex['equipment_name'] = (equipment['name'] ?? '').toString();
 
-      if (_canonicalMuscleGroup(ex['primary_muscle_group']) ==
-          canonicalMuscleGroup) {
-        candidates.add(ex);
-      }
+      candidates.add(ex);
     }
 
     if (candidates.isEmpty) return candidates;
@@ -608,21 +619,17 @@ class SuggestionService {
         .where((id) => id.trim().isNotEmpty)
         .toSet();
 
-    final history = await _loadExerciseHistoryForCandidates(
+    final lastSetDateByExerciseId = await _loadLastSetDateByExerciseId(
       candidateIds: candidateIds,
     );
 
-    _sortExercisesBySuggestionPriority(
+    _sortSameMuscleCandidatesByLastSetDate(
       candidates,
-      lastCompletedByExerciseId: Map<String, DateTime>.from(
-        history['lastCompletedByExerciseId'] as Map,
-      ),
+      lastSetDateByExerciseId: lastSetDateByExerciseId,
     );
 
     return candidates;
   }
-
-  // ---------- Muscle group helpers ----------
 
   String _canonicalMuscleGroup(dynamic value) {
     final mg = (value ?? '').toString().trim().toLowerCase();
@@ -663,8 +670,6 @@ class SuggestionService {
     return mg;
   }
 
-  // ---------- Session window helpers ----------
-
   String _dayKeyLocal(DateTime d) =>
       '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
 
@@ -701,6 +706,7 @@ class SuggestionService {
       if (dt == null) continue;
 
       final exJoined = r['exercises'];
+
       final Map<String, dynamic> ex = exJoined is Map
           ? Map<String, dynamic>.from(exJoined)
           : (exJoined is List && exJoined.isNotEmpty && exJoined.first is Map)
@@ -782,6 +788,7 @@ class SuggestionService {
 
     for (final s in sessions) {
       final d = _toLocalDay(s.createdAtLocal);
+
       if (orderedDays.isEmpty || orderedDays.last != d) {
         orderedDays.add(d);
       }
@@ -792,6 +799,7 @@ class SuggestionService {
       final dayRows = byDay[key] ?? const [];
 
       final dayType = _classifyDayType(dayRows);
+
       if (dayType == t) return day;
     }
 
