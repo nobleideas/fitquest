@@ -7,8 +7,6 @@ import 'exercise_session_page.dart';
 class ExerciseListPage extends StatefulWidget {
   final String equipmentId;
   final String equipmentName;
-
-  /// ✅ 'equipment' or 'routine' (defaults to 'equipment')
   final String equipmentKind;
 
   const ExerciseListPage({
@@ -31,16 +29,13 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
   final _exerciseService = ExerciseService();
   final _equipmentService = EquipmentService();
 
-  /// Exercise IDs that have at least one session today (for this equipment/routine)
   Set<String> exercisesWithSessionsToday = {};
-
-  /// (Keeping your existing video cache logic untouched)
   final Set<String> _sourceExercisesWithVideo = {};
 
-  /// ✅ normalized kind helpers
   String get _kind => widget.equipmentKind.toLowerCase().trim() == 'routine'
       ? 'routine'
       : 'equipment';
+
   bool get _isRoutine => _kind == 'routine';
   String get _kindTitle => _isRoutine ? 'routine' : 'equipment';
 
@@ -82,34 +77,25 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
       List<Map<String, dynamic>> list;
 
       if (_isRoutine) {
-        // ✅ Routine: load via routine_items
         list = await _exerciseService.getExercisesForRoutine(widget.equipmentId);
       } else {
-        // ✅ Equipment: load by equipment_id
         final raw = await _exerciseService.getExercisesForEquipment(widget.equipmentId);
         list = raw is List
-            ? raw
-                .whereType<Map>()
-                .map((e) => Map<String, dynamic>.from(e))
-                .toList()
+            ? raw.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList()
             : <Map<String, dynamic>>[];
       }
 
-      // Base alphabetical sort (case-insensitive)
       final sorted = List<Map<String, dynamic>>.from(list)
-        ..sort(
-          (a, b) => (a['name'] as String).toLowerCase().compareTo(
-                (b['name'] as String).toLowerCase(),
-              ),
-        );
+        ..sort((a, b) {
+          final an = (a['name'] ?? '').toString().toLowerCase();
+          final bn = (b['name'] ?? '').toString().toLowerCase();
+          return an.compareTo(bn);
+        });
 
-      // ✅ Determine which exercises were used today
       final todaySet = await _loadExerciseIdsWithSessionsToday(sorted);
 
-      // ✅ Verify imported video sources still exist
       await _refreshSourceVideoCache(sorted);
 
-      // Reorder: used today (alpha) first, then the rest (alpha)
       final usedToday = <Map<String, dynamic>>[];
       final notUsedToday = <Map<String, dynamic>>[];
 
@@ -174,9 +160,6 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
     }
   }
 
-  /// ✅ Today-set logic:
-  /// - Equipment: filter by exercises.equipment_id (your old behavior)
-  /// - Routine: filter by exercise_id IN (routine exercise ids)
   Future<Set<String>> _loadExerciseIdsWithSessionsToday(
     List<Map<String, dynamic>> currentExerciseList,
   ) async {
@@ -207,7 +190,6 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
       return ids;
     }
 
-    // ✅ Routine
     final routineExerciseIds = currentExerciseList
         .map((e) => (e['id'] ?? '').toString())
         .where((s) => s.isNotEmpty)
@@ -233,10 +215,6 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
     }
     return ids;
   }
-
-  // ---------------------------------------------------------------------------
-  // ADD EXERCISE (new)
-  // ---------------------------------------------------------------------------
 
   Future<void> _addExercise() async {
     final nameController = TextEditingController();
@@ -312,9 +290,6 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
                     final name = nameController.text.trim();
                     if (name.isEmpty) return;
 
-                    // ✅ Minimal fix:
-                    // Create the exercise row (still uses equipment_id = current container id)
-                    // THEN if we're in a routine, ALSO link it into routine_items so it appears.
                     final created = await _exerciseService.insertExerciseReturningRow(
                       name: name,
                       primaryMuscleGroup: primaryMuscleGroup,
@@ -346,20 +321,13 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
     );
   }
 
-  // ---------------------------------------------------------------------------
-  // ADD EXISTING EXERCISE(S) TO ROUTINE (NO DUPLICATES - just routine_items links)
-  // ---------------------------------------------------------------------------
-
   Future<List<Map<String, dynamic>>> _loadMyAllExercises() async {
     final rows = await supabase
         .from('exercises')
         .select('id, name, primary_muscle_group, type, equipment_id, video_url, video_source_exercise_id');
 
     final list = rows is List
-        ? rows
-            .whereType<Map>()
-            .map((e) => Map<String, dynamic>.from(e))
-            .toList()
+        ? rows.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList()
         : <Map<String, dynamic>>[];
 
     list.sort((a, b) {
@@ -387,7 +355,6 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
       return;
     }
 
-    // ✅ current routine exercise IDs (so we don't offer duplicates)
     final existingIds = exercises
         .map((e) => (e['id'] ?? '').toString())
         .where((s) => s.isNotEmpty)
@@ -574,48 +541,83 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
     }
   }
 
-  // ---------------------------------------------------------------------------
-  // EDIT / MOVE / DELETE
-  // ---------------------------------------------------------------------------
-
-  Future<void> _editExerciseName(Map<String, dynamic> exercise) async {
+  Future<void> _editExercise(Map<String, dynamic> exercise) async {
     final currentName = (exercise['name'] ?? '').toString();
+    final currentType = (exercise['type'] ?? 'push').toString().toLowerCase();
+
     final controller = TextEditingController(text: currentName);
+    String selectedType = currentType == 'pull' ? 'pull' : 'push';
 
     await showDialog(
       context: context,
-      builder: (_) => AlertDialog(
-        title: const Text("Edit Exercise Name"),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          decoration: const InputDecoration(labelText: "Exercise Name"),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text("Cancel"),
-          ),
-          ElevatedButton(
-            onPressed: () async {
-              final newName = controller.text.trim();
-              if (newName.isEmpty) return;
+      builder: (_) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: const Text("Edit Exercise"),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  TextField(
+                    controller: controller,
+                    autofocus: true,
+                    decoration: const InputDecoration(
+                      labelText: "Exercise Name",
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  DropdownButtonFormField<String>(
+                    value: selectedType,
+                    decoration: const InputDecoration(
+                      labelText: "Exercise Type",
+                      border: OutlineInputBorder(),
+                    ),
+                    items: const [
+                      DropdownMenuItem(value: 'push', child: Text('Push')),
+                      DropdownMenuItem(value: 'pull', child: Text('Pull')),
+                    ],
+                    onChanged: (val) {
+                      if (val == null) return;
+                      setDialogState(() => selectedType = val);
+                    },
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text("Cancel"),
+                ),
+                ElevatedButton(
+                  onPressed: () async {
+                    final newName = controller.text.trim();
+                    if (newName.isEmpty) return;
 
-              final exerciseId = exercise['id'].toString();
+                    final exerciseId = exercise['id'].toString();
 
-              await _exerciseService.updateExerciseName(
-                exerciseId: exerciseId,
-                name: newName,
-              );
+                    await _exerciseService.updateExerciseName(
+                      exerciseId: exerciseId,
+                      name: newName,
+                    );
 
-              if (!mounted) return;
-              Navigator.pop(context);
-              await _loadExercises();
-            },
-            child: const Text("Save"),
-          ),
-        ],
-      ),
+                    await _exerciseService.updateExerciseType(
+                      exerciseId: exerciseId,
+                      type: selectedType,
+                    );
+
+                    if (!mounted) return;
+                    Navigator.pop(context);
+                    await _loadExercises();
+                  },
+                  child: const Text("Save"),
+                ),
+              ],
+            );
+          },
+        );
+      },
     );
   }
 
@@ -628,7 +630,11 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
     final equipmentList = equipmentListDynamic
         .map((e) => Map<String, dynamic>.from(e as Map))
         .toList()
-      ..sort((a, b) => (a['name'] as String).toLowerCase().compareTo((b['name'] as String).toLowerCase()));
+      ..sort((a, b) {
+        final an = (a['name'] ?? '').toString().toLowerCase();
+        final bn = (b['name'] ?? '').toString().toLowerCase();
+        return an.compareTo(bn);
+      });
 
     String? selectedEquipmentId;
     final newEquipmentController = TextEditingController();
@@ -722,11 +728,6 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
                             equipmentId: targetEquipmentId,
                           );
 
-                          if (_isRoutine) {
-                            // Optional: keep it in the routine after moving "home"
-                            // (We do nothing here; routine membership is routine_items.)
-                          }
-
                           if (!mounted) return;
                           Navigator.pop(context);
 
@@ -758,9 +759,6 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
     final sessionCount = await _exerciseService.getSessionCountForExercise(exerciseId);
 
     if (_isRoutine) {
-      // ✅ IMPORTANT CHANGE:
-      // Deleting from routine means "remove from routine_items" ONLY.
-      // This is always allowed, even if there are sessions, because sessions belong to the exercise.
       await _exerciseService.removeExerciseFromRoutine(
         routineId: widget.equipmentId,
         exerciseId: exerciseId,
@@ -779,7 +777,6 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
       return;
     }
 
-    // Equipment delete behavior stays the same as your current approach
     final confirm = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
@@ -824,7 +821,7 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
   Future<void> _onMenuSelected(String value, Map<String, dynamic> exercise) async {
     switch (value) {
       case 'edit':
-        await _editExerciseName(exercise);
+        await _editExercise(exercise);
         break;
       case 'move':
         await _moveExercise(exercise);
@@ -854,7 +851,6 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
                       final exercise = exercises[index];
                       final exerciseId = exercise['id']?.toString() ?? '';
                       final hasSessionToday = exercisesWithSessionsToday.contains(exerciseId);
-
                       final hasVideo = _hasFormVideo(exercise);
 
                       return ListTile(
@@ -886,7 +882,7 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
                             PopupMenuButton<String>(
                               onSelected: (value) => _onMenuSelected(value, exercise),
                               itemBuilder: (context) => const [
-                                PopupMenuItem(value: 'edit', child: Text('Edit name')),
+                                PopupMenuItem(value: 'edit', child: Text('Edit')),
                                 PopupMenuItem(value: 'move', child: Text('Move to equipment/routine…')),
                                 PopupMenuItem(value: 'delete', child: Text('Delete')),
                               ],
