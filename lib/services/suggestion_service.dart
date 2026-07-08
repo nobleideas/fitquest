@@ -46,7 +46,6 @@ class SuggestionService {
 
     final totalExercisesTarget = (minutes ~/ 5).clamp(1, 100);
 
-    // Determine day type (rotation or user-selected).
     final SuggestedDayType dayType =
         (randomize && fixedDayTypeForRandomize != null)
         ? fixedDayTypeForRandomize
@@ -54,7 +53,6 @@ class SuggestionService {
 
     final sessionsWindow = await _loadRecentSessionsWindow(user.id, days: 120);
 
-    // Exclude exercises used on the most recent day of this same day type.
     final DateTime? lastSameTypeDay = _mostRecentDayForTypeFromSessions(
       sessionsWindow,
       dayType,
@@ -116,8 +114,6 @@ class SuggestionService {
       if (selected != null) picked.add(selected);
     }
 
-    // If exclusions left the routine short, fill from equipment exercises in the
-    // correct day type while keeping the same no-duplicates rule.
     if (picked.length < totalExercisesTarget) {
       final fallbackCandidates = <Map<String, dynamic>>[];
       for (final group in desiredGroups.toSet()) {
@@ -204,9 +200,6 @@ class SuggestionService {
         break;
       }
 
-      // If there are not enough unused exercises in this muscle group, only
-      // keep the original slot if it already matches the desired group. This
-      // prevents a shoulder slot from silently becoming back/arms.
       if (picked == null && routine.exercises.length > balancedExercises.length) {
         final original = Map<String, dynamic>.from(
           routine.exercises[balancedExercises.length],
@@ -249,6 +242,7 @@ class SuggestionService {
       routine: routine,
       index: index,
     );
+
     final currentMuscleGroup = desiredSlotMuscleGroup.isNotEmpty
         ? desiredSlotMuscleGroup
         : _canonicalMuscleGroup(currentExercise['primary_muscle_group']);
@@ -257,9 +251,11 @@ class SuggestionService {
         .toString()
         .trim()
         .toLowerCase();
+
     final fallbackExerciseType = _suggestedDayTypeToExerciseType(
       routine.dayType,
     );
+
     final exerciseType = currentExerciseType.isNotEmpty
         ? currentExerciseType
         : fallbackExerciseType;
@@ -271,46 +267,51 @@ class SuggestionService {
       exerciseType: exerciseType,
     );
 
+    if (candidates.length <= 1) return routine;
+
     final existingIds = routine.exercises.asMap().entries
         .where((entry) => entry.key != index)
         .map((entry) => (entry.value['id'] ?? '').toString())
         .where((id) => id.trim().isNotEmpty)
         .toSet();
 
-    final historyKey = individualRandomizeHistoryKey(
-      dayType: routine.dayType,
-      index: index,
-      muscleGroup: currentMuscleGroup,
-      exerciseType: exerciseType,
+    final currentIndex = candidates.indexWhere(
+      (candidate) => (candidate['id'] ?? '').toString() == currentExerciseId,
     );
 
-    final usedIds = individualRandomizeHistoryBySlot.putIfAbsent(
-      historyKey,
-      () => <String>{},
-    );
+    Map<String, dynamic>? replacement;
 
-    if (currentExerciseId.trim().isNotEmpty) usedIds.add(currentExerciseId);
+    if (currentIndex >= 0) {
+      for (var offset = 1; offset < candidates.length; offset++) {
+        final candidate = candidates[(currentIndex + offset) % candidates.length];
+        final candidateId = (candidate['id'] ?? '').toString();
 
-    // Do not let randomize-cycle history override completion priority.
-    // _loadReplacementCandidates already sorts candidates as:
-    // never completed first, then completed longest ago, then name.
-    final available = candidates.where((candidate) {
-      final candidateId = (candidate['id'] ?? '').toString();
-      if (candidateId.trim().isEmpty) return false;
-      if (candidateId == currentExerciseId) return false;
-      if (existingIds.contains(candidateId)) return false;
-      return true;
-    }).toList();
+        if (candidateId.trim().isEmpty) continue;
+        if (candidateId == currentExerciseId) continue;
+        if (existingIds.contains(candidateId)) continue;
 
-    if (available.isEmpty) return routine;
+        replacement = Map<String, dynamic>.from(candidate);
+        break;
+      }
+    } else {
+      for (final candidate in candidates) {
+        final candidateId = (candidate['id'] ?? '').toString();
 
-    final replacement = Map<String, dynamic>.from(available.first);
-    final replacementId = (replacement['id'] ?? '').toString();
-    if (replacementId.trim().isNotEmpty) usedIds.add(replacementId);
+        if (candidateId.trim().isEmpty) continue;
+        if (candidateId == currentExerciseId) continue;
+        if (existingIds.contains(candidateId)) continue;
+
+        replacement = Map<String, dynamic>.from(candidate);
+        break;
+      }
+    }
+
+    if (replacement == null) return routine;
 
     final updatedExercises = routine.exercises
         .map((ex) => Map<String, dynamic>.from(ex))
         .toList();
+
     updatedExercises[index] = replacement;
 
     return SuggestedRoutine(
@@ -431,12 +432,10 @@ class SuggestionService {
     var remainder = exerciseCount % groups.length;
     final result = <String>[];
 
-    // Keep the same grouped layout the original push day used:
-    // chest/back first, then shoulders/core, then arms. Extra exercises go to
-    // earlier groups first, so 8 upper-body exercises becomes 3 / 3 / 2.
     for (final group in groups) {
       final countForGroup = baseCount + (remainder > 0 ? 1 : 0);
       if (remainder > 0) remainder--;
+
       for (var i = 0; i < countForGroup; i++) {
         result.add(group);
       }
@@ -468,6 +467,7 @@ class SuggestionService {
     for (final row in sessionRows) {
       final session = Map<String, dynamic>.from(row as Map);
       final exJoined = session['exercises'];
+
       final Map<String, dynamic> ex = exJoined is Map
           ? Map<String, dynamic>.from(exJoined)
           : (exJoined is List && exJoined.isNotEmpty)
@@ -480,7 +480,9 @@ class SuggestionService {
       final createdAtRaw = session['created_at'];
       if (createdAtRaw != null) {
         final createdAt = DateTime.tryParse(createdAtRaw.toString());
-        if (createdAt != null) lastCompletedByExerciseId[id] = createdAt;
+        if (createdAt != null) {
+          lastCompletedByExerciseId[id] = createdAt;
+        }
       }
     }
 
@@ -500,18 +502,14 @@ class SuggestionService {
       final aLast = lastCompletedByExerciseId[aId];
       final bLast = lastCompletedByExerciseId[bId];
 
-      // Never completed exercises have top priority.
       if (aLast == null && bLast != null) return -1;
       if (aLast != null && bLast == null) return 1;
 
-      // Then choose the exercise completed the longest time ago.
       if (aLast != null && bLast != null) {
         final lastCompare = aLast.compareTo(bLast);
         if (lastCompare != 0) return lastCompare;
       }
 
-      // Reps, weight, and set count are intentionally ignored. Any completed
-      // session record counts the same. Name is only a stable tie-breaker.
       final aName = (a['name'] ?? '').toString().toLowerCase();
       final bName = (b['name'] ?? '').toString().toLowerCase();
       return aName.compareTo(bName);
@@ -519,14 +517,12 @@ class SuggestionService {
   }
 
   void _softShuffleCandidates(List<Map<String, dynamic>> candidates) {
-    // Keeps the least-recently-completed priority meaningful while still making
-    // full-routine randomize feel different. It only shuffles within small
-    // priority bands instead of ignoring completion history completely.
     final rng = Random(DateTime.now().microsecondsSinceEpoch);
 
     for (var start = 0; start < candidates.length; start += 3) {
       final end = min(start + 3, candidates.length);
       final band = candidates.sublist(start, end)..shuffle(rng);
+
       for (var i = 0; i < band.length; i++) {
         candidates[start + i] = band[i];
       }
@@ -593,8 +589,6 @@ class SuggestionService {
           ? <String, dynamic>{}
           : Map<String, dynamic>.from(ex['equipment'] as Map);
 
-      // Only standalone equipment exercises are allowed in suggested routines.
-      // Exercises that live inside a routine are intentionally excluded.
       if ((equipment['kind'] ?? '').toString().toLowerCase() != 'equipment') {
         continue;
       }
@@ -641,6 +635,7 @@ class SuggestionService {
         mg == 'deltoids') {
       return 'shoulders';
     }
+
     if (mg == 'arm' ||
         mg == 'arms' ||
         mg == 'bicep' ||
@@ -651,7 +646,9 @@ class SuggestionService {
         mg == 'forearms') {
       return 'arms';
     }
+
     if (mg == 'chest' || mg == 'pec' || mg == 'pecs') return 'chest';
+
     if (mg == 'back' ||
         mg == 'lats' ||
         mg == 'lat' ||
@@ -659,12 +656,14 @@ class SuggestionService {
         mg == 'traps') {
       return 'back';
     }
+
     if (mg == 'leg' || mg == 'legs') return 'legs';
     if (mg == 'core' || mg == 'abs' || mg == 'abdominals') return 'core';
+
     return mg;
   }
 
-  // ---------- Session window helpers (used for type detection + exclusions) ----------
+  // ---------- Session window helpers ----------
 
   String _dayKeyLocal(DateTime d) =>
       '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
@@ -701,7 +700,6 @@ class SuggestionService {
       final dt = DateTime.tryParse((r['created_at'] ?? '').toString());
       if (dt == null) continue;
 
-      // Joined exercises row sometimes comes as Map, sometimes List<Map>
       final exJoined = r['exercises'];
       final Map<String, dynamic> ex = exJoined is Map
           ? Map<String, dynamic>.from(exJoined)
@@ -743,10 +741,8 @@ class SuggestionService {
   SuggestedDayType _lastCompletedTypeFromSessions(List<_SessionRow> sessions) {
     if (sessions.isEmpty) return SuggestedDayType.push;
 
-    // Find most recent local workout day
     final mostRecentLocalDay = _toLocalDay(sessions.first.createdAtLocal);
 
-    // Aggregate that day's composition
     int push = 0;
     int pull = 0;
     int legsCore = 0;
@@ -756,6 +752,7 @@ class SuggestionService {
       if (d != mostRecentLocalDay) break;
 
       final mg = _canonicalMuscleGroup(s.primaryMuscleGroup);
+
       if (mg == 'legs' || mg == 'core') {
         legsCore++;
       } else {
@@ -774,15 +771,15 @@ class SuggestionService {
   ) {
     if (sessions.isEmpty) return null;
 
-    // Group by day key
     final Map<String, List<_SessionRow>> byDay = {};
+
     for (final s in sessions) {
       final dayKey = _dayKeyLocal(s.createdAtLocal);
       byDay.putIfAbsent(dayKey, () => []).add(s);
     }
 
-    // Ordered unique days from newest to oldest (sessions are already ordered desc)
     final orderedDays = <DateTime>[];
+
     for (final s in sessions) {
       final d = _toLocalDay(s.createdAtLocal);
       if (orderedDays.isEmpty || orderedDays.last != d) {
@@ -808,6 +805,7 @@ class SuggestionService {
 
     for (final s in dayRows) {
       final mg = _canonicalMuscleGroup(s.primaryMuscleGroup);
+
       if (mg == 'legs' || mg == 'core') {
         legsCore++;
       } else {
@@ -824,7 +822,7 @@ class SuggestionService {
 class _SessionRow {
   final String exerciseId;
   final DateTime createdAtLocal;
-  final String type; // push/pull
+  final String type;
   final String primaryMuscleGroup;
 
   _SessionRow({
