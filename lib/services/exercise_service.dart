@@ -85,6 +85,13 @@ class ExerciseService {
     await supabase.from('exercises').update({'name': name}).eq('id', exerciseId);
   }
 
+  Future<void> updateExerciseType({
+    required String exerciseId,
+    required String type,
+  }) async {
+    await supabase.from('exercises').update({'type': type}).eq('id', exerciseId);
+  }
+
   /// ✅ Move an exercise to another equipment
   Future<void> moveExerciseToEquipment({
     required String exerciseId,
