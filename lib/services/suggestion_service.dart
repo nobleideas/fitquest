@@ -276,6 +276,44 @@ class SuggestionService {
 
     if (candidates.length <= 1) return routine;
 
+    final historyKey = individualRandomizeHistoryKey(
+      dayType: routine.dayType,
+      index: index,
+      muscleGroup: currentMuscleGroup,
+      exerciseType: exerciseType,
+    );
+
+    final slotHistory = individualRandomizeHistoryBySlot.putIfAbsent(
+      historyKey,
+      () => <String>{},
+    );
+
+    // The exercise currently occupying this slot has now been considered.
+    if (currentExerciseId.trim().isNotEmpty) {
+      slotHistory.add(currentExerciseId);
+    }
+
+    // Share history between every slot that represents the same day type,
+    // exercise type, and muscle group. The slot index remains in the key so
+    // the existing HomePage map structure does not need to change.
+    final sharedHistorySuffix = ':$exerciseType:$currentMuscleGroup';
+    final sharedHistoryPrefix = '${routine.dayType.name}:';
+
+    Set<String> buildSharedHistory() {
+      final shared = <String>{};
+
+      for (final entry in individualRandomizeHistoryBySlot.entries) {
+        if (entry.key.startsWith(sharedHistoryPrefix) &&
+            entry.key.endsWith(sharedHistorySuffix)) {
+          shared.addAll(entry.value);
+        }
+      }
+
+      return shared;
+    }
+
+    var sharedHistory = buildSharedHistory();
+
     final existingIds = routine.exercises.asMap().entries
         .where((entry) => entry.key != index)
         .map((entry) => (entry.value['id'] ?? '').toString())
@@ -286,34 +324,65 @@ class SuggestionService {
       (candidate) => (candidate['id'] ?? '').toString() == currentExerciseId,
     );
 
-    Map<String, dynamic>? replacement;
+    Map<String, dynamic>? findReplacement() {
+      if (currentIndex >= 0) {
+        for (var offset = 1; offset < candidates.length; offset++) {
+          final candidate =
+              candidates[(currentIndex + offset) % candidates.length];
+          final candidateId = (candidate['id'] ?? '').toString();
 
-    if (currentIndex >= 0) {
-      for (var offset = 1; offset < candidates.length; offset++) {
-        final candidate = candidates[(currentIndex + offset) % candidates.length];
-        final candidateId = (candidate['id'] ?? '').toString();
+          if (candidateId.trim().isEmpty) continue;
+          if (candidateId == currentExerciseId) continue;
+          if (existingIds.contains(candidateId)) continue;
+          if (sharedHistory.contains(candidateId)) continue;
 
-        if (candidateId.trim().isEmpty) continue;
-        if (candidateId == currentExerciseId) continue;
-        if (existingIds.contains(candidateId)) continue;
+          return Map<String, dynamic>.from(candidate);
+        }
+      } else {
+        for (final candidate in candidates) {
+          final candidateId = (candidate['id'] ?? '').toString();
 
-        replacement = Map<String, dynamic>.from(candidate);
-        break;
+          if (candidateId.trim().isEmpty) continue;
+          if (candidateId == currentExerciseId) continue;
+          if (existingIds.contains(candidateId)) continue;
+          if (sharedHistory.contains(candidateId)) continue;
+
+          return Map<String, dynamic>.from(candidate);
+        }
       }
-    } else {
-      for (final candidate in candidates) {
-        final candidateId = (candidate['id'] ?? '').toString();
 
-        if (candidateId.trim().isEmpty) continue;
-        if (candidateId == currentExerciseId) continue;
-        if (existingIds.contains(candidateId)) continue;
+      return null;
+    }
 
-        replacement = Map<String, dynamic>.from(candidate);
-        break;
+    var replacement = findReplacement();
+
+    // Once every available exercise in this muscle group has been considered,
+    // reset only that shared group's history so randomization can cycle again.
+    if (replacement == null) {
+      for (final entry in individualRandomizeHistoryBySlot.entries) {
+        if (entry.key.startsWith(sharedHistoryPrefix) &&
+            entry.key.endsWith(sharedHistorySuffix)) {
+          entry.value.clear();
+        }
       }
+
+      if (currentExerciseId.trim().isNotEmpty) {
+        slotHistory.add(currentExerciseId);
+      }
+
+      sharedHistory = buildSharedHistory();
+      replacement = findReplacement();
     }
 
     if (replacement == null) return routine;
+
+    final replacementId = (replacement['id'] ?? '').toString();
+
+    // Recording the replacement here prevents another matching slot from
+    // offering it or any previously rejected exercise again.
+    if (replacementId.trim().isNotEmpty) {
+      slotHistory.add(replacementId);
+    }
 
     final updatedExercises = routine.exercises
         .map((ex) => Map<String, dynamic>.from(ex))
