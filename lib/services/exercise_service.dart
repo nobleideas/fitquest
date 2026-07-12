@@ -38,6 +38,17 @@ class ExerciseService {
     return res;
   }
 
+  Future<void> removeImportedTrainerVideo({
+  required String exerciseId,
+}) async {
+  await supabase
+      .from('exercises')
+      .update({
+        'video_source_exercise_id': null,
+      })
+      .eq('id', exerciseId);
+}
+
   Future<Map<String, dynamic>> mergeMyDuplicateExercises() async {
   final mergeRaw = await supabase.rpc(
     'merge_my_duplicate_exercises',

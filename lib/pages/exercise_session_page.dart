@@ -22,6 +22,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
   final repsController = TextEditingController();
   final SessionService sessionService = SessionService();
   final ExerciseService exerciseService = ExerciseService();
+  bool _isRemovingTrainerVideo = false;
 
   // --- Last 3 recorded days (stable day-key approach avoids timezone/dup bugs)
   List<String> last3DayKeys = []; // "YYYY-MM-DD"
@@ -176,6 +177,76 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
     await sessionService.deleteSession(sessionId);
     await _loadLast3DaysAndSessions();
   }
+
+  Future<void> _removeTrainerVideo() async {
+  final hasTrainerVideo =
+      (_importedVideoUrl ?? '').trim().isNotEmpty &&
+      (_sourceExerciseId ?? '').trim().isNotEmpty;
+
+  if (!hasTrainerVideo) return;
+
+  final confirm = await showDialog<bool>(
+    context: context,
+    builder: (_) => AlertDialog(
+      title: const Text('Remove trainer video?'),
+      content: const Text(
+        'This will remove the imported trainer video from this exercise. '
+        'Your own uploaded form video will not be affected.',
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, false),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          onPressed: () => Navigator.pop(context, true),
+          child: const Text('Remove'),
+        ),
+      ],
+    ),
+  );
+
+  if (confirm != true) return;
+
+  final exerciseId = (widget.exercise['id'] ?? '').toString().trim();
+  if (exerciseId.isEmpty) return;
+
+  setState(() => _isRemovingTrainerVideo = true);
+
+  try {
+    await exerciseService.removeImportedTrainerVideo(
+      exerciseId: exerciseId,
+    );
+
+    await _disposeController(_importedVideoController);
+
+    if (!mounted) return;
+
+    setState(() {
+      _importedVideoUrl = null;
+      _sourceExerciseId = null;
+      _importedVideoController = null;
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Trainer video removed from this exercise.'),
+      ),
+    );
+  } catch (e) {
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Failed to remove trainer video: $e'),
+      ),
+    );
+  } finally {
+    if (mounted) {
+      setState(() => _isRemovingTrainerVideo = false);
+    }
+  }
+}
 
   // ---------- NEW Suggestion logic (working-set anchored + goal-driven) ----------
   void _computeSuggestion() {
@@ -855,14 +926,44 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
               const Center(child: CircularProgressIndicator())
             else ...[
               _buildVideoPlayerCard(
-                title: "Trainer Form Video",
-                subtitle: _sourceExerciseId == null
-                    ? null
-                    : "Imported with this exercise",
-                emptyMessage: "No imported trainer video is available.",
-                controller: _importedVideoController,
-                videoUrl: _importedVideoUrl,
+  title: "Trainer Form Video",
+  subtitle: _sourceExerciseId == null
+      ? null
+      : "Imported with this exercise",
+  emptyMessage: "No imported trainer video is available.",
+  controller: _importedVideoController,
+  videoUrl: _importedVideoUrl,
+),
+
+if ((_importedVideoUrl ?? '').trim().isNotEmpty &&
+    (_sourceExerciseId ?? '').trim().isNotEmpty) ...[
+  const SizedBox(height: 8),
+  SizedBox(
+    width: double.infinity,
+    child: OutlinedButton.icon(
+      icon: _isRemovingTrainerVideo
+          ? const SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
               ),
+            )
+          : const Icon(Icons.link_off),
+      label: Text(
+        _isRemovingTrainerVideo
+            ? 'Removing Trainer Video...'
+            : 'Remove Trainer Video',
+      ),
+      onPressed:
+          (_isRemovingTrainerVideo ||
+                  _isUploadingVideo ||
+                  _isRemovingVideo)
+              ? null
+              : _removeTrainerVideo,
+    ),
+  ),
+],
               const SizedBox(height: 12),
               _buildVideoPlayerCard(
                 title: "My Form Video",
