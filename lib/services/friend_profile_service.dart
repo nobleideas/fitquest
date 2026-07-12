@@ -44,6 +44,45 @@ class FriendProfileService {
   })  : supabase = supabase ?? Supabase.instance.client,
         equipmentService = equipmentService ?? EquipmentService();
 
+  String normalizeContainerName(String value) {
+    return value
+        .trim()
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-z0-9]'), '');
+  }
+
+  Future<Map<String, dynamic>?> findExistingContainer({
+    required String name,
+    required String kind,
+  }) async {
+    final user = supabase.auth.currentUser;
+    if (user == null) return null;
+
+    final normalizedName = normalizeContainerName(name);
+    final normalizedKind = kind.trim().toLowerCase();
+
+    if (normalizedName.isEmpty) return null;
+
+    final rows = await supabase
+        .from('equipment')
+        .select('id, name, kind, user_id')
+        .eq('user_id', user.id)
+        .eq('kind', normalizedKind);
+
+    for (final row in rows) {
+      final container = Map<String, dynamic>.from(row as Map);
+      final rowName = normalizeContainerName(
+        (container['name'] ?? '').toString(),
+      );
+
+      if (rowName == normalizedName) {
+        return container;
+      }
+    }
+
+    return null;
+  }
+
   Future<FriendProfileData> loadFriendProfile(String friendUserId) async {
     final results = await Future.wait<dynamic>([
       supabase.rpc(
@@ -105,7 +144,20 @@ class FriendProfileService {
     required String name,
     required String kind,
   }) async {
-    final created = await equipmentService.insertEquipment(name, kind: kind);
+    final existing = await findExistingContainer(
+      name: name,
+      kind: kind,
+    );
+
+    if (existing != null) {
+      return existing;
+    }
+
+    final created = await equipmentService.insertEquipment(
+      name,
+      kind: kind,
+    );
+
     return Map<String, dynamic>.from(created);
   }
 
@@ -263,12 +315,23 @@ class FriendProfileService {
       }
 
       Map<String, dynamic>? createdContainer;
+
       try {
-        createdContainer = await createContainer(
+        final existingContainer = await findExistingContainer(
           name: name,
           kind: insertKind,
         );
-        addedContainers++;
+
+        if (existingContainer != null) {
+          createdContainer = existingContainer;
+          skippedContainers++;
+        } else {
+          createdContainer = await createContainer(
+            name: name,
+            kind: insertKind,
+          );
+          addedContainers++;
+        }
       } catch (_) {
         skippedContainers++;
       }
