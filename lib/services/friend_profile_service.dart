@@ -130,25 +130,31 @@ class FriendProfileService {
     return value.isEmpty ? null : value;
   }
 
-  Future<String?> findExerciseIdByNameInEquipment({
-    required String equipmentId,
+  Future<Map<String, dynamic>?> findExistingExerciseByName({
     required String name,
   }) async {
+    final user = supabase.auth.currentUser;
+    if (user == null) return null;
+
     final normalizedName = name.trim().toLowerCase();
     if (normalizedName.isEmpty) return null;
 
     final rows = await supabase
         .from('exercises')
-        .select('id, name')
-        .eq('equipment_id', equipmentId);
+        .select(
+          'id, name, video_url, video_source_exercise_id, equipment_id',
+        )
+        .eq('user_id', user.id);
 
     for (final row in rows) {
       final exercise = Map<String, dynamic>.from(row as Map);
-      final rowName = (exercise['name'] ?? '').toString().trim().toLowerCase();
+      final rowName = (exercise['name'] ?? '')
+          .toString()
+          .trim()
+          .toLowerCase();
 
       if (rowName == normalizedName) {
-        final id = (exercise['id'] ?? '').toString().trim();
-        return id.isEmpty ? null : id;
+        return exercise;
       }
     }
 
@@ -162,15 +168,37 @@ class FriendProfileService {
     final name = (friendExercise['name'] ?? '').toString().trim();
     if (name.isEmpty) return null;
 
-    final existingId = await findExerciseIdByNameInEquipment(
-      equipmentId: equipmentId,
-      name: name,
-    );
-    if (existingId != null) return existingId;
-
     final sourceExerciseId =
         (friendExercise['id'] ?? '').toString().trim();
     final sourceVideoUrl = exerciseVideoUrl(friendExercise);
+
+    final existingExercise = await findExistingExerciseByName(
+      name: name,
+    );
+
+    if (existingExercise != null) {
+      final existingId = (existingExercise['id'] ?? '').toString().trim();
+      if (existingId.isEmpty) return null;
+
+      final existingSourceId = (existingExercise['video_source_exercise_id'] ?? '')
+          .toString()
+          .trim();
+
+      // If the existing exercise does not yet have an imported trainer video
+      // reference, preserve the source from this import.
+      if (existingSourceId.isEmpty &&
+          sourceVideoUrl != null &&
+          sourceExerciseId.isNotEmpty) {
+        await supabase
+            .from('exercises')
+            .update({
+              'video_source_exercise_id': sourceExerciseId,
+            })
+            .eq('id', existingId);
+      }
+
+      return existingId;
+    }
 
     final inserted = await supabase
         .from('exercises')
