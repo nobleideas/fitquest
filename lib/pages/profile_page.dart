@@ -2,6 +2,7 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'friend_profile_page.dart';
+import '../services/exercise_service.dart';
 
 class ProfilePage extends StatefulWidget {
   const ProfilePage({super.key});
@@ -13,6 +14,7 @@ class ProfilePage extends StatefulWidget {
 // ✅ PUBLIC state type so MainShell can use GlobalKey<ProfilePageState>
 class ProfilePageState extends State<ProfilePage> {
   final supabase = Supabase.instance.client;
+  final ExerciseService _exerciseService = ExerciseService();
 
   // ✅ store the future so we can force a refetch on demand
   late Future<Map<String, dynamic>> _dataFuture;
@@ -147,6 +149,37 @@ class ProfilePageState extends State<ProfilePage> {
     final currentGoal = (profile['goal'] as String?) ?? 'gain_strength';
     String tempSelection = currentGoal;
 
+    ElevatedButton(
+  onPressed: () async {
+    try {
+      final result =
+          await _exerciseService.mergeMyDuplicateExercises();
+
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Merged ${result['merged_groups'] ?? 0} groups • '
+            'Deleted ${result['deleted_exercises'] ?? 0} duplicates • '
+            'Moved ${result['moved_sessions'] ?? 0} sessions • '
+            'Moved ${result['moved_routine_links'] ?? 0} routine links',
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Duplicate cleanup failed: $e'),
+        ),
+      );
+    }
+  },
+  child: const Text('Merge Duplicate Exercises'),
+);
+
     final selected = await showDialog<String>(
       context: context,
       builder: (_) => AlertDialog(
@@ -199,6 +232,8 @@ class ProfilePageState extends State<ProfilePage> {
       if (mounted) setState(() => _isSavingGoal = false);
     }
   }
+
+  
 
   Future<void> _resetStats(BuildContext context) async {
     final confirm = await showDialog<bool>(
