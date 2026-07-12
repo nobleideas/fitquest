@@ -208,6 +208,7 @@ class ProfilePageState extends State<ProfilePage> {
   
 
   Future<void> _mergeDuplicateExercises(BuildContext context) async {
+    
     final confirm = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
@@ -237,6 +238,8 @@ class ProfilePageState extends State<ProfilePage> {
 
     try {
       final result = await _exerciseService.mergeMyDuplicateExercises();
+      final deletedEquipment = result['deleted_equipment'] ?? 0;
+      final deletedRoutines = result['deleted_routines'] ?? 0;
 
       if (!mounted) return;
 
@@ -250,11 +253,13 @@ class ProfilePageState extends State<ProfilePage> {
           behavior: SnackBarBehavior.floating,
           duration: const Duration(seconds: 6),
           content: Text(
-            "Merged $mergedGroups group(s) • "
-            "Deleted $deletedExercises duplicate(s) • "
-            "Moved $movedSessions session(s) • "
-            "Moved $movedRoutineLinks routine link(s)",
-          ),
+          "Merged $mergedGroups group(s) • "
+          "Deleted $deletedExercises duplicate exercise(s) • "
+          "Moved $movedSessions session(s) • "
+          "Moved $movedRoutineLinks routine link(s) • "
+          "Deleted $deletedEquipment empty equipment item(s) • "
+          "Deleted $deletedRoutines empty routine(s)",
+        ),
         ),
       );
 
