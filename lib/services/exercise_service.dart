@@ -38,6 +38,22 @@ class ExerciseService {
     return res;
   }
 
+  Future<Map<String, dynamic>> mergeMyDuplicateExercises() async {
+  final result = await supabase.rpc(
+    'merge_my_duplicate_exercises',
+  );
+
+  if (result is Map<String, dynamic>) {
+    return result;
+  }
+
+  if (result is Map) {
+    return Map<String, dynamic>.from(result);
+  }
+
+  return <String, dynamic>{};
+}
+
   /// Load exercises included in a routine via routine_items.
   Future<List<Map<String, dynamic>>> getExercisesForRoutine(
     String routineId,
