@@ -4,8 +4,8 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:video_player/video_player.dart';
-import 'package:path/path.dart' as p;
 
+import '../services/exercise_service.dart';
 import '../services/session_service.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -21,6 +21,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
   final weightController = TextEditingController();
   final repsController = TextEditingController();
   final SessionService sessionService = SessionService();
+  final ExerciseService exerciseService = ExerciseService();
 
   // --- Last 3 recorded days (stable day-key approach avoids timezone/dup bugs)
   List<String> last3DayKeys = []; // "YYYY-MM-DD"
@@ -37,21 +38,24 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
   // -------- Form video state --------
   final ImagePicker _picker = ImagePicker();
   XFile? _pickedVideo;
-  VideoPlayerController? _videoController;
 
+  VideoPlayerController? _importedVideoController;
+  VideoPlayerController? _userVideoController;
+
+  bool _isLoadingVideos = true;
   bool _isUploadingVideo = false;
   bool _isRemovingVideo = false;
 
-  String? _formVideoUrl; // resolved URL we’re currently showing (local or imported)
-  String? _myVideoUrl; // my exercise.video_url (if any)
-  String? _sourceExerciseId; // my exercise.video_source_exercise_id (if any)
+  String? _importedVideoUrl;
+  String? _userVideoUrl;
+  String? _sourceExerciseId;
 
   @override
   void initState() {
     super.initState();
     _loadUserGoal();
     _loadLast3DaysAndSessions();
-    _loadExistingFormVideo();
+    _loadExerciseVideos();
   }
 
   // ---------- Day key helpers ----------
@@ -308,141 +312,123 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
     });
   }
 
-  // ---------- VIDEO: helpers ----------
-  Future<String?> _rpcResolveExerciseVideoUrl(String sourceExerciseId) async {
+  // ---------- Exercise videos ----------
+  Future<void> _disposeController(
+    VideoPlayerController? controller,
+  ) async {
+    await controller?.dispose();
+  }
+
+  Future<VideoPlayerController?> _createNetworkController(
+    String? url,
+  ) async {
+    final cleanedUrl = (url ?? '').trim();
+    if (cleanedUrl.isEmpty) return null;
+
+    final controller = VideoPlayerController.networkUrl(
+      Uri.parse(cleanedUrl),
+    );
+
     try {
-      final client = Supabase.instance.client;
-      final res = await client.rpc(
-        'get_exercise_video_url',
-        params: {'p_exercise_id': sourceExerciseId},
-      );
-
-      if (res == null) return null;
-
-      if (res is String) {
-        final s = res.trim();
-        return s.isEmpty ? null : s;
-      }
-
-      if (res is List && res.isNotEmpty) {
-        final first = res.first;
-        if (first is Map && first.isNotEmpty) {
-          final v = (first.values.first ?? '').toString().trim();
-          return v.isEmpty ? null : v;
-        }
-        final v = first.toString().trim();
-        return v.isEmpty ? null : v;
-      }
-
-      if (res is Map) {
-        final v = (res.values.isNotEmpty ? res.values.first : '').toString().trim();
-        return v.isEmpty ? null : v;
-      }
-
-      final v = res.toString().trim();
-      return v.isEmpty ? null : v;
+      await controller.initialize();
+      await controller.setVolume(1.0);
+      await controller.setPlaybackSpeed(1.0);
+      await controller.setLooping(true);
+      return controller;
     } catch (_) {
+      await controller.dispose();
       return null;
     }
   }
 
-  Future<void> _clearVideoControllerState() async {
-    await _videoController?.dispose();
-    _videoController = null;
-  }
-
-  Future<void> _loadExistingFormVideo() async {
-    final client = Supabase.instance.client;
-
-    final passedMyUrl = (widget.exercise['video_url'] as String?)?.trim();
-    final passedSource =
-        (widget.exercise['video_source_exercise_id'] ?? '').toString().trim();
-
-    String? myUrl = (passedMyUrl != null && passedMyUrl.isNotEmpty) ? passedMyUrl : null;
-    String? sourceId = passedSource.isNotEmpty ? passedSource : null;
-
-    if (myUrl == null && sourceId == null) {
-      final data = await client
-          .from('exercises')
-          .select('video_url, video_source_exercise_id')
-          .eq('id', widget.exercise['id'])
-          .maybeSingle();
-
-      myUrl = (data?['video_url'] as String?)?.trim();
-      if (myUrl != null && myUrl.isEmpty) myUrl = null;
-
-      final sid = (data?['video_source_exercise_id'] ?? '').toString().trim();
-      sourceId = sid.isNotEmpty ? sid : null;
+  Future<void> _loadExerciseVideos() async {
+    if (mounted) {
+      setState(() => _isLoadingVideos = true);
     }
 
-    _myVideoUrl = myUrl;
-    _sourceExerciseId = sourceId;
+    try {
+      final exerciseId = (widget.exercise['id'] ?? '').toString().trim();
+      if (exerciseId.isEmpty) return;
 
-    if (myUrl != null && myUrl.isNotEmpty) {
-      _formVideoUrl = myUrl;
-      await _initVideoPlayerFromUrl(myUrl);
-      return;
-    }
+      final videos = await exerciseService.getExerciseVideos(
+        exerciseId: exerciseId,
+        passedExercise: widget.exercise,
+      );
 
-    if (sourceId != null && sourceId.isNotEmpty) {
-      final srcUrl = await _rpcResolveExerciseVideoUrl(sourceId);
+      final importedController = await _createNetworkController(
+        videos.importedVideoUrl,
+      );
+      final userController = await _createNetworkController(
+        videos.userVideoUrl,
+      );
 
-      if (srcUrl != null && srcUrl.isNotEmpty) {
-        _formVideoUrl = srcUrl;
-        await _initVideoPlayerFromUrl(srcUrl);
+      await _disposeController(_importedVideoController);
+      await _disposeController(_userVideoController);
+
+      if (!mounted) {
+        await importedController?.dispose();
+        await userController?.dispose();
         return;
       }
 
-      await _clearVideoControllerState();
-      if (!mounted) return;
       setState(() {
-        _formVideoUrl = null;
+        _importedVideoUrl = videos.importedVideoUrl;
+        _userVideoUrl = videos.userVideoUrl;
+        _sourceExerciseId = videos.sourceExerciseId;
+        _importedVideoController = importedController;
+        _userVideoController = userController;
       });
-      return;
+    } catch (e) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not load form videos: $e')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _isLoadingVideos = false);
+      }
     }
-
-    await _clearVideoControllerState();
-    if (!mounted) return;
-    setState(() => _formVideoUrl = null);
-  }
-
-  Future<void> _initVideoPlayerFromUrl(String url) async {
-    await _clearVideoControllerState();
-    _videoController = VideoPlayerController.networkUrl(Uri.parse(url));
-    await _videoController!.initialize();
-    await _videoController!.setVolume(1.0);
-    await _videoController!.setPlaybackSpeed(1.0);
-    await _videoController!.setLooping(true);
-
-    if (!mounted) return;
-    setState(() {});
   }
 
   Future<void> _pickVideo() async {
     try {
-      final video = await _picker.pickVideo(source: ImageSource.gallery);
+      final video = await _picker.pickVideo(
+        source: ImageSource.gallery,
+      );
       if (video == null) return;
 
-      if (!mounted) return;
-      setState(() => _pickedVideo = video);
-
-      await _clearVideoControllerState();
+      VideoPlayerController previewController;
 
       if (kIsWeb) {
-        _videoController = VideoPlayerController.networkUrl(Uri.parse(video.path));
+        previewController = VideoPlayerController.networkUrl(
+          Uri.parse(video.path),
+        );
       } else {
-        _videoController = VideoPlayerController.file(File(video.path));
+        previewController = VideoPlayerController.file(
+          File(video.path),
+        );
       }
 
-      await _videoController!.initialize();
-      await _videoController!.setVolume(1.0);
-      await _videoController!.setPlaybackSpeed(1.0);
-      await _videoController!.setLooping(true);
+      await previewController.initialize();
+      await previewController.setVolume(1.0);
+      await previewController.setPlaybackSpeed(1.0);
+      await previewController.setLooping(true);
 
-      if (!mounted) return;
-      setState(() {});
+      await _disposeController(_userVideoController);
+
+      if (!mounted) {
+        await previewController.dispose();
+        return;
+      }
+
+      setState(() {
+        _pickedVideo = video;
+        _userVideoController = previewController;
+      });
     } catch (e) {
       if (!mounted) return;
+
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Picking video failed: $e')),
       );
@@ -453,81 +439,74 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
     final video = _pickedVideo;
     if (video == null) return;
 
+    final exerciseId = (widget.exercise['id'] ?? '').toString().trim();
+    if (exerciseId.isEmpty) return;
+
     setState(() => _isUploadingVideo = true);
 
     try {
-      final client = Supabase.instance.client;
-
-      const bucketId = 'exercise_form_video';
-      final bucket = client.storage.from(bucketId);
-
-      final ext = p.extension(video.name).isNotEmpty ? p.extension(video.name) : '.mp4';
-      final storagePath = 'exercise_${widget.exercise['id']}/form$ext';
-
-      final bytes = await video.readAsBytes();
-
-      await bucket.uploadBinary(
-        storagePath,
-        bytes,
-        fileOptions: FileOptions(
-          upsert: true,
-          contentType: video.mimeType ?? 'video/mp4',
-        ),
+      final publicUrl = await exerciseService.uploadUserFormVideo(
+        exerciseId: exerciseId,
+        video: video,
       );
 
-      final publicUrl = bucket.getPublicUrl(storagePath);
+      final controller = await _createNetworkController(publicUrl);
+      await _disposeController(_userVideoController);
 
-      await client
-          .from('exercises')
-          .update({
-            'video_url': publicUrl,
-            'video_source_exercise_id': null,
-          })
-          .eq('id', widget.exercise['id']);
+      if (!mounted) {
+        await controller?.dispose();
+        return;
+      }
 
-      _myVideoUrl = publicUrl;
-      _sourceExerciseId = null;
-      _formVideoUrl = publicUrl;
+      setState(() {
+        _userVideoUrl = publicUrl;
+        _userVideoController = controller;
+        _pickedVideo = null;
+      });
 
-      await _initVideoPlayerFromUrl(publicUrl);
-
-      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Video uploaded and saved to exercise.')),
+        const SnackBar(
+          content: Text('Your form video was uploaded.'),
+        ),
       );
     } catch (e) {
       if (!mounted) return;
+
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Upload failed: $e')),
       );
     } finally {
-      if (mounted) setState(() => _isUploadingVideo = false);
+      if (mounted) {
+        setState(() => _isUploadingVideo = false);
+      }
     }
   }
 
-  String? _tryExtractStoragePathFromPublicUrl(String url, String bucketId) {
-    try {
-      final marker = '/storage/v1/object/public/$bucketId/';
-      final i = url.indexOf(marker);
-      if (i == -1) return null;
-      final path = url.substring(i + marker.length);
-      return path.isEmpty ? null : path;
-    } catch (_) {
-      return null;
+  Future<void> _removeUserFormVideo() async {
+    final hasSavedUserVideo = (_userVideoUrl ?? '').trim().isNotEmpty;
+    final hasPickedVideo = _pickedVideo != null;
+
+    if (!hasSavedUserVideo && !hasPickedVideo) return;
+
+    if (hasPickedVideo && !hasSavedUserVideo) {
+      await _disposeController(_userVideoController);
+
+      if (!mounted) return;
+      setState(() {
+        _pickedVideo = null;
+        _userVideoController = null;
+      });
+      return;
     }
-  }
-
-  Future<void> _removeFormVideo() async {
-    final url = (_formVideoUrl ?? '').trim();
-    final hasSomethingToRemove = url.isNotEmpty || (_sourceExerciseId ?? '').isNotEmpty;
-
-    if (!hasSomethingToRemove) return;
 
     final confirm = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
-        title: const Text('Remove form video?'),
-        content: const Text('This will remove the saved form video from this exercise.'),
+        title: const Text('Remove your form video?'),
+        content: const Text(
+          'This removes only your uploaded video. '
+          'The imported trainer video will remain available.',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -543,56 +522,123 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
 
     if (confirm != true) return;
 
+    final exerciseId = (widget.exercise['id'] ?? '').toString().trim();
+    if (exerciseId.isEmpty) return;
+
     setState(() => _isRemovingVideo = true);
 
     try {
-      final client = Supabase.instance.client;
-      final myUrl = (_myVideoUrl ?? '').trim();
+      await exerciseService.removeUserFormVideo(
+        exerciseId: exerciseId,
+        userVideoUrl: _userVideoUrl,
+      );
 
-      await client
-          .from('exercises')
-          .update({'video_url': null, 'video_source_exercise_id': null})
-          .eq('id', widget.exercise['id']);
-
-      const bucketId = 'exercise_form_video';
-      if (myUrl.isNotEmpty) {
-        final bucket = client.storage.from(bucketId);
-        final storagePath = _tryExtractStoragePathFromPublicUrl(myUrl, bucketId);
-        if (storagePath != null) {
-          try {
-            await bucket.remove([storagePath]);
-          } catch (_) {}
-        }
-      }
-
-      await _clearVideoControllerState();
+      await _disposeController(_userVideoController);
 
       if (!mounted) return;
+
       setState(() {
-        _formVideoUrl = null;
-        _myVideoUrl = null;
-        _sourceExerciseId = null;
+        _userVideoUrl = null;
+        _userVideoController = null;
         _pickedVideo = null;
       });
 
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Form video removed.')),
+        const SnackBar(
+          content: Text('Your form video was removed.'),
+        ),
       );
     } catch (e) {
       if (!mounted) return;
+
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Failed to remove video: $e')),
       );
     } finally {
-      if (mounted) setState(() => _isRemovingVideo = false);
+      if (mounted) {
+        setState(() => _isRemovingVideo = false);
+      }
     }
+  }
+
+  Widget _buildVideoPlayerCard({
+    required String title,
+    required String emptyMessage,
+    required VideoPlayerController? controller,
+    required String? videoUrl,
+    String? subtitle,
+  }) {
+    final hasUrl = (videoUrl ?? '').trim().isNotEmpty;
+    final isReady = controller != null && controller.value.isInitialized;
+
+    return Card(
+      elevation: 2,
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              title,
+              style: Theme.of(context).textTheme.titleSmall,
+            ),
+            if (subtitle != null) ...[
+              const SizedBox(height: 4),
+              Text(
+                subtitle,
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
+            const SizedBox(height: 10),
+            if (isReady) ...[
+              AspectRatio(
+                aspectRatio: controller.value.aspectRatio,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: VideoPlayer(controller),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  IconButton(
+                    icon: Icon(
+                      controller.value.isPlaying
+                          ? Icons.pause
+                          : Icons.play_arrow,
+                    ),
+                    onPressed: () async {
+                      if (controller.value.isPlaying) {
+                        await controller.pause();
+                      } else {
+                        await controller.setVolume(1.0);
+                        await controller.play();
+                      }
+
+                      if (mounted) setState(() {});
+                    },
+                  ),
+                  const Spacer(),
+                  if (hasUrl) const Text('Saved ✓'),
+                ],
+              ),
+            ] else
+              Text(
+                hasUrl ? 'Loading video...' : emptyMessage,
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
   void dispose() {
     weightController.dispose();
     repsController.dispose();
-    _videoController?.dispose();
+    _importedVideoController?.dispose();
+    _userVideoController?.dispose();
     super.dispose();
   }
 
@@ -793,11 +839,42 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
 
             const SizedBox(height: 24),
 
-            // ----------------- Exercise Form Video -----------------
+            // ----------------- Exercise Form Videos -----------------
             Text(
-              "Exercise Form Video",
+              "Exercise Form Videos",
               style: Theme.of(context).textTheme.titleMedium,
             ),
+            const SizedBox(height: 6),
+            Text(
+              "Compare the imported trainer demonstration with your own form.",
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 12),
+
+            if (_isLoadingVideos)
+              const Center(child: CircularProgressIndicator())
+            else ...[
+              _buildVideoPlayerCard(
+                title: "Trainer Form Video",
+                subtitle: _sourceExerciseId == null
+                    ? null
+                    : "Imported with this exercise",
+                emptyMessage: "No imported trainer video is available.",
+                controller: _importedVideoController,
+                videoUrl: _importedVideoUrl,
+              ),
+              const SizedBox(height: 12),
+              _buildVideoPlayerCard(
+                title: "My Form Video",
+                subtitle: "Upload your own video without replacing the trainer video.",
+                emptyMessage: "You have not uploaded a form video yet.",
+                controller: _userVideoController,
+                videoUrl: _pickedVideo != null
+                    ? _pickedVideo!.path
+                    : _userVideoUrl,
+              ),
+            ],
+
             const SizedBox(height: 12),
 
             Row(
@@ -805,8 +882,15 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
                 Expanded(
                   child: OutlinedButton.icon(
                     icon: const Icon(Icons.video_library),
-                    label: Text(_pickedVideo == null ? "Choose Video" : "Change Video"),
-                    onPressed: (_isUploadingVideo || _isRemovingVideo) ? null : _pickVideo,
+                    label: Text(
+                      _pickedVideo == null
+                          ? "Choose My Video"
+                          : "Change Selection",
+                    ),
+                    onPressed:
+                        (_isUploadingVideo || _isRemovingVideo)
+                            ? null
+                            : _pickVideo,
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -816,11 +900,18 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
                         ? const SizedBox(
                             width: 18,
                             height: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2),
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                            ),
                           )
                         : const Icon(Icons.cloud_upload),
-                    label: Text(_isUploadingVideo ? "Uploading..." : "Upload"),
-                    onPressed: (_pickedVideo == null || _isUploadingVideo || _isRemovingVideo)
+                    label: Text(
+                      _isUploadingVideo ? "Uploading..." : "Upload Mine",
+                    ),
+                    onPressed:
+                        (_pickedVideo == null ||
+                            _isUploadingVideo ||
+                            _isRemovingVideo)
                         ? null
                         : _uploadPickedVideo,
                   ),
@@ -828,8 +919,16 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
               ],
             ),
 
-            if (((_formVideoUrl ?? '').trim().isNotEmpty) ||
-                ((_sourceExerciseId ?? '').trim().isNotEmpty)) ...[
+            if (_pickedVideo != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                "Selected: ${_pickedVideo!.name}",
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
+
+            if ((_userVideoUrl ?? '').trim().isNotEmpty ||
+                _pickedVideo != null) ...[
               const SizedBox(height: 10),
               SizedBox(
                 width: double.infinity,
@@ -838,73 +937,26 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
                       ? const SizedBox(
                           width: 18,
                           height: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2),
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                          ),
                         )
                       : const Icon(Icons.delete_outline),
-                  label: Text(_isRemovingVideo ? "Removing..." : "Remove video"),
-                  onPressed: (_isUploadingVideo || _isRemovingVideo) ? null : _removeFormVideo,
+                  label: Text(
+                    _isRemovingVideo
+                        ? "Removing..."
+                        : _pickedVideo != null &&
+                              (_userVideoUrl ?? '').trim().isEmpty
+                        ? "Discard Selection"
+                        : "Remove My Video",
+                  ),
+                  onPressed:
+                      (_isUploadingVideo || _isRemovingVideo)
+                      ? null
+                      : _removeUserFormVideo,
                 ),
               ),
             ],
-
-            if (_pickedVideo != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: Text(
-                  "Selected: ${_pickedVideo!.name}",
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-              ),
-
-            const SizedBox(height: 12),
-
-            if (_videoController != null && _videoController!.value.isInitialized)
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  AspectRatio(
-                    aspectRatio: _videoController!.value.aspectRatio,
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(12),
-                      child: VideoPlayer(_videoController!),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      IconButton(
-                        icon: Icon(
-                          _videoController!.value.isPlaying
-                              ? Icons.pause
-                              : Icons.play_arrow,
-                        ),
-                        onPressed: () async {
-                          if (_videoController == null) return;
-
-                          if (_videoController!.value.isPlaying) {
-                            await _videoController!.pause();
-                          } else {
-                            await _videoController!.setVolume(1.0);
-                            await _videoController!.play();
-                          }
-
-                          if (mounted) setState(() {});
-                        },
-                      ),
-                      const Spacer(),
-                      if ((_formVideoUrl ?? '').trim().isNotEmpty)
-                        const Text("Saved ✓"),
-                    ],
-                  ),
-                ],
-              )
-            else
-              Text(
-                (_formVideoUrl ?? '').trim().isEmpty
-                    ? "No form video uploaded."
-                    : "Loading form video...",
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
           ],
         ),
       ),
