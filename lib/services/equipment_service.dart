@@ -17,7 +17,16 @@ class EquipmentService {
       query = query.eq('kind', normalizedKind);
     }
 
-    return await query.order('name');
+    final rows = await query.order('name');
+
+return (rows as List)
+    .where((e) =>
+        (e['name'] ?? '')
+            .toString()
+            .trim()
+            .toLowerCase() !=
+        'imported')
+    .toList();
   }
 
   /// ✅ Insert equipment/routine and return the created row (so we can get id)
