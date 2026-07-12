@@ -1,8 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:video_player/video_player.dart';
 
-import '../services/equipment_service.dart';
+import '../services/friend_profile_service.dart';
 
 class FriendProfilePage extends StatefulWidget {
   final String friendUserId;
@@ -20,7 +19,7 @@ class FriendProfilePage extends StatefulWidget {
 
 class _FriendProfilePageState extends State<FriendProfilePage>
     with SingleTickerProviderStateMixin {
-  final supabase = Supabase.instance.client;
+  final _friendProfileService = FriendProfileService();
 
   late final TabController _tabController;
 
@@ -55,44 +54,19 @@ class _FriendProfilePageState extends State<FriendProfilePage>
     });
 
     try {
-      final friendId = widget.friendUserId;
+      final data = await _friendProfileService.loadFriendProfile(
+        widget.friendUserId,
+      );
 
-      final results = await Future.wait<dynamic>([
-        supabase.rpc(
-          'get_friend_workout_history',
-          params: {'friend_user_id': friendId, 'max_rows': 250},
-        ),
-        supabase.rpc(
-          'get_friend_equipment',
-          params: {'friend_user_id': friendId},
-        ),
-        supabase.rpc(
-          'get_friend_exercises',
-          params: {'friend_user_id': friendId},
-        ),
-      ]);
-
-      final historyRaw = results[0];
-      final equipmentRaw = results[1];
-      final exercisesRaw = results[2];
-
-      final history = historyRaw is List
-          ? List<Map<String, dynamic>>.from(historyRaw)
-          : <Map<String, dynamic>>[];
-      final equipment = equipmentRaw is List
-          ? List<Map<String, dynamic>>.from(equipmentRaw)
-          : <Map<String, dynamic>>[];
-      final exercises = exercisesRaw is List
-          ? List<Map<String, dynamic>>.from(exercisesRaw)
-          : <Map<String, dynamic>>[];
-
+      if (!mounted) return;
       setState(() {
-        _history = history;
-        _equipment = equipment;
-        _exercises = exercises;
+        _history = data.history;
+        _equipment = data.containers;
+        _exercises = data.exercises;
         _loading = false;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _error = e.toString();
         _loading = false;
@@ -637,14 +611,11 @@ class _CopyableContainerTab extends StatefulWidget {
 }
 
 class _CopyableContainerTabState extends State<_CopyableContainerTab> {
-  final _equipmentService = EquipmentService();
-  final supabase = Supabase.instance.client;
+  final _friendProfileService = FriendProfileService();
 
   bool _selectMode = false;
   final Set<int> _selectedIndexes = {};
   bool _isAdding = false;
-
-  static const String _importedEquipmentName = 'Imported';
 
   // ---------- PRIMARY MUSCLE GROUP FILTER ----------
   static const List<String?> _muscleFiltersGrid = [
@@ -829,257 +800,52 @@ class _CopyableContainerTabState extends State<_CopyableContainerTab> {
   String _capitalize(String s) =>
       s.isEmpty ? s : '${s[0].toUpperCase()}${s.substring(1)}';
 
-  Future<Map<String, dynamic>> _ensureImportedEquipment() async {
-    final listDynamic = await _equipmentService.getAllEquipment();
-    final list = listDynamic
-        .map((e) => Map<String, dynamic>.from(e as Map))
-        .toList();
-
-    for (final e in list) {
-      final name = (e['name'] ?? '').toString().trim().toLowerCase();
-      final kind = (e['kind'] ?? 'equipment').toString().trim().toLowerCase();
-      if (kind == 'equipment' && name == _importedEquipmentName.toLowerCase()) {
-        return e;
-      }
-    }
-
-    // Create if missing
-    final created = await _equipmentService.insertEquipment(
-      _importedEquipmentName,
-      kind: 'equipment',
-    );
-    return Map<String, dynamic>.from(created);
-  }
-
-  Future<String?> _findMyExerciseIdByNameInEquipment({
-    required String equipmentId,
-    required String name,
-  }) async {
-    final nm = name.trim();
-    if (nm.isEmpty) return null;
-
-    final rows = await supabase
-        .from('exercises')
-        .select('id, name')
-        .eq('equipment_id', equipmentId);
-
-    if (rows is! List) return null;
-
-    final target = nm.toLowerCase();
-    for (final r in rows) {
-      if (r is Map) {
-        final rn = (r['name'] ?? '').toString().trim().toLowerCase();
-        if (rn == target) {
-          final id = (r['id'] ?? '').toString().trim();
-          return id.isEmpty ? null : id;
-        }
-      }
-    }
-    return null;
-  }
-
-  Future<String?> _insertMyExerciseIntoEquipment({
-    required String equipmentId,
-    required Map<String, dynamic> friendExercise,
-  }) async {
-    final name = (friendExercise['name'] ?? '').toString().trim();
-    if (name.isEmpty) return null;
-
-    // De-dupe by (equipment_id + name)
-    final existingId = await _findMyExerciseIdByNameInEquipment(
-      equipmentId: equipmentId,
-      name: name,
-    );
-    if (existingId != null) return existingId;
-
-    try {
-      final friendVideoUrl = _exerciseVideoUrl(friendExercise);
-      final friendExerciseId = (friendExercise['id'] ?? '').toString().trim();
-
-      final inserted = await supabase
-          .from('exercises')
-          .insert({
-            'name': name,
-            'primary_muscle_group': (friendExercise['primary_muscle_group'] ?? '').toString(),
-            'type': (friendExercise['type'] ?? '').toString(),
-            'equipment_id': equipmentId,
-
-            // do not copy url
-            'video_url': null,
-
-            // store reference if friend actually has a video
-            'video_source_exercise_id':
-                (friendVideoUrl != null && friendExerciseId.isNotEmpty) ? friendExerciseId : null,
-          })
-          .select('id')
-          .single();
-
-      final id = (inserted['id'] ?? '').toString().trim();
-      return id.isEmpty ? null : id;
-    } catch (_) {
-      return null;
-    }
-  }
-
-  Future<void> _linkExerciseToRoutine({
-    required String routineId,
-    required String exerciseId,
-  }) async {
-    try {
-      await supabase.from('routine_items').insert({
-        'routine_id': routineId,
-        'exercise_id': exerciseId,
-        // user_id defaults to auth.uid()
-      });
-    } catch (_) {
-      // ignore duplicates
-    }
-  }
-
   Future<void> _addSelectedToMyList() async {
     if (_selectedIndexes.isEmpty || _isAdding) return;
 
     final mode = await _askCopyMode(context, _selectedIndexes.length);
     if (mode == null) return;
 
-    final orderedIndexes = _selectedIndexes.toList()
+    final selectedContainers = _selectedIndexes
+        .map((index) => Map<String, dynamic>.from(widget.friendContainers[index]))
+        .toList()
       ..sort((a, b) {
-        final an =
-            (widget.friendContainers[a]['name'] ?? '').toString().toLowerCase();
-        final bn =
-            (widget.friendContainers[b]['name'] ?? '').toString().toLowerCase();
-        return an.compareTo(bn);
+        final aName = (a['name'] ?? '').toString().toLowerCase();
+        final bName = (b['name'] ?? '').toString().toLowerCase();
+        return aName.compareTo(bName);
       });
 
     setState(() => _isAdding = true);
 
-    int addedContainers = 0;
-    int skippedContainers = 0;
-    int addedExercises = 0;
-    int skippedExercises = 0;
-    int addedRoutineLinks = 0;
-
     try {
-      // If we import exercises for routines, we need a home equipment to store them.
-      Map<String, dynamic>? importedEquipment;
-      String? importedEquipmentId;
-
-      for (final idx in orderedIndexes) {
-        final friendContainer = widget.friendContainers[idx];
-        final name = (friendContainer['name'] ?? '').toString().trim();
-        if (name.isEmpty) {
-          skippedContainers++;
-          continue;
-        }
-
-        Map<String, dynamic>? createdContainer;
-        try {
-          createdContainer = await _equipmentService.insertEquipment(
-            name,
-            kind: widget.insertKind,
-          );
-          addedContainers++;
-        } catch (_) {
-          skippedContainers++;
-          createdContainer = null;
-        }
-
-        if (mode == _CopyMode.containerAndExercises && createdContainer != null) {
-          final friendContainerId = _friendContainerId(friendContainer);
-          final myContainerId = (createdContainer['id'] ?? '').toString().trim();
-
-          if (friendContainerId == null || myContainerId.isEmpty) continue;
-
-          // Friend exercises that "belong to" this friend container in their old model.
-          final matches = widget.friendExercises.where((ex) {
-            final exContainerId = _exerciseFriendContainerId(ex);
-            return exContainerId != null && exContainerId == friendContainerId;
-          }).toList();
-
-          if (matches.isEmpty) continue;
-
-          // Ensure imported home equipment once (only needed when importing routine exercises)
-          if (widget.insertKind == 'routine') {
-            importedEquipment ??= await _ensureImportedEquipment();
-            importedEquipmentId = (importedEquipment['id'] ?? '').toString().trim();
-            if (importedEquipmentId.isEmpty) continue;
-          }
-
-          for (final ex in matches) {
-            final exName = (ex['name'] ?? '').toString().trim();
-            if (exName.isEmpty) {
-              skippedExercises++;
-              continue;
-            }
-
-            // EQUIPMENT import: exercises go into that equipment directly (old behavior)
-            if (widget.insertKind == 'equipment') {
-              try {
-                final friendVideoUrl = _exerciseVideoUrl(ex);
-                final friendExerciseId = (ex['id'] ?? '').toString().trim();
-
-                await supabase.from('exercises').insert({
-                  'name': exName,
-                  'primary_muscle_group': (ex['primary_muscle_group'] ?? '').toString(),
-                  'type': (ex['type'] ?? '').toString(),
-                  'equipment_id': myContainerId,
-                  'video_url': null,
-                  'video_source_exercise_id':
-                      (friendVideoUrl != null && friendExerciseId.isNotEmpty) ? friendExerciseId : null,
-                });
-
-                addedExercises++;
-              } catch (_) {
-                skippedExercises++;
-              }
-              continue;
-            }
-
-            // ROUTINE import: exercises MUST live in one equipment, then LINK into routine_items.
-            if (widget.insertKind == 'routine') {
-              final homeEquipmentId = importedEquipmentId!;
-              final myExerciseId = await _insertMyExerciseIntoEquipment(
-                equipmentId: homeEquipmentId,
-                friendExercise: ex,
-              );
-
-              if (myExerciseId == null) {
-                skippedExercises++;
-                continue;
-              }
-
-              // Link into newly created routine
-              await _linkExerciseToRoutine(
-                routineId: myContainerId,
-                exerciseId: myExerciseId,
-              );
-
-              addedExercises++;
-              addedRoutineLinks++;
-            }
-          }
-        }
-      }
+      final result = await _friendProfileService.importContainers(
+        friendContainers: selectedContainers,
+        friendExercises: widget.friendExercises,
+        insertKind: widget.insertKind,
+        includeExercises: mode == _CopyMode.containerAndExercises,
+      );
 
       if (!mounted) return;
 
-      final totalSkipped = skippedContainers + skippedExercises;
-
-      final msg = mode == _CopyMode.containerOnly
-          ? (skippedContainers > 0
-              ? "Added $addedContainers ${widget.titlePlural} • Skipped $skippedContainers (already exists)"
-              : "Added $addedContainers ${widget.titlePlural}")
+      final message = mode == _CopyMode.containerOnly
+          ? result.skippedContainers > 0
+              ? "Added ${result.addedContainers} ${widget.titlePlural} • "
+                  "Skipped ${result.skippedContainers} (already exists)"
+              : "Added ${result.addedContainers} ${widget.titlePlural}"
           : widget.insertKind == 'routine'
-              ? "Added $addedContainers ${widget.titlePlural} ($addedRoutineLinks linked) • Imported $addedExercises exercise(s)"
-                  "${totalSkipped > 0 ? " • Skipped $totalSkipped" : ""}"
-              : "Added $addedContainers ${widget.titlePlural} ($addedExercises exercises)"
-                  "${totalSkipped > 0 ? " • Skipped $totalSkipped" : ""}";
+              ? "Added ${result.addedContainers} ${widget.titlePlural} "
+                  "(${result.addedRoutineLinks} linked) • "
+                  "Imported ${result.addedExercises} exercise(s)"
+                  "${result.totalSkipped > 0 ? " • Skipped ${result.totalSkipped}" : ""}"
+              : "Added ${result.addedContainers} ${widget.titlePlural} "
+                  "(${result.addedExercises} exercises)"
+                  "${result.totalSkipped > 0 ? " • Skipped ${result.totalSkipped}" : ""}";
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           behavior: SnackBarBehavior.floating,
           duration: const Duration(seconds: 3),
-          content: Text(msg),
+          content: Text(message),
         ),
       );
 
@@ -1274,8 +1040,7 @@ class _ExercisesTab extends StatefulWidget {
 }
 
 class _ExercisesTabState extends State<_ExercisesTab> {
-  final supabase = Supabase.instance.client;
-  final _equipmentService = EquipmentService();
+  final _friendProfileService = FriendProfileService();
 
   bool _selectMode = false;
   final Set<int> _selectedIndexes = {};
@@ -1306,94 +1071,8 @@ class _ExercisesTabState extends State<_ExercisesTab> {
     });
   }
 
-  String? _videoUrl(Map<String, dynamic> ex) {
-    final s = (ex['video_url'] ?? '').toString().trim();
-    return s.isEmpty ? null : s;
-  }
-
-  Future<String?> _findMyExerciseIdByNameInEquipment({
-    required String equipmentId,
-    required String name,
-  }) async {
-    final nm = name.trim();
-    if (nm.isEmpty) return null;
-
-    final rows = await supabase
-        .from('exercises')
-        .select('id, name')
-        .eq('equipment_id', equipmentId);
-
-    if (rows is! List) return null;
-
-    final target = nm.toLowerCase();
-    for (final r in rows) {
-      if (r is Map) {
-        final rn = (r['name'] ?? '').toString().trim().toLowerCase();
-        if (rn == target) {
-          final id = (r['id'] ?? '').toString().trim();
-          return id.isEmpty ? null : id;
-        }
-      }
-    }
-    return null;
-  }
-
-  Future<String?> _insertMyExerciseIntoEquipment({
-    required String equipmentId,
-    required Map<String, dynamic> friendExercise,
-  }) async {
-    final name = (friendExercise['name'] ?? '').toString().trim();
-    if (name.isEmpty) return null;
-
-    // De-dupe by (equipment_id + name)
-    final existingId = await _findMyExerciseIdByNameInEquipment(
-      equipmentId: equipmentId,
-      name: name,
-    );
-    if (existingId != null) return existingId;
-
-    try {
-      final friendVideoUrl = _videoUrl(friendExercise);
-      final friendExerciseId = (friendExercise['id'] ?? '').toString().trim();
-
-      final inserted = await supabase
-          .from('exercises')
-          .insert({
-            'name': name,
-            'primary_muscle_group': (friendExercise['primary_muscle_group'] ?? '').toString(),
-            'type': (friendExercise['type'] ?? '').toString(),
-            'equipment_id': equipmentId,
-
-            // do not copy URL
-            'video_url': null,
-
-            // store reference if friend has a video
-            'video_source_exercise_id':
-                (friendVideoUrl != null && friendExerciseId.isNotEmpty) ? friendExerciseId : null,
-          })
-          .select('id')
-          .single();
-
-      final id = (inserted['id'] ?? '').toString().trim();
-      return id.isEmpty ? null : id;
-    } catch (_) {
-      return null;
-    }
-  }
-
-  Future<void> _linkExerciseToRoutine({
-    required String routineId,
-    required String exerciseId,
-  }) async {
-    try {
-      await supabase.from('routine_items').insert({
-        'routine_id': routineId,
-        'exercise_id': exerciseId,
-      });
-    } catch (_) {
-      // ignore duplicates
-    }
-  }
+  String? _videoUrl(Map<String, dynamic> exercise) =>
+      _friendProfileService.exerciseVideoUrl(exercise);
 
   Future<Map<String, dynamic>?> _pickOrCreateContainer({
     required String title,
@@ -1401,17 +1080,7 @@ class _ExercisesTabState extends State<_ExercisesTab> {
     required String createHint,
     required String kind, // 'equipment' or 'routine'
   }) async {
-    // Load MY containers
-    final myDynamic = await _equipmentService.getAllEquipment();
-    final myList = myDynamic
-        .map((e) => Map<String, dynamic>.from(e as Map))
-        .where((e) => (e['kind'] ?? 'equipment').toString().toLowerCase().trim() == kind)
-        .toList()
-      ..sort((a, b) {
-        final an = (a['name'] ?? '').toString().toLowerCase();
-        final bn = (b['name'] ?? '').toString().toLowerCase();
-        return an.compareTo(bn);
-      });
+    final myList = await _friendProfileService.getMyContainers(kind: kind);
 
     String? selectedId;
     final newController = TextEditingController();
@@ -1498,8 +1167,7 @@ class _ExercisesTabState extends State<_ExercisesTab> {
     final typed = newController.text.trim();
 
     if (typed.isNotEmpty) {
-      final created = await _equipmentService.insertEquipment(typed, kind: kind);
-      return Map<String, dynamic>.from(created);
+      return _friendProfileService.createContainer(name: typed, kind: kind);
     }
 
     if (selectedId != null && selectedId!.isNotEmpty) {
@@ -1510,8 +1178,6 @@ class _ExercisesTabState extends State<_ExercisesTab> {
     return null;
   }
 
-  /// ✅ NEW: Add selected friend exercises to MY EQUIPMENT (existing behavior)
-  /// (imports canonical exercises into one equipment)
   Future<void> _addSelectedExercisesToEquipment() async {
     if (_selectedIndexes.isEmpty || _isAdding) return;
 
@@ -1527,31 +1193,22 @@ class _ExercisesTabState extends State<_ExercisesTab> {
     final targetEquipmentName = (target['name'] ?? '').toString().trim();
     if (targetEquipmentId.isEmpty) return;
 
+    final selectedExercises = _selectedIndexes
+        .map((index) => Map<String, dynamic>.from(widget.exercises[index]))
+        .toList()
+      ..sort((a, b) {
+        final aName = (a['name'] ?? '').toString().toLowerCase();
+        final bName = (b['name'] ?? '').toString().toLowerCase();
+        return aName.compareTo(bName);
+      });
+
     setState(() => _isAdding = true);
 
-    int added = 0;
-    int skipped = 0;
-
     try {
-      final ordered = _selectedIndexes.toList()
-        ..sort((a, b) {
-          final an = (widget.exercises[a]['name'] ?? '').toString().toLowerCase();
-          final bn = (widget.exercises[b]['name'] ?? '').toString().toLowerCase();
-          return an.compareTo(bn);
-        });
-
-      for (final idx in ordered) {
-        final ex = widget.exercises[idx];
-        final id = await _insertMyExerciseIntoEquipment(
-          equipmentId: targetEquipmentId,
-          friendExercise: ex,
-        );
-        if (id == null) {
-          skipped++;
-        } else {
-          added++;
-        }
-      }
+      final result = await _friendProfileService.importExercisesToEquipment(
+        friendExercises: selectedExercises,
+        equipmentId: targetEquipmentId,
+      );
 
       if (!mounted) return;
 
@@ -1560,9 +1217,10 @@ class _ExercisesTabState extends State<_ExercisesTab> {
           behavior: SnackBarBehavior.floating,
           duration: const Duration(seconds: 3),
           content: Text(
-            skipped > 0
-                ? "Added $added exercise(s) to $targetEquipmentName • Skipped $skipped"
-                : "Added $added exercise(s) to $targetEquipmentName",
+            result.skippedExercises > 0
+                ? "Added ${result.addedExercises} exercise(s) to "
+                    "$targetEquipmentName • Skipped ${result.skippedExercises}"
+                : "Added ${result.addedExercises} exercise(s) to $targetEquipmentName",
           ),
         ),
       );
@@ -1573,14 +1231,10 @@ class _ExercisesTabState extends State<_ExercisesTab> {
     }
   }
 
-  /// ✅ NEW: Add selected friend exercises to MY ROUTINE
-  /// Because exercises must "live" in one equipment, we ask for:
-  /// 1) Home equipment for the imported exercises
-  /// 2) Target routine to link them into (routine_items)
+  /// Add selected friend exercises to one of my routines.
   Future<void> _addSelectedExercisesToRoutine() async {
     if (_selectedIndexes.isEmpty || _isAdding) return;
 
-    // Pick/create the HOME equipment first
     final homeEquipment = await _pickOrCreateContainer(
       title: "Where should these exercises live?",
       existingHint: "Choose home equipment:",
@@ -1589,11 +1243,12 @@ class _ExercisesTabState extends State<_ExercisesTab> {
     );
     if (homeEquipment == null) return;
 
-    final homeEquipmentId = (homeEquipment['id'] ?? '').toString().trim();
-    final homeEquipmentName = (homeEquipment['name'] ?? '').toString().trim();
+    final homeEquipmentId =
+        (homeEquipment['id'] ?? '').toString().trim();
+    final homeEquipmentName =
+        (homeEquipment['name'] ?? '').toString().trim();
     if (homeEquipmentId.isEmpty) return;
 
-    // Pick/create routine
     final routine = await _pickOrCreateContainer(
       title: "Add ${_selectedIndexes.length} exercise(s) to routine",
       existingHint: "Add to existing routine:",
@@ -1606,42 +1261,23 @@ class _ExercisesTabState extends State<_ExercisesTab> {
     final routineName = (routine['name'] ?? '').toString().trim();
     if (routineId.isEmpty) return;
 
+    final selectedExercises = _selectedIndexes
+        .map((index) => Map<String, dynamic>.from(widget.exercises[index]))
+        .toList()
+      ..sort((a, b) {
+        final aName = (a['name'] ?? '').toString().toLowerCase();
+        final bName = (b['name'] ?? '').toString().toLowerCase();
+        return aName.compareTo(bName);
+      });
+
     setState(() => _isAdding = true);
 
-    int imported = 0;
-    int linked = 0;
-    int skipped = 0;
-
     try {
-      final ordered = _selectedIndexes.toList()
-        ..sort((a, b) {
-          final an = (widget.exercises[a]['name'] ?? '').toString().toLowerCase();
-          final bn = (widget.exercises[b]['name'] ?? '').toString().toLowerCase();
-          return an.compareTo(bn);
-        });
-
-      for (final idx in ordered) {
-        final ex = widget.exercises[idx];
-
-        final myExerciseId = await _insertMyExerciseIntoEquipment(
-          equipmentId: homeEquipmentId,
-          friendExercise: ex,
-        );
-
-        if (myExerciseId == null) {
-          skipped++;
-          continue;
-        }
-
-        imported++;
-
-        await _linkExerciseToRoutine(
-          routineId: routineId,
-          exerciseId: myExerciseId,
-        );
-
-        linked++;
-      }
+      final result = await _friendProfileService.importExercisesToRoutine(
+        friendExercises: selectedExercises,
+        homeEquipmentId: homeEquipmentId,
+        routineId: routineId,
+      );
 
       if (!mounted) return;
 
@@ -1650,9 +1286,12 @@ class _ExercisesTabState extends State<_ExercisesTab> {
           behavior: SnackBarBehavior.floating,
           duration: const Duration(seconds: 3),
           content: Text(
-            skipped > 0
-                ? "Imported $imported into $homeEquipmentName • Linked $linked into $routineName • Skipped $skipped"
-                : "Imported $imported into $homeEquipmentName • Linked $linked into $routineName",
+            result.skippedExercises > 0
+                ? "Imported ${result.addedExercises} into $homeEquipmentName • "
+                    "Linked ${result.addedRoutineLinks} into $routineName • "
+                    "Skipped ${result.skippedExercises}"
+                : "Imported ${result.addedExercises} into $homeEquipmentName • "
+                    "Linked ${result.addedRoutineLinks} into $routineName",
           ),
         ),
       );
