@@ -1220,8 +1220,7 @@ class _ExercisesTabState extends State<_ExercisesTab> {
             result.skippedExercises > 0
                 ? "Added ${result.addedExercises} exercise(s) to "
                     "$targetEquipmentName • Skipped ${result.skippedExercises}"
-                : "Added ${result.addedExercises} exercise(s) to "
-                    targetEquipmentName,
+                : "Added ${result.addedExercises} exercise(s) to $targetEquipmentName",
           ),
         ),
       );
