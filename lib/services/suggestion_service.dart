@@ -437,6 +437,96 @@ class SuggestionService {
     return left.isNotEmpty && left == right;
   }
 
+  Future<SuggestedRoutine> enrichRoutineVideoAvailability(
+    SuggestedRoutine routine,
+  ) async {
+    if (routine.exercises.isEmpty) return routine;
+
+    final enrichedExercises =
+        await _enrichExercisesWithVideoAvailability(routine.exercises);
+
+    return SuggestedRoutine(
+      dayType: routine.dayType,
+      minutes: routine.minutes,
+      exercises: enrichedExercises,
+      message: routine.message,
+    );
+  }
+
+  Future<List<Map<String, dynamic>>> _enrichExercisesWithVideoAvailability(
+    List<Map<String, dynamic>> exercises,
+  ) async {
+    final enriched = exercises
+        .map((exercise) => Map<String, dynamic>.from(exercise))
+        .toList();
+
+    final sourceIds = enriched
+        .map((exercise) =>
+            (exercise['video_source_exercise_id'] ?? '').toString().trim())
+        .where((id) => id.isNotEmpty)
+        .toSet();
+
+    final sourceIdsWithVideo = <String>{};
+
+    await Future.wait(
+      sourceIds.map((sourceId) async {
+        final sourceUrl = await _resolveExerciseVideoUrl(sourceId);
+        if (sourceUrl != null && sourceUrl.trim().isNotEmpty) {
+          sourceIdsWithVideo.add(sourceId);
+        }
+      }),
+    );
+
+    for (final exercise in enriched) {
+      final userVideoUrl = (exercise['video_url'] ?? '').toString().trim();
+      final sourceId =
+          (exercise['video_source_exercise_id'] ?? '').toString().trim();
+
+      exercise['has_user_video'] = userVideoUrl.isNotEmpty;
+      exercise['has_trainer_video'] =
+          sourceId.isNotEmpty && sourceIdsWithVideo.contains(sourceId);
+    }
+
+    return enriched;
+  }
+
+  Future<String?> _resolveExerciseVideoUrl(String sourceExerciseId) async {
+    try {
+      final result = await supabase.rpc(
+        'get_exercise_video_url',
+        params: {'p_exercise_id': sourceExerciseId},
+      );
+
+      if (result == null) return null;
+
+      if (result is String) {
+        final value = result.trim();
+        return value.isEmpty ? null : value;
+      }
+
+      if (result is List && result.isNotEmpty) {
+        final first = result.first;
+        if (first is Map && first.isNotEmpty) {
+          final value = (first.values.first ?? '').toString().trim();
+          return value.isEmpty ? null : value;
+        }
+
+        final value = first.toString().trim();
+        return value.isEmpty ? null : value;
+      }
+
+      if (result is Map && result.isNotEmpty) {
+        final value = (result.values.first ?? '').toString().trim();
+        return value.isEmpty ? null : value;
+      }
+
+      final value = result.toString().trim();
+      return value.isEmpty ? null : value;
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<SuggestedDayType> _resolveSuggestedDayType(
     SuggestedDayTypeChoice choice,
   ) async {
@@ -631,6 +721,7 @@ class SuggestionService {
                 primary_muscle_group,
                 equipment_id,
                 video_url,
+                video_source_exercise_id,
                 equipment:equipment_id (
                   name,
                   kind
@@ -646,6 +737,7 @@ class SuggestionService {
                 primary_muscle_group,
                 equipment_id,
                 video_url,
+                video_source_exercise_id,
                 equipment:equipment_id (
                   name,
                   kind
@@ -683,7 +775,10 @@ class SuggestionService {
 
     if (candidates.isEmpty) return candidates;
 
-    final candidateIds = candidates
+    final enrichedCandidates =
+        await _enrichExercisesWithVideoAvailability(candidates);
+
+    final candidateIds = enrichedCandidates
         .map((ex) => (ex['id'] ?? '').toString())
         .where((id) => id.trim().isNotEmpty)
         .toSet();
@@ -693,11 +788,11 @@ class SuggestionService {
     );
 
     _sortSameMuscleCandidatesByLastSetDate(
-      candidates,
+      enrichedCandidates,
       lastSetDateByExerciseId: lastSetDateByExerciseId,
     );
 
-    return candidates;
+    return enrichedCandidates;
   }
 
   String _canonicalMuscleGroup(dynamic value) {

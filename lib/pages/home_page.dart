@@ -175,7 +175,12 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
       if (!mounted) return;
 
       if (routine != null) {
-        setState(() => _suggestedRoutine = routine);
+        final enrichedRoutine =
+            await _suggestionService.enrichRoutineVideoAvailability(routine);
+
+        if (!mounted) return;
+        setState(() => _suggestedRoutine = enrichedRoutine);
+        await _persistSuggestedRoutineToPrefs();
       }
     } catch (_) {
       // ignore
@@ -946,17 +951,21 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
         fixedDayTypeForRandomize: fixedType,
       );
 
+      final enrichedRoutine =
+          await _suggestionService.enrichRoutineVideoAvailability(routine);
+
       if (!mounted) return;
       _individualRandomizeHistoryBySlot.clear();
-      setState(() => _suggestedRoutine = routine);
+      setState(() => _suggestedRoutine = enrichedRoutine);
 
       // ✅ Persist after any change
       await _persistSuggestedRoutineToPrefs();
 
-      if (routine.exercises.isEmpty && routine.message != null) {
+      if (enrichedRoutine.exercises.isEmpty &&
+          enrichedRoutine.message != null) {
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text(routine.message!)));
+        ).showSnackBar(SnackBar(content: Text(enrichedRoutine.message!)));
       }
     } catch (e) {
       if (!mounted) return;
@@ -985,10 +994,15 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
         individualRandomizeHistoryBySlot: _individualRandomizeHistoryBySlot,
       );
 
+      final enrichedRoutine =
+          await _suggestionService.enrichRoutineVideoAvailability(
+        updatedRoutine,
+      );
+
       if (!mounted) return;
 
-      final updatedExerciseId = index < updatedRoutine.exercises.length
-          ? (updatedRoutine.exercises[index]['id'] ?? '').toString()
+      final updatedExerciseId = index < enrichedRoutine.exercises.length
+          ? (enrichedRoutine.exercises[index]['id'] ?? '').toString()
           : currentExerciseId;
 
       if (updatedExerciseId == currentExerciseId) {
@@ -1000,7 +1014,7 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
         return;
       }
 
-      setState(() => _suggestedRoutine = updatedRoutine);
+      setState(() => _suggestedRoutine = enrichedRoutine);
 
       await _persistSuggestedRoutineToPrefs();
     } catch (e) {
@@ -1161,6 +1175,9 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 final equipmentName = (ex['equipment_name'] ?? '')
                     .toString()
                     .trim();
+                final hasTrainerVideo =
+                    ex['has_trainer_video'] == true;
+                final hasUserVideo = ex['has_user_video'] == true;
 
                 return InkWell(
                   borderRadius: BorderRadius.circular(10),
@@ -1186,8 +1203,16 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
                           visualDensity: VisualDensity.compact,
                         ),
                         const SizedBox(width: 4),
-                        const Icon(Icons.play_arrow_rounded, size: 18),
-                        const SizedBox(width: 8),
+                        if (hasTrainerVideo) ...[
+                          const Tooltip(
+                            message: 'Trainer form video available',
+                            child: Icon(
+                              Icons.play_circle_fill_rounded,
+                              size: 19,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                        ],
                         Expanded(
                           child: Text(
                             equipmentName.isEmpty
@@ -1196,6 +1221,16 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
                             style: const TextStyle(fontWeight: FontWeight.w600),
                           ),
                         ),
+                        if (hasUserVideo) ...[
+                          const Tooltip(
+                            message: 'Your form video uploaded',
+                            child: Icon(
+                              Icons.person_pin_circle_rounded,
+                              size: 20,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                        ],
                         Text(
                           'Log',
                           style: TextStyle(
