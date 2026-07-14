@@ -36,6 +36,12 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
   int? _suggestedSets;
   String? _suggestionNote;
 
+  double? _strengthTrendPercent;
+  double? _volumeTrendPercent;
+  String _strengthTrendLabel = 'Not enough data';
+  String _volumeTrendLabel = 'Not enough data';
+  String? _progressSummary;
+
   // -------- Form video state --------
   final ImagePicker _picker = ImagePicker();
   XFile? _pickedVideo;
@@ -54,7 +60,6 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
   @override
   void initState() {
     super.initState();
-    _loadUserGoal();
     _loadLast3DaysAndSessions();
     _loadExerciseVideos();
   }
@@ -248,139 +253,77 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
   }
 }
 
-  // ---------- NEW Suggestion logic (working-set anchored + goal-driven) ----------
-  void _computeSuggestion() {
-    final goal = (_userGoal ?? '').toLowerCase().trim();
+  // ---------- Rolling suggestion and progress ----------
+  Future<void> _computeSuggestion() async {
+    try {
+      final exerciseId = (widget.exercise['id'] ?? '').toString().trim();
+      if (exerciseId.isEmpty) return;
 
-    int targetReps;
-    int targetSets;
+      final performance = await exerciseService.getExercisePerformanceData(
+        exerciseId: exerciseId,
+      );
 
-    switch (goal) {
-      case 'gain_strength':
-        targetReps = 5;
-        targetSets = 5;
-        break;
-      case 'gain_mass':
-        targetReps = 10;
-        targetSets = 4;
-        break;
-      case 'lose_weight':
-        targetReps = 12;
-        targetSets = 4;
-        break;
-      default:
-        targetReps = 8;
-        targetSets = 4;
-        break;
+      if (!mounted) return;
+      setState(() {
+        _suggestedWeight = performance.suggestedWeight;
+        _suggestedReps = performance.suggestedReps;
+        _suggestedSets = performance.suggestedSets;
+        _suggestionNote = performance.suggestionNote;
+        _strengthTrendPercent = performance.strengthTrendPercent;
+        _volumeTrendPercent = performance.volumeTrendPercent;
+        _strengthTrendLabel = performance.strengthTrendLabel;
+        _volumeTrendLabel = performance.volumeTrendLabel;
+        _progressSummary = performance.progressSummary;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _suggestionNote = 'Could not calculate suggestions: $e';
+      });
     }
+  }
 
-    // Use the most recent day that is NOT today
-    final todayKey = _todayKey();
-    final referenceKey = last3DayKeys.firstWhere(
-      (k) => k != todayKey,
-      orElse: () => '',
+  String _formatTrendPercent(double? value) {
+    if (value == null) return '—';
+    final prefix = value > 0 ? '+' : '';
+    return '$prefix${value.toStringAsFixed(1)}%';
+  }
+
+  IconData _trendIcon(double? value) {
+    if (value == null) return Icons.horizontal_rule;
+    if (value > 1) return Icons.trending_up;
+    if (value < -1) return Icons.trending_down;
+    return Icons.trending_flat;
+  }
+
+  Widget _buildProgressTile({
+    required String title,
+    required double? value,
+    required String label,
+  }) {
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(_trendIcon(value)),
+            const SizedBox(height: 6),
+            Text(title, style: Theme.of(context).textTheme.bodySmall),
+            const SizedBox(height: 4),
+            Text(
+              _formatTrendPercent(value),
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            Text(label, style: Theme.of(context).textTheme.bodySmall),
+          ],
+        ),
+      ),
     );
-
-    if (referenceKey.isEmpty) {
-      if (!mounted) return;
-      setState(() {
-        _suggestedWeight = null;
-        _suggestedReps = targetReps;
-        _suggestedSets = targetSets;
-        _suggestionNote =
-            "No prior training day found yet for this exercise (excluding today). Showing reps/sets from your goal.";
-      });
-      return;
-    }
-
-    final sessions = sessionsByDayKey[referenceKey] ?? const [];
-    if (sessions.isEmpty) {
-      if (!mounted) return;
-      setState(() {
-        _suggestedWeight = null;
-        _suggestedReps = targetReps;
-        _suggestedSets = targetSets;
-        _suggestionNote =
-            "No usable session history on ${_formatDate(_dateFromDayKey(referenceKey))}. Showing reps/sets from your goal.";
-      });
-      return;
-    }
-
-    // Parse sets
-    final sets = sessions
-        .map((s) => (
-              weight: _numToDouble(s['weight']),
-              reps: _numToInt(s['reps']),
-            ))
-        .where((x) => x.weight > 0 && x.reps > 0)
-        .toList();
-
-    if (sets.isEmpty) {
-      if (!mounted) return;
-      setState(() {
-        _suggestedWeight = null;
-        _suggestedReps = targetReps;
-        _suggestedSets = targetSets;
-        _suggestionNote =
-            "Not enough valid sets to estimate a working weight. Showing reps/sets from your goal.";
-      });
-      return;
-    }
-
-    final maxW = sets.map((x) => x.weight).reduce((a, b) => a > b ? a : b);
-
-    // Filter “working sets” and ignore likely warmups:
-    // keep anything at or above 85% of max weight for that day.
-    final working = sets.where((x) => x.weight >= (0.85 * maxW)).toList();
-
-    // Fallback: if filter too strict, use the top 3 heaviest sets.
-    if (working.isEmpty) {
-      final sorted = [...sets]..sort((a, b) => b.weight.compareTo(a.weight));
-      working.addAll(sorted.take(sorted.length >= 3 ? 3 : sorted.length));
-    }
-
-    final workingWeights = working.map((x) => x.weight).toList();
-    final workingMedianWeight = _median(workingWeights);
-
-    // Determine if you “hit” the target last time:
-    // Count sets near your working weight where reps >= targetReps.
-    final nearWorking = working.where((x) => x.weight >= (0.95 * workingMedianWeight)).toList();
-    final goodSets = nearWorking.where((x) => x.reps >= targetReps).length;
-
-    // Progression step
-    // Default 2.5; bump to 5 if you clearly exceeded reps.
-    double step = 2.5;
-    final crushedSets = nearWorking.where((x) => x.reps >= (targetReps + 2)).length;
-    if (crushedSets >= (targetSets >= 3 ? 3 : targetSets)) {
-      step = 5.0;
-    }
-
-    // Suggest weight:
-    // If you hit at least targetSets good sets last time, add step; else keep.
-    double suggested = workingMedianWeight;
-    final progressed = goodSets >= targetSets;
-    if (progressed) {
-      suggested = workingMedianWeight + step;
-    }
-
-    // Round to nearest 2.5 (your plates reality)
-    suggested = _roundTo(suggested, 2.5);
-
-    final refDate = _formatDate(_dateFromDayKey(referenceKey));
-    final goalText = goal.isEmpty ? "default" : goal.replaceAll('_', ' ');
-    final note =
-        "Based on your working sets on $refDate (ignoring warmups). "
-        "Estimated working weight: ${workingMedianWeight.toStringAsFixed(workingMedianWeight % 1 == 0 ? 0 : 1)}. "
-        "You hit $goodSets set(s) at ${targetReps} reps or more near that weight, so next session is ${progressed ? "a small increase" : "the same weight"} "
-        "for $targetSets×$targetReps ($goalText).";
-
-    if (!mounted) return;
-    setState(() {
-      _suggestedWeight = suggested > 0 ? suggested : null;
-      _suggestedReps = targetReps;
-      _suggestedSets = targetSets;
-      _suggestionNote = note;
-    });
   }
 
   // ---------- Exercise videos ----------
@@ -838,6 +781,55 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
                       const SizedBox(height: 6),
                       Text(
                         "Tip: Aim for $_suggestedSets × $_suggestedReps${_suggestedWeight == null ? '' : ' at the suggested weight.'}",
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+
+            const SizedBox(height: 12),
+
+            if (_progressSummary != null)
+              Card(
+                elevation: 2,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          const Icon(Icons.insights),
+                          const SizedBox(width: 8),
+                          Text(
+                            'Progress',
+                            style: Theme.of(context).textTheme.titleMedium,
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          _buildProgressTile(
+                            title: 'Strength trend',
+                            value: _strengthTrendPercent,
+                            label: _strengthTrendLabel,
+                          ),
+                          const SizedBox(width: 10),
+                          _buildProgressTile(
+                            title: 'Volume trend',
+                            value: _volumeTrendPercent,
+                            label: _volumeTrendLabel,
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      Text(
+                        _progressSummary!,
                         style: Theme.of(context).textTheme.bodySmall,
                       ),
                     ],
