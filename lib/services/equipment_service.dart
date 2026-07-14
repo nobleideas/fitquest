@@ -6,7 +6,10 @@ class EquipmentService {
   Future<List<dynamic>> getAllEquipment({String? kind}) async {
     final normalizedKind = kind?.trim().toLowerCase();
 
-    var query = supabase.from('equipment').select();
+    var query = supabase.from('equipment').select(
+  'id, name, qr_code, created_at, user_id, kind, '
+  'source_routine_id, source_trainer_user_id',
+);
 
     if (normalizedKind != null && normalizedKind.isNotEmpty) {
       if (normalizedKind != 'equipment' && normalizedKind != 'routine') {
