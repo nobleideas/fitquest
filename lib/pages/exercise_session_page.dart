@@ -24,8 +24,9 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
   final ExerciseService exerciseService = ExerciseService();
   bool _isRemovingTrainerVideo = false;
 
-  // --- Last 3 recorded days (stable day-key approach avoids timezone/dup bugs)
-  List<String> last3DayKeys = []; // "YYYY-MM-DD"
+  // --- Today's workout + four most recent prior workout days
+  String? todayDayKey;
+  List<String> last4DayKeys = []; // "YYYY-MM-DD", excludes today
   Map<String, List<Map<String, dynamic>>> sessionsByDayKey = {};
   Map<String, double> volumeByDayKey = {};
 
@@ -60,7 +61,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
   @override
   void initState() {
     super.initState();
-    _loadLast3DaysAndSessions();
+    _loadTodayAndLast4Days();
     _loadExerciseVideos();
   }
 
@@ -136,51 +137,89 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
   }
 
   // ---------- Sessions ----------
-  Future<void> _loadLast3DaysAndSessions() async {
-    final rawDates = await sessionService.getLast3SessionDates(
-      widget.exercise['id'],
-    );
+  Future<void> _loadTodayAndLast4Days() async {
+    final user = Supabase.instance.client.auth.currentUser;
+    final exerciseId = (widget.exercise['id'] ?? '').toString().trim();
 
-    // Deduplicate by day; keep newest-first order as returned by service.
+    if (user == null || exerciseId.isEmpty) return;
+
+    final recentRows = await Supabase.instance.client
+        .from('exercise_sessions')
+        .select('created_at')
+        .eq('user_id', user.id)
+        .eq('exercise_id', exerciseId)
+        .order('created_at', ascending: false)
+        .limit(500);
+
+    final todayKey = _todayKey();
     final seen = <String>{};
-    final keys = <String>[];
-    for (final d in rawDates) {
-      final key = _dayKey(d);
-      if (seen.add(key)) keys.add(key);
-      if (keys.length == 3) break;
+    final priorKeys = <String>[];
+    var hasToday = false;
+
+    for (final row in recentRows) {
+      if (row is! Map) continue;
+
+      final parsed = DateTime.tryParse(
+        (row['created_at'] ?? '').toString(),
+      );
+      if (parsed == null) continue;
+
+      final key = _dayKey(parsed);
+
+      if (key == todayKey) {
+        hasToday = true;
+        continue;
+      }
+
+      if (seen.add(key)) {
+        priorKeys.add(key);
+      }
+
+      if (priorKeys.length == 4) break;
     }
 
-    final Map<String, List<Map<String, dynamic>>> map = {};
-    final Map<String, double> volMap = {};
+    final keysToLoad = <String>[
+      if (hasToday) todayKey,
+      ...priorKeys,
+    ];
 
-    for (final key in keys) {
+    final map = <String, List<Map<String, dynamic>>>{};
+    final volMap = <String, double>{};
+
+    for (final key in keysToLoad) {
       final date = _dateFromDayKey(key);
       final sessions = await sessionService.getSessionsForDate(
-        widget.exercise['id'],
+        exerciseId,
         date,
       );
+
       map[key] = sessions;
 
-      double totalVol = 0.0;
-      for (final s in sessions) {
-        totalVol += _numToDouble(s['weight']) * _numToInt(s['reps']);
+      double totalVolume = 0;
+      for (final session in sessions) {
+        totalVolume +=
+            _numToDouble(session['weight']) *
+            _numToInt(session['reps']);
       }
-      volMap[key] = totalVol;
+
+      volMap[key] = totalVolume;
     }
 
     if (!mounted) return;
+
     setState(() {
-      last3DayKeys = keys;
+      todayDayKey = hasToday ? todayKey : null;
+      last4DayKeys = priorKeys;
       sessionsByDayKey = map;
       volumeByDayKey = volMap;
     });
 
-    _computeSuggestion();
+    await _computeSuggestion();
   }
 
   Future<void> _deleteSession(String sessionId) async {
     await sessionService.deleteSession(sessionId);
-    await _loadLast3DaysAndSessions();
+    await _loadTodayAndLast4Days();
   }
 
   Future<void> _removeTrainerVideo() async {
@@ -322,6 +361,66 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
             Text(label, style: Theme.of(context).textTheme.bodySmall),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildWorkoutDayCard({
+    required String dayKey,
+    required String title,
+    bool initiallyExpanded = false,
+  }) {
+    final sessions = sessionsByDayKey[dayKey] ?? const [];
+    final volume = volumeByDayKey[dayKey] ?? 0;
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      elevation: 3,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: ExpansionTile(
+        initiallyExpanded: initiallyExpanded,
+        title: Text(
+          '$title  •  Volume: ${volume.toStringAsFixed(0)}',
+        ),
+        children: sessions.isEmpty
+            ? const [
+                ListTile(
+                  leading: Icon(Icons.info_outline),
+                  title: Text('No sets found for this day.'),
+                ),
+              ]
+            : sessions.map((session) {
+                final setVolume =
+                    _numToDouble(session['weight']) *
+                    _numToInt(session['reps']);
+
+                return Dismissible(
+                  key: Key(session['id'].toString()),
+                  direction: DismissDirection.endToStart,
+                  background: Container(
+                    alignment: Alignment.centerRight,
+                    color: Colors.red,
+                    padding: const EdgeInsets.only(right: 20),
+                    child: const Icon(
+                      Icons.delete,
+                      color: Colors.white,
+                    ),
+                  ),
+                  onDismissed: (_) =>
+                      _deleteSession(session['id'].toString()),
+                  child: ListTile(
+                    leading: const Icon(Icons.fitness_center),
+                    title: Text('Weight: ${session['weight']}'),
+                    subtitle: Text('Reps: ${session['reps']}'),
+                    trailing: Text(
+                      'Vol: ${setVolume.toStringAsFixed(0)}',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ),
+                );
+              }).toList(),
       ),
     );
   }
@@ -719,7 +818,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
 
                   weightController.clear();
                   repsController.clear();
-                  await _loadLast3DaysAndSessions();
+                  await _loadTodayAndLast4Days();
                 },
               ),
             ),
@@ -839,66 +938,89 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
 
             const SizedBox(height: 24),
 
-            // ----------------- Last 3 Recorded Days -----------------
-            if (last3DayKeys.isNotEmpty)
-              Text(
-                "Last 3 Recorded Days",
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
+            // ----------------- Today's Workout -----------------
+            Text(
+              "Today's Workout",
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              "Today's sets are shown here but are excluded from the current "
+              "suggestion and progress calculations until the calendar day changes.",
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
             const SizedBox(height: 12),
 
-            ...last3DayKeys.map((key) {
-              final date = _dateFromDayKey(key);
-              final sessions = sessionsByDayKey[key] ?? const [];
-              final vol = volumeByDayKey[key] ?? 0.0;
-              final volLabel = vol.toStringAsFixed(0);
+            if (todayDayKey == null)
+              Card(
+                elevation: 1,
+                child: Padding(
+                  padding: const EdgeInsets.all(14),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.info_outline),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          "No sets have been recorded for this exercise today.",
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              )
+            else
+              _buildWorkoutDayCard(
+                dayKey: todayDayKey!,
+                title: "Today",
+                initiallyExpanded: true,
+              ),
 
-              return Card(
-                margin: const EdgeInsets.only(bottom: 12),
-                elevation: 3,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
+            const SizedBox(height: 20),
+
+            // ----------------- Last 4 Recorded Days -----------------
+            Text(
+              "Last 4 Recorded Days",
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              "These are completed prior workout days. Tomorrow, today's "
+              "workout will automatically move into this section and the "
+              "progress calculation will refresh using it.",
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+            const SizedBox(height: 12),
+
+            if (last4DayKeys.isEmpty)
+              Card(
+                elevation: 1,
+                child: Padding(
+                  padding: const EdgeInsets.all(14),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.history),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          "No prior workout days have been recorded for this exercise.",
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-                child: ExpansionTile(
-                  title: Text("${_formatDate(date)}  •  Volume: $volLabel"),
-                  children: sessions.isEmpty
-                      ? const [
-                          ListTile(
-                            leading: Icon(Icons.info_outline),
-                            title: Text("No sessions found for this day."),
-                          ),
-                        ]
-                      : sessions.map((s) {
-                          final setVol =
-                              _numToDouble(s['weight']) * _numToInt(s['reps']);
-                          return Dismissible(
-                            key: Key(s['id'].toString()),
-                            direction: DismissDirection.endToStart,
-                            background: Container(
-                              alignment: Alignment.centerRight,
-                              color: Colors.red,
-                              padding: const EdgeInsets.only(right: 20),
-                              child: const Icon(
-                                Icons.delete,
-                                color: Colors.white,
-                              ),
-                            ),
-                            onDismissed: (_) =>
-                                _deleteSession(s['id'].toString()),
-                            child: ListTile(
-                              leading: const Icon(Icons.fitness_center),
-                              title: Text("Weight: ${s['weight']}"),
-                              subtitle: Text("Reps: ${s['reps']}"),
-                              trailing: Text(
-                                "Vol: ${setVol.toStringAsFixed(0)}",
-                                style: Theme.of(context).textTheme.bodySmall,
-                              ),
-                            ),
-                          );
-                        }).toList(),
-                ),
-              );
-            }).toList(),
+              )
+            else
+              ...last4DayKeys.map((key) {
+                final date = _dateFromDayKey(key);
+
+                return _buildWorkoutDayCard(
+                  dayKey: key,
+                  title: _formatDate(date),
+                );
+              }),
 
             const SizedBox(height: 24),
 
