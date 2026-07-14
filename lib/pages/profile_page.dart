@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'friend_profile_page.dart';
 import '../services/exercise_service.dart';
+import '../services/profile_service.dart';
 
 class ProfilePage extends StatefulWidget {
   const ProfilePage({super.key});
@@ -15,6 +16,7 @@ class ProfilePage extends StatefulWidget {
 class ProfilePageState extends State<ProfilePage> {
   final supabase = Supabase.instance.client;
   final ExerciseService _exerciseService = ExerciseService();
+  final ProfileService _profileService = ProfileService();
 
   // ✅ store the future so we can force a refetch on demand
   late Future<Map<String, dynamic>> _dataFuture;
@@ -98,12 +100,16 @@ class ProfilePageState extends State<ProfilePage> {
         .select('id, video_url')
         .eq('user_id', user.id);
 
+    final yearWorkoutStatsFuture =
+        _profileService.getCurrentYearWorkoutStats();
+
     final results = await Future.wait<dynamic>([
       profileFuture,
       volumeFuture,
       acceptedFriendsFuture,
       incomingRequestsFuture,
       exerciseVideoStatsFuture,
+      yearWorkoutStatsFuture,
     ]);
 
     final profile = Map<String, dynamic>.from(results[0] as Map);
@@ -138,6 +144,8 @@ class ProfilePageState extends State<ProfilePage> {
       return videoUrl.isNotEmpty;
     }).length;
 
+    final yearWorkoutStats = results[5] as YearWorkoutStats;
+
     return {
       'profile': profile,
       'volume': volRow,
@@ -145,6 +153,7 @@ class ProfilePageState extends State<ProfilePage> {
       'incomingRequests': incomingRequests,
       'totalExercises': totalExercises,
       'videosUploaded': videosUploaded,
+      'yearWorkoutStats': yearWorkoutStats,
     };
   }
 
@@ -381,6 +390,59 @@ class ProfilePageState extends State<ProfilePage> {
     );
   }
 
+
+  Widget _yearStatCard({
+    required IconData icon,
+    required String label,
+    required String value,
+    String? detail,
+  }) {
+    return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: SizedBox(
+        width: 165,
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(icon),
+              const SizedBox(height: 10),
+              Text(
+                value,
+                style: const TextStyle(
+                  fontSize: 21,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 3),
+              Text(
+                label,
+                style: const TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              if (detail != null && detail.isNotEmpty) ...[
+                const SizedBox(height: 3),
+                Text(
+                  detail,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: Colors.grey,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   void dispose() {
     _friendUsernameController.dispose();
@@ -402,6 +464,8 @@ class ProfilePageState extends State<ProfilePage> {
         final incomingRequests = snapshot.data!['incomingRequests'] as List<Map<String, dynamic>>;
         final totalExercises = snapshot.data!['totalExercises'] as int;
         final videosUploaded = snapshot.data!['videosUploaded'] as int;
+        final yearWorkoutStats =
+            snapshot.data!['yearWorkoutStats'] as YearWorkoutStats;
 
         final totalVol = _numToDouble(vol['total_volume']);
         final level = _computeLevel(totalVol);
@@ -447,6 +511,55 @@ class ProfilePageState extends State<ProfilePage> {
                     Text(
                       "Total Volume: ${totalVol.toStringAsFixed(0)} lbs",
                       style: const TextStyle(color: Colors.grey),
+                    ),
+
+                    const SizedBox(height: 16),
+
+                    // -------- Year Workout Analytics --------
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        "${yearWorkoutStats.year} Training",
+                        style: const TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Wrap(
+                      alignment: WrapAlignment.center,
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        _yearStatCard(
+                          icon: Icons.calendar_today_outlined,
+                          label: "Workout Days",
+                          value: "${yearWorkoutStats.workoutDays}",
+                          detail: "This year",
+                        ),
+                        _yearStatCard(
+                          icon: Icons.calendar_month_outlined,
+                          label: "Best Month",
+                          value: yearWorkoutStats.bestMonthLabel,
+                          detail:
+                              "${yearWorkoutStats.bestMonthWorkoutDays} workout days",
+                        ),
+                        _yearStatCard(
+                          icon: Icons.date_range_outlined,
+                          label: "Best Week",
+                          value: yearWorkoutStats.bestWeekLabel,
+                          detail:
+                              "${yearWorkoutStats.bestWeekWorkoutDays} workout days",
+                        ),
+                        _yearStatCard(
+                          icon: Icons.schedule_outlined,
+                          label: "Estimated Time",
+                          value:
+                              "${yearWorkoutStats.estimatedWorkoutHours.toStringAsFixed(1)} hrs",
+                          detail: "First to last logged set",
+                        ),
+                      ],
                     ),
 
                     // -------- Goal Card --------
