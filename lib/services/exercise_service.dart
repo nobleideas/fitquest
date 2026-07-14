@@ -20,10 +20,397 @@ class ExerciseVideoData {
       importedVideoUrl != null && importedVideoUrl!.trim().isNotEmpty;
 }
 
+
+class ExerciseDayPerformance {
+  final DateTime day;
+  final double totalVolume;
+  final int setCount;
+  final int totalReps;
+  final double workingWeight;
+  final int medianReps;
+  final double estimatedOneRepMax;
+
+  const ExerciseDayPerformance({
+    required this.day,
+    required this.totalVolume,
+    required this.setCount,
+    required this.totalReps,
+    required this.workingWeight,
+    required this.medianReps,
+    required this.estimatedOneRepMax,
+  });
+}
+
+class ExercisePerformanceData {
+  final double? suggestedWeight;
+  final int suggestedReps;
+  final int suggestedSets;
+  final String suggestionNote;
+  final double? strengthTrendPercent;
+  final double? volumeTrendPercent;
+  final String strengthTrendLabel;
+  final String volumeTrendLabel;
+  final String progressSummary;
+
+  const ExercisePerformanceData({
+    required this.suggestedWeight,
+    required this.suggestedReps,
+    required this.suggestedSets,
+    required this.suggestionNote,
+    required this.strengthTrendPercent,
+    required this.volumeTrendPercent,
+    required this.strengthTrendLabel,
+    required this.volumeTrendLabel,
+    required this.progressSummary,
+  });
+}
+
 class ExerciseService {
   final supabase = Supabase.instance.client;
 
   static const String _formVideoBucket = 'exercise_form_video';
+
+
+
+  // -----------------------------
+  // PERFORMANCE / SUGGESTIONS
+  // -----------------------------
+
+  Future<ExercisePerformanceData> getExercisePerformanceData({
+    required String exerciseId,
+  }) async {
+    final user = supabase.auth.currentUser;
+    if (user == null) {
+      throw StateError('User must be logged in.');
+    }
+
+    final profile = await supabase
+        .from('profiles')
+        .select('goal')
+        .eq('id', user.id)
+        .maybeSingle();
+
+    final goal = (profile?['goal'] ?? '').toString().trim().toLowerCase();
+
+    final rowsRaw = await supabase
+        .from('exercise_sessions')
+        .select('id, weight, reps, created_at')
+        .eq('user_id', user.id)
+        .eq('exercise_id', exerciseId)
+        .order('created_at', ascending: false)
+        .limit(500);
+
+    final rows = (rowsRaw as List)
+        .whereType<Map>()
+        .map((row) => Map<String, dynamic>.from(row))
+        .toList();
+
+    final days = _groupPerformanceDays(rows);
+
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final priorDays = days.where((day) => day.day.isBefore(today)).toList();
+
+    final suggestionDays = priorDays.take(3).toList();
+    final comparisonDays = priorDays.take(6).toList();
+
+    final suggestion = _calculateSuggestion(
+      goal: goal,
+      days: suggestionDays,
+    );
+
+    final progress = _calculateProgress(comparisonDays);
+
+    return ExercisePerformanceData(
+      suggestedWeight: suggestion.$1,
+      suggestedReps: suggestion.$2,
+      suggestedSets: suggestion.$3,
+      suggestionNote: suggestion.$4,
+      strengthTrendPercent: progress.$1,
+      volumeTrendPercent: progress.$2,
+      strengthTrendLabel: _trendLabel(progress.$1),
+      volumeTrendLabel: _trendLabel(progress.$2),
+      progressSummary: progress.$3,
+    );
+  }
+
+  List<ExerciseDayPerformance> _groupPerformanceDays(
+    List<Map<String, dynamic>> rows,
+  ) {
+    final grouped = <DateTime, List<Map<String, dynamic>>>{};
+
+    for (final row in rows) {
+      final parsed = DateTime.tryParse((row['created_at'] ?? '').toString());
+      if (parsed == null) continue;
+
+      final local = parsed.toLocal();
+      final day = DateTime(local.year, local.month, local.day);
+      grouped.putIfAbsent(day, () => <Map<String, dynamic>>[]).add(row);
+    }
+
+    final result = grouped.entries.map((entry) {
+      final sets = entry.value
+          .map((row) => (
+                weight: _performanceDouble(row['weight']),
+                reps: _performanceInt(row['reps']),
+              ))
+          .where((set) => set.weight > 0 && set.reps > 0)
+          .toList();
+
+      final totalVolume = sets.fold<double>(
+        0,
+        (sum, set) => sum + set.weight * set.reps,
+      );
+
+      final totalReps = sets.fold<int>(
+        0,
+        (sum, set) => sum + set.reps,
+      );
+
+      double workingWeight = 0;
+      int medianReps = 0;
+      double estimatedOneRepMax = 0;
+
+      if (sets.isNotEmpty) {
+        final maxWeight = sets
+            .map((set) => set.weight)
+            .reduce((a, b) => a > b ? a : b);
+
+        var workingSets = sets
+            .where((set) => set.weight >= maxWeight * 0.85)
+            .toList();
+
+        if (workingSets.isEmpty) {
+          final sorted = [...sets]
+            ..sort((a, b) => b.weight.compareTo(a.weight));
+          workingSets = sorted.take(3).toList();
+        }
+
+        workingWeight = _medianDouble(
+          workingSets.map((set) => set.weight).toList(),
+        );
+
+        medianReps = _medianInt(
+          workingSets.map((set) => set.reps).toList(),
+        );
+
+        estimatedOneRepMax = sets
+            .map((set) => set.weight * (1 + set.reps / 30.0))
+            .reduce((a, b) => a > b ? a : b);
+      }
+
+      return ExerciseDayPerformance(
+        day: entry.key,
+        totalVolume: totalVolume,
+        setCount: sets.length,
+        totalReps: totalReps,
+        workingWeight: workingWeight,
+        medianReps: medianReps,
+        estimatedOneRepMax: estimatedOneRepMax,
+      );
+    }).toList()
+      ..sort((a, b) => b.day.compareTo(a.day));
+
+    return result;
+  }
+
+  (double?, int, int, String) _calculateSuggestion({
+    required String goal,
+    required List<ExerciseDayPerformance> days,
+  }) {
+    final defaults = _goalDefaults(goal);
+
+    final validDays = days
+        .where((day) =>
+            day.workingWeight > 0 &&
+            day.setCount > 0 &&
+            day.medianReps > 0)
+        .toList();
+
+    if (validDays.isEmpty) {
+      return (
+        null,
+        defaults.$1,
+        defaults.$2,
+        'No completed prior training days were found. Reps and sets are based on your goal.',
+      );
+    }
+
+    final suggestedSets = _medianInt(
+      validDays.map((day) => day.setCount).toList(),
+    ).clamp(1, 8).toInt();
+
+    final suggestedReps = _medianInt(
+      validDays.map((day) => day.medianReps).toList(),
+    ).clamp(1, 30).toInt();
+
+    final oldestToNewest = validDays.reversed.toList();
+    final weights = oldestToNewest
+        .map((day) => day.workingWeight)
+        .toList();
+
+    double weightedWeight;
+    if (weights.length == 1) {
+      weightedWeight = weights.first;
+    } else if (weights.length == 2) {
+      weightedWeight = weights[0] * 0.4 + weights[1] * 0.6;
+    } else {
+      weightedWeight =
+          weights[weights.length - 3] * 0.20 +
+          weights[weights.length - 2] * 0.30 +
+          weights[weights.length - 1] * 0.50;
+    }
+
+    final successfulDays = validDays.where((day) {
+      return day.workingWeight >= weightedWeight * 0.95 &&
+          day.setCount >= suggestedSets &&
+          day.medianReps >= suggestedReps;
+    }).length;
+
+    double suggestedWeight = weightedWeight;
+    if (successfulDays >= 2) {
+      suggestedWeight += 2.5;
+    }
+
+    suggestedWeight = _roundPerformance(suggestedWeight, 2.5);
+
+    final count = validDays.length;
+    final note =
+        'Based on the last $count completed training ${count == 1 ? 'day' : 'days'}. '
+        'The target uses median sets and reps plus a recency-weighted working weight, '
+        'so one unusually strong or fatigued day does not control the recommendation.';
+
+    return (
+      suggestedWeight > 0 ? suggestedWeight : null,
+      suggestedReps,
+      suggestedSets,
+      note,
+    );
+  }
+
+  (double?, double?, String) _calculateProgress(
+    List<ExerciseDayPerformance> days,
+  ) {
+    if (days.length < 2) {
+      return (
+        null,
+        null,
+        'Complete this exercise on more days to establish a progress trend.',
+      );
+    }
+
+    final recent = days.take(3).toList();
+    final previous = days.skip(3).take(3).toList();
+
+    double strengthTrend;
+    double volumeTrend;
+
+    if (previous.isNotEmpty) {
+      strengthTrend = _percentChange(
+        _average(previous.map((day) => day.estimatedOneRepMax).toList()),
+        _average(recent.map((day) => day.estimatedOneRepMax).toList()),
+      );
+
+      volumeTrend = _percentChange(
+        _average(previous.map((day) => day.totalVolume).toList()),
+        _average(recent.map((day) => day.totalVolume).toList()),
+      );
+    } else {
+      strengthTrend = _percentChange(
+        recent.last.estimatedOneRepMax,
+        recent.first.estimatedOneRepMax,
+      );
+
+      volumeTrend = _percentChange(
+        recent.last.totalVolume,
+        recent.first.totalVolume,
+      );
+    }
+
+    String summary;
+    if (strengthTrend > 1 && volumeTrend < -1) {
+      summary =
+          'Strength is improving even though recent volume is lower. Fatigue, exercise order, or heavier working weights can explain that difference.';
+    } else if (strengthTrend > 1 && volumeTrend > 1) {
+      summary = 'Both strength and rolling volume are improving.';
+    } else if (strengthTrend.abs() <= 1 && volumeTrend > 1) {
+      summary = 'Strength is steady while work capacity and volume are improving.';
+    } else if (strengthTrend.abs() <= 1 && volumeTrend < -1) {
+      summary =
+          'Strength is holding steady while volume is temporarily lower. This is not automatically regression.';
+    } else if (strengthTrend < -1) {
+      summary =
+          'Recent strength performance is lower. Consider recovery, fatigue, exercise order, and consistency before treating it as regression.';
+    } else {
+      summary = 'Recent performance is relatively stable.';
+    }
+
+    return (strengthTrend, volumeTrend, summary);
+  }
+
+  (int, int) _goalDefaults(String goal) {
+    switch (goal) {
+      case 'gain_strength':
+        return (5, 5);
+      case 'gain_mass':
+        return (10, 4);
+      case 'lose_weight':
+        return (12, 4);
+      default:
+        return (8, 4);
+    }
+  }
+
+  String _trendLabel(double? value) {
+    if (value == null) return 'Not enough data';
+    if (value > 1) return 'Improving';
+    if (value < -1) return 'Lower recently';
+    return 'Stable';
+  }
+
+  double _average(List<double> values) {
+    final valid = values.where((value) => value > 0).toList();
+    if (valid.isEmpty) return 0;
+    return valid.reduce((a, b) => a + b) / valid.length;
+  }
+
+  double _percentChange(double previous, double current) {
+    if (previous <= 0) return 0;
+    return ((current - previous) / previous) * 100;
+  }
+
+  double _medianDouble(List<double> values) {
+    if (values.isEmpty) return 0;
+    final sorted = [...values]..sort();
+    final middle = sorted.length ~/ 2;
+    if (sorted.length.isOdd) return sorted[middle];
+    return (sorted[middle - 1] + sorted[middle]) / 2;
+  }
+
+  int _medianInt(List<int> values) {
+    if (values.isEmpty) return 0;
+    final sorted = [...values]..sort();
+    final middle = sorted.length ~/ 2;
+    if (sorted.length.isOdd) return sorted[middle];
+    return ((sorted[middle - 1] + sorted[middle]) / 2).round();
+  }
+
+  double _roundPerformance(double value, double step) {
+    if (step <= 0) return value;
+    return (value / step).round() * step;
+  }
+
+  double _performanceDouble(dynamic value) {
+    if (value is num) return value.toDouble();
+    return double.tryParse((value ?? '').toString()) ?? 0;
+  }
+
+  int _performanceInt(dynamic value) {
+    if (value is int) return value;
+    if (value is num) return value.toInt();
+    return int.tryParse((value ?? '').toString()) ?? 0;
+  }
+
 
   // -----------------------------
   // READ
