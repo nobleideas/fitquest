@@ -83,6 +83,17 @@ class EquipmentListPageState extends State<EquipmentListPage> {
     return (item['kind'] ?? 'equipment').toString().toLowerCase().trim();
   }
 
+  bool _isImportedRoutine(Map<String, dynamic> item) {
+    if (_kindValue(item) != 'routine') return false;
+
+    final sourceRoutineId =
+        (item['source_routine_id'] ?? '').toString().trim();
+    final sourceTrainerUserId =
+        (item['source_trainer_user_id'] ?? '').toString().trim();
+
+    return sourceRoutineId.isNotEmpty || sourceTrainerUserId.isNotEmpty;
+  }
+
   bool _matchesKindFilter(Map<String, dynamic> item) {
     if (_selectedKind == 'All') return true;
 
@@ -651,6 +662,19 @@ class EquipmentListPageState extends State<EquipmentListPage> {
 
     if (routineId.isEmpty) return;
 
+    // Imported trainer routines are personal copies. They cannot be
+    // reassigned to anyone, including the trainer who originally shared them.
+    if (_isImportedRoutine(routine)) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Imported routines cannot be assigned to other users.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
     try {
       final results = await Future.wait<dynamic>([
         _equipmentService.getAcceptedFriends(),
@@ -961,7 +985,9 @@ class EquipmentListPageState extends State<EquipmentListPage> {
                                   : null,
                             ),
                             subtitle: Text(
-                              '$kindLabel • QR: ${equipment['qr_code'] ?? 'N/A'}',
+                              _isImportedRoutine(equipment)
+                                  ? 'Imported Routine • QR: ${equipment['qr_code'] ?? 'N/A'}'
+                                  : '$kindLabel • QR: ${equipment['qr_code'] ?? 'N/A'}',
                             ),
                             trailing: Row(
                               mainAxisSize: MainAxisSize.min,
@@ -977,13 +1003,17 @@ class EquipmentListPageState extends State<EquipmentListPage> {
                                       _onMenuSelected(value, equipment),
                                   itemBuilder: (context) {
                                     final isRoutine = kindValue == 'routine';
+                                    final isImportedRoutine =
+                                        _isImportedRoutine(equipment);
+                                    final canAssignRoutine =
+                                        isRoutine && !isImportedRoutine;
 
                                     return [
                                       const PopupMenuItem(
                                         value: 'edit',
                                         child: Text('Edit name'),
                                       ),
-                                      if (isRoutine)
+                                      if (canAssignRoutine)
                                         const PopupMenuItem(
                                           value: 'assign',
                                           child: Text('Assign routine'),
