@@ -65,7 +65,10 @@ class FriendProfileService {
 
     final rows = await supabase
         .from('equipment')
-        .select('id, name, kind, user_id')
+        .select(
+          'id, name, kind, user_id, '
+          'source_routine_id, source_trainer_user_id',
+        )
         .eq('user_id', user.id)
         .eq('kind', normalizedKind);
 
@@ -87,7 +90,10 @@ class FriendProfileService {
     final results = await Future.wait<dynamic>([
       supabase.rpc(
         'get_friend_workout_history',
-        params: {'friend_user_id': friendUserId, 'max_rows': 250},
+        params: {
+          'friend_user_id': friendUserId,
+          'max_rows': 250,
+        },
       ),
       supabase.rpc(
         'get_friend_equipment',
@@ -107,7 +113,10 @@ class FriendProfileService {
   }
 
   List<Map<String, dynamic>> _mapList(dynamic value) {
-    if (value is! List) return <Map<String, dynamic>>[];
+    if (value is! List) {
+      return <Map<String, dynamic>>[];
+    }
+
     return value
         .whereType<Map>()
         .map((row) => Map<String, dynamic>.from(row))
@@ -141,35 +150,36 @@ class FriendProfileService {
   }
 
   Future<Map<String, dynamic>> createContainer({
-  required String name,
-  required String kind,
-  String? sourceRoutineId,
-  String? sourceTrainerUserId,
-}) async {
-  final existing = await findExistingContainer(
-    name: name,
-    kind: kind,
-  );
+    required String name,
+    required String kind,
+    String? sourceRoutineId,
+    String? sourceTrainerUserId,
+  }) async {
+    final existing = await findExistingContainer(
+      name: name,
+      kind: kind,
+    );
 
-  if (existing != null) {
-    return existing;
+    if (existing != null) {
+      return existing;
+    }
+
+    final created = await equipmentService.insertEquipment(
+      name,
+      kind: kind,
+      sourceRoutineId: sourceRoutineId,
+      sourceTrainerUserId: sourceTrainerUserId,
+    );
+
+    return Map<String, dynamic>.from(created);
   }
-
-  final created = await equipmentService.insertEquipment(
-    name,
-    kind: kind,
-    sourceRoutineId: sourceRoutineId,
-    sourceTrainerUserId: sourceTrainerUserId,
-  );
-
-  return Map<String, dynamic>.from(created);
-}
 
   Future<Map<String, dynamic>> ensureImportedEquipment() async {
     final containers = await getMyContainers(kind: 'equipment');
 
     for (final container in containers) {
       final name = (container['name'] ?? '').toString().trim().toLowerCase();
+
       if (name == importedEquipmentName.toLowerCase()) {
         return container;
       }
@@ -204,10 +214,8 @@ class FriendProfileService {
 
     for (final row in rows) {
       final exercise = Map<String, dynamic>.from(row as Map);
-      final rowName = (exercise['name'] ?? '')
-          .toString()
-          .trim()
-          .toLowerCase();
+      final rowName =
+          (exercise['name'] ?? '').toString().trim().toLowerCase();
 
       if (rowName == normalizedName) {
         return exercise;
@@ -228,20 +236,21 @@ class FriendProfileService {
         (friendExercise['id'] ?? '').toString().trim();
     final sourceVideoUrl = exerciseVideoUrl(friendExercise);
 
-    final existingExercise = await findExistingExerciseByName(
-      name: name,
-    );
+    final existingExercise = await findExistingExerciseByName(name: name);
 
     if (existingExercise != null) {
-      final existingId = (existingExercise['id'] ?? '').toString().trim();
-      if (existingId.isEmpty) return null;
+      final existingId =
+          (existingExercise['id'] ?? '').toString().trim();
 
-      final existingSourceId = (existingExercise['video_source_exercise_id'] ?? '')
-          .toString()
-          .trim();
+      if (existingId.isEmpty) {
+        return null;
+      }
 
-      // If the existing exercise does not yet have an imported trainer video
-      // reference, preserve the source from this import.
+      final existingSourceId =
+          (existingExercise['video_source_exercise_id'] ?? '')
+              .toString()
+              .trim();
+
       if (existingSourceId.isEmpty &&
           sourceVideoUrl != null &&
           sourceExerciseId.isNotEmpty) {
@@ -264,11 +273,7 @@ class FriendProfileService {
               (friendExercise['primary_muscle_group'] ?? '').toString(),
           'type': (friendExercise['type'] ?? '').toString(),
           'equipment_id': equipmentId,
-
-          // The importing user's own upload remains independent.
           'video_url': null,
-
-          // Preserve the trainer/friend demonstration by reference.
           'video_source_exercise_id':
               sourceVideoUrl != null && sourceExerciseId.isNotEmpty
                   ? sourceExerciseId
@@ -290,220 +295,196 @@ class FriendProfileService {
         'routine_id': routineId,
         'exercise_id': exerciseId,
       });
+
       return true;
     } catch (_) {
-      // A duplicate routine link is treated as already linked.
       return false;
     }
   }
 
- Future<FriendImportResult> importContainers({
-  required List<Map<String, dynamic>> friendContainers,
-  required List<Map<String, dynamic>> friendExercises,
-  required String insertKind,
-  required bool includeExercises,
-}) async {
-  final currentUser = supabase.auth.currentUser;
+  Future<FriendImportResult> importContainers({
+    required List<Map<String, dynamic>> friendContainers,
+    required List<Map<String, dynamic>> friendExercises,
+    required String insertKind,
+    required bool includeExercises,
+  }) async {
+    final currentUser = supabase.auth.currentUser;
 
-  if (currentUser == null) {
-    throw StateError('User must be logged in to import routines or equipment.');
-  }
-
-  final normalizedInsertKind = insertKind.trim().toLowerCase();
-
-  if (normalizedInsertKind != 'equipment' &&
-      normalizedInsertKind != 'routine') {
-    throw ArgumentError(
-      'Invalid insertKind: $insertKind. '
-      'Must be "equipment" or "routine".',
-    );
-  }
-
-  var addedContainers = 0;
-  var skippedContainers = 0;
-  var addedExercises = 0;
-  var skippedExercises = 0;
-  var addedRoutineLinks = 0;
-
-  Map<String, dynamic>? importedEquipment;
-
-  for (final friendContainer in friendContainers) {
-    final name = (friendContainer['name'] ?? '').toString().trim();
-
-    final sourceContainerId =
-        (friendContainer['id'] ?? '').toString().trim();
-
-    final sourceTrainerUserId =
-        (friendContainer['user_id'] ?? '').toString().trim();
-
-    if (name.isEmpty || sourceContainerId.isEmpty) {
-      skippedContainers++;
-      continue;
-    }
-
-    /*
-      After Step 4, get_friend_equipment returns user_id.
-
-      For a routine import, this must be the original trainer's user ID.
-      It lets us mark the copied routine as imported and prevents the
-      importing friend from assigning it to somebody else.
-    */
-    if (normalizedInsertKind == 'routine' &&
-        sourceTrainerUserId.isEmpty) {
+    if (currentUser == null) {
       throw StateError(
-        'The trainer user ID was not returned for routine "$name". '
-        'Complete Step 4 by updating get_friend_equipment to return user_id.',
+        'User must be logged in to import routines or equipment.',
       );
     }
 
-    Map<String, dynamic>? createdContainer;
+    final normalizedInsertKind = insertKind.trim().toLowerCase();
 
-    try {
-      final existingContainer = await findExistingContainer(
-        name: name,
-        kind: normalizedInsertKind,
+    if (normalizedInsertKind != 'equipment' &&
+        normalizedInsertKind != 'routine') {
+      throw ArgumentError(
+        'Invalid insertKind: $insertKind. '
+        'Must be "equipment" or "routine".',
       );
+    }
 
-      if (existingContainer != null) {
-        createdContainer = existingContainer;
+    var addedContainers = 0;
+    var skippedContainers = 0;
+    var addedExercises = 0;
+    var skippedExercises = 0;
+    var addedRoutineLinks = 0;
+
+    Map<String, dynamic>? importedEquipment;
+
+    for (final friendContainer in friendContainers) {
+      final name = (friendContainer['name'] ?? '').toString().trim();
+      final sourceContainerId =
+          (friendContainer['id'] ?? '').toString().trim();
+      final sourceTrainerUserId =
+          (friendContainer['user_id'] ?? '').toString().trim();
+
+      if (name.isEmpty || sourceContainerId.isEmpty) {
         skippedContainers++;
+        continue;
+      }
 
-        /*
-          An older imported routine may already exist from before the
-          source columns were added. Mark it with its original source now.
-        */
-        if (normalizedInsertKind == 'routine') {
-          final existingId =
-              (existingContainer['id'] ?? '').toString().trim();
+      if (normalizedInsertKind == 'routine' &&
+          sourceTrainerUserId.isEmpty) {
+        throw StateError(
+          'The trainer user ID was not returned for routine "$name".',
+        );
+      }
 
-          final existingSourceRoutineId =
-              (existingContainer['source_routine_id'] ?? '')
-                  .toString()
-                  .trim();
+      Map<String, dynamic>? createdContainer;
 
-          final existingSourceTrainerId =
-              (existingContainer['source_trainer_user_id'] ?? '')
-                  .toString()
-                  .trim();
-
-          if (existingId.isNotEmpty &&
-              (existingSourceRoutineId.isEmpty ||
-                  existingSourceTrainerId.isEmpty)) {
-            await supabase
-                .from('equipment')
-                .update({
-                  'source_routine_id': sourceContainerId,
-                  'source_trainer_user_id': sourceTrainerUserId,
-                })
-                .eq('id', existingId)
-                .eq('user_id', currentUser.id)
-                .eq('kind', 'routine');
-
-            createdContainer = {
-              ...existingContainer,
-              'source_routine_id': sourceContainerId,
-              'source_trainer_user_id': sourceTrainerUserId,
-            };
-          }
-        }
-      } else {
-        createdContainer = await createContainer(
+      try {
+        final existingContainer = await findExistingContainer(
           name: name,
           kind: normalizedInsertKind,
-          sourceRoutineId: normalizedInsertKind == 'routine'
-              ? sourceContainerId
-              : null,
-          sourceTrainerUserId: normalizedInsertKind == 'routine'
-              ? sourceTrainerUserId
-              : null,
         );
 
-        addedContainers++;
-      }
-    } catch (error) {
-      skippedContainers++;
-      continue;
-    }
+        if (existingContainer != null) {
+          createdContainer = existingContainer;
+          skippedContainers++;
 
-    if (!includeExercises || createdContainer == null) {
-      continue;
-    }
+          if (normalizedInsertKind == 'routine') {
+            final existingId =
+                (existingContainer['id'] ?? '').toString().trim();
+            final existingSourceRoutineId =
+                (existingContainer['source_routine_id'] ?? '')
+                    .toString()
+                    .trim();
+            final existingSourceTrainerId =
+                (existingContainer['source_trainer_user_id'] ?? '')
+                    .toString()
+                    .trim();
 
-    final myContainerId =
-        (createdContainer['id'] ?? '').toString().trim();
+            if (existingId.isNotEmpty &&
+                (existingSourceRoutineId.isEmpty ||
+                    existingSourceTrainerId.isEmpty)) {
+              await supabase
+                  .from('equipment')
+                  .update({
+                    'source_routine_id': sourceContainerId,
+                    'source_trainer_user_id': sourceTrainerUserId,
+                  })
+                  .eq('id', existingId)
+                  .eq('user_id', currentUser.id)
+                  .eq('kind', 'routine');
 
-    if (myContainerId.isEmpty) {
-      continue;
-    }
-
-    /*
-      get_friend_exercises returns the trainer's routine ID as
-      equipment_id for exercises linked to that assigned routine.
-    */
-    final matchingExercises = friendExercises.where((exercise) {
-      final exerciseContainerId =
-          (exercise['equipment_id'] ?? '').toString().trim();
-
-      return exerciseContainerId == sourceContainerId;
-    }).toList();
-
-    /*
-      Imported routine exercises need to live under the importing user's
-      regular "Imported" equipment. routine_items then links them into the
-      copied routine.
-    */
-    if (normalizedInsertKind == 'routine') {
-      importedEquipment ??= await ensureImportedEquipment();
-    }
-
-    for (final friendExercise in matchingExercises) {
-      try {
-        final targetEquipmentId =
-            normalizedInsertKind == 'routine'
-                ? (importedEquipment?['id'] ?? '').toString().trim()
-                : myContainerId;
-
-        if (targetEquipmentId.isEmpty) {
-          skippedExercises++;
-          continue;
-        }
-
-        final exerciseId = await insertExerciseIntoEquipment(
-          equipmentId: targetEquipmentId,
-          friendExercise: friendExercise,
-        );
-
-        if (exerciseId == null || exerciseId.isEmpty) {
-          skippedExercises++;
-          continue;
-        }
-
-        addedExercises++;
-
-        if (normalizedInsertKind == 'routine') {
-          final linked = await linkExerciseToRoutine(
-            routineId: myContainerId,
-            exerciseId: exerciseId,
+              createdContainer = {
+                ...existingContainer,
+                'source_routine_id': sourceContainerId,
+                'source_trainer_user_id': sourceTrainerUserId,
+              };
+            }
+          }
+        } else {
+          createdContainer = await createContainer(
+            name: name,
+            kind: normalizedInsertKind,
+            sourceRoutineId: normalizedInsertKind == 'routine'
+                ? sourceContainerId
+                : null,
+            sourceTrainerUserId: normalizedInsertKind == 'routine'
+                ? sourceTrainerUserId
+                : null,
           );
 
-          if (linked) {
-            addedRoutineLinks++;
-          }
+          addedContainers++;
         }
       } catch (_) {
-        skippedExercises++;
+        skippedContainers++;
+        continue;
+      }
+
+      if (!includeExercises || createdContainer == null) {
+        continue;
+      }
+
+      final myContainerId =
+          (createdContainer['id'] ?? '').toString().trim();
+
+      if (myContainerId.isEmpty) {
+        continue;
+      }
+
+      final matchingExercises = friendExercises.where((exercise) {
+        final exerciseContainerId =
+            (exercise['equipment_id'] ?? '').toString().trim();
+
+        return exerciseContainerId == sourceContainerId;
+      }).toList();
+
+      if (normalizedInsertKind == 'routine') {
+        importedEquipment ??= await ensureImportedEquipment();
+      }
+
+      for (final friendExercise in matchingExercises) {
+        try {
+          final targetEquipmentId = normalizedInsertKind == 'routine'
+              ? (importedEquipment?['id'] ?? '').toString().trim()
+              : myContainerId;
+
+          if (targetEquipmentId.isEmpty) {
+            skippedExercises++;
+            continue;
+          }
+
+          final exerciseId = await insertExerciseIntoEquipment(
+            equipmentId: targetEquipmentId,
+            friendExercise: friendExercise,
+          );
+
+          if (exerciseId == null || exerciseId.isEmpty) {
+            skippedExercises++;
+            continue;
+          }
+
+          addedExercises++;
+
+          if (normalizedInsertKind == 'routine') {
+            final linked = await linkExerciseToRoutine(
+              routineId: myContainerId,
+              exerciseId: exerciseId,
+            );
+
+            if (linked) {
+              addedRoutineLinks++;
+            }
+          }
+        } catch (_) {
+          skippedExercises++;
+        }
       }
     }
-  }
 
-  return FriendImportResult(
-    addedContainers: addedContainers,
-    skippedContainers: skippedContainers,
-    addedExercises: addedExercises,
-    skippedExercises: skippedExercises,
-    addedRoutineLinks: addedRoutineLinks,
-  );
-}
+    return FriendImportResult(
+      addedContainers: addedContainers,
+      skippedContainers: skippedContainers,
+      addedExercises: addedExercises,
+      skippedExercises: skippedExercises,
+      addedRoutineLinks: addedRoutineLinks,
+    );
+  }
 
   Future<FriendImportResult> importExercisesToEquipment({
     required List<Map<String, dynamic>> friendExercises,
@@ -518,6 +499,7 @@ class FriendProfileService {
           equipmentId: equipmentId,
           friendExercise: exercise,
         );
+
         id == null ? skipped++ : added++;
       } catch (_) {
         skipped++;
@@ -557,7 +539,10 @@ class FriendProfileService {
           routineId: routineId,
           exerciseId: exerciseId,
         );
-        if (didLink) linked++;
+
+        if (didLink) {
+          linked++;
+        }
       } catch (_) {
         skipped++;
       }
