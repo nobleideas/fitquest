@@ -138,4 +138,80 @@ return (rows as List)
     await deleteExercisesForEquipment(equipmentId);
     await deleteEquipment(equipmentId);
   }
+
+
+  Future<List<Map<String, dynamic>>> getAcceptedFriends() async {
+  final rows = await supabase.rpc('get_accepted_friends');
+
+  if (rows is! List) {
+    return [];
+  }
+
+  return rows
+      .whereType<Map>()
+      .map((row) => Map<String, dynamic>.from(row))
+      .toList();
+}
+
+Future<Set<String>> getAssignedFriendIds(String routineId) async {
+  final user = supabase.auth.currentUser;
+  if (user == null) {
+    throw StateError('User must be logged in.');
+  }
+
+  final rows = await supabase
+      .from('routine_assignments')
+      .select('friend_user_id')
+      .eq('routine_id', routineId)
+      .eq('trainer_user_id', user.id);
+
+  return (rows as List)
+      .map((row) => (row as Map)['friend_user_id']?.toString() ?? '')
+      .where((id) => id.isNotEmpty)
+      .toSet();
+}
+
+Future<void> replaceRoutineAssignments({
+  required String routineId,
+  required Set<String> friendUserIds,
+}) async {
+  final user = supabase.auth.currentUser;
+  if (user == null) {
+    throw StateError('User must be logged in.');
+  }
+
+  final routine = await supabase
+      .from('equipment')
+      .select('id, user_id, kind')
+      .eq('id', routineId)
+      .eq('user_id', user.id)
+      .eq('kind', 'routine')
+      .maybeSingle();
+
+  if (routine == null) {
+    throw StateError(
+      'Routine not found or you do not own this routine.',
+    );
+  }
+
+  await supabase
+      .from('routine_assignments')
+      .delete()
+      .eq('routine_id', routineId)
+      .eq('trainer_user_id', user.id);
+
+  if (friendUserIds.isEmpty) {
+    return;
+  }
+
+  final rows = friendUserIds.map((friendUserId) {
+    return {
+      'routine_id': routineId,
+      'trainer_user_id': user.id,
+      'friend_user_id': friendUserId,
+    };
+  }).toList();
+
+  await supabase.from('routine_assignments').insert(rows);
+}
 }

@@ -645,10 +645,198 @@ class EquipmentListPageState extends State<EquipmentListPage> {
     await _loadEquipment();
   }
 
+  Future<void> _assignRoutine(Map<String, dynamic> routine) async {
+    final routineId = (routine['id'] ?? '').toString().trim();
+    final routineName = (routine['name'] ?? 'Routine').toString().trim();
+
+    if (routineId.isEmpty) return;
+
+    try {
+      final results = await Future.wait<dynamic>([
+        _equipmentService.getAcceptedFriends(),
+        _equipmentService.getAssignedFriendIds(routineId),
+      ]);
+
+      final friends = List<Map<String, dynamic>>.from(results[0] as List);
+      final originallyAssigned = Set<String>.from(results[1] as Set<String>);
+      final selectedFriendIds = Set<String>.from(originallyAssigned);
+
+      if (!mounted) return;
+
+      if (friends.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('You do not have any accepted friends to assign this routine to.'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      }
+
+      var isSaving = false;
+
+      final saved = await showDialog<bool>(
+        context: context,
+        barrierDismissible: !isSaving,
+        builder: (_) {
+          return StatefulBuilder(
+            builder: (context, setDialogState) {
+              final allFriendIds = friends
+                  .map((friend) => (friend['friend_id'] ?? '').toString().trim())
+                  .where((id) => id.isNotEmpty)
+                  .toSet();
+
+              final allSelected = allFriendIds.isNotEmpty &&
+                  allFriendIds.every(selectedFriendIds.contains);
+
+              return AlertDialog(
+                title: Text('Assign “$routineName”'),
+                content: SizedBox(
+                  width: double.maxFinite,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(
+                        'Choose which friends can view and import this routine.',
+                        style: Theme.of(context).textTheme.bodyMedium,
+                      ),
+                      const SizedBox(height: 12),
+                      CheckboxListTile(
+                        contentPadding: EdgeInsets.zero,
+                        value: allSelected,
+                        tristate: selectedFriendIds.isNotEmpty && !allSelected,
+                        title: const Text(
+                          'Select all friends',
+                          style: TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                        onChanged: isSaving
+                            ? null
+                            : (value) {
+                                setDialogState(() {
+                                  if (value == true) {
+                                    selectedFriendIds
+                                      ..clear()
+                                      ..addAll(allFriendIds);
+                                  } else {
+                                    selectedFriendIds.clear();
+                                  }
+                                });
+                              },
+                      ),
+                      const Divider(),
+                      Flexible(
+                        child: ListView.builder(
+                          shrinkWrap: true,
+                          itemCount: friends.length,
+                          itemBuilder: (context, index) {
+                            final friend = friends[index];
+                            final friendId =
+                                (friend['friend_id'] ?? '').toString().trim();
+                            final username =
+                                (friend['username'] ?? 'Friend').toString().trim();
+                            final selected = selectedFriendIds.contains(friendId);
+
+                            return CheckboxListTile(
+                              contentPadding: EdgeInsets.zero,
+                              value: selected,
+                              title: Text(username.isEmpty ? 'Friend' : '@$username'),
+                              onChanged: isSaving || friendId.isEmpty
+                                  ? null
+                                  : (value) {
+                                      setDialogState(() {
+                                        if (value == true) {
+                                          selectedFriendIds.add(friendId);
+                                        } else {
+                                          selectedFriendIds.remove(friendId);
+                                        }
+                                      });
+                                    },
+                            );
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: isSaving ? null : () => Navigator.pop(context, false),
+                    child: const Text('Cancel'),
+                  ),
+                  ElevatedButton.icon(
+                    onPressed: isSaving
+                        ? null
+                        : () async {
+                            setDialogState(() => isSaving = true);
+
+                            try {
+                              await _equipmentService.replaceRoutineAssignments(
+                                routineId: routineId,
+                                friendUserIds: selectedFriendIds,
+                              );
+
+                              if (!context.mounted) return;
+                              Navigator.pop(context, true);
+                            } catch (e) {
+                              if (!context.mounted) return;
+                              setDialogState(() => isSaving = false);
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text('Failed to save assignments: $e'),
+                                  behavior: SnackBarBehavior.floating,
+                                ),
+                              );
+                            }
+                          },
+                    icon: isSaving
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.person_add_alt_1),
+                    label: Text(isSaving ? 'Saving...' : 'Save'),
+                  ),
+                ],
+              );
+            },
+          );
+        },
+      );
+
+      if (saved != true || !mounted) return;
+
+      final assignedCount = selectedFriendIds.length;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            assignedCount == 0
+                ? 'Routine is no longer assigned to any friends.'
+                : 'Assigned “$routineName” to $assignedCount friend${assignedCount == 1 ? '' : 's'}.',
+          ),
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to load routine assignments: $e'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
+
   Future<void> _onMenuSelected(String value, Map<String, dynamic> equipment) async {
     switch (value) {
       case 'edit':
         await _editEquipmentName(equipment);
+        break;
+      case 'assign':
+        await _assignRoutine(equipment);
         break;
       case 'delete':
         await _deleteEquipmentFlow(equipment);
@@ -787,16 +975,25 @@ class EquipmentListPageState extends State<EquipmentListPage> {
                                 PopupMenuButton<String>(
                                   onSelected: (value) =>
                                       _onMenuSelected(value, equipment),
-                                  itemBuilder: (context) => const [
-                                    PopupMenuItem(
-                                      value: 'edit',
-                                      child: Text('Edit name'),
-                                    ),
-                                    PopupMenuItem(
-                                      value: 'delete',
-                                      child: Text('Delete'),
-                                    ),
-                                  ],
+                                  itemBuilder: (context) {
+                                    final isRoutine = kindValue == 'routine';
+
+                                    return [
+                                      const PopupMenuItem(
+                                        value: 'edit',
+                                        child: Text('Edit name'),
+                                      ),
+                                      if (isRoutine)
+                                        const PopupMenuItem(
+                                          value: 'assign',
+                                          child: Text('Assign routine'),
+                                        ),
+                                      const PopupMenuItem(
+                                        value: 'delete',
+                                        child: Text('Delete'),
+                                      ),
+                                    ];
+                                  },
                                 ),
                               ],
                             ),
