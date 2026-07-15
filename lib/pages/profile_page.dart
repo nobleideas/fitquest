@@ -391,53 +391,153 @@ class ProfilePageState extends State<ProfilePage> {
   }
 
 
-  Widget _yearStatCard({
-    required IconData icon,
+  List<String> _splitStatLabels(String value) {
+    return value
+        .split('\n')
+        .map((item) => item.trim())
+        .where((item) => item.isNotEmpty && item != '—')
+        .toList();
+  }
+
+  Widget _compactStat({
     required String label,
     required String value,
-    String? detail,
   }) {
-    return Card(
-      elevation: 2,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
+    return Expanded(
+      child: Column(
+        children: [
+          Text(
+            value,
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+              fontSize: 22,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 3),
+          Text(
+            label,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+          ),
+        ],
       ),
-      child: SizedBox(
-        width: 165,
-        child: Padding(
-          padding: const EdgeInsets.all(14),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Icon(icon),
-              const SizedBox(height: 10),
-              Text(
-                value,
-                style: const TextStyle(
-                  fontSize: 21,
-                  fontWeight: FontWeight.bold,
+    );
+  }
+
+  Widget _bestPeriodSection({
+    required String label,
+    required int workoutDays,
+    required String rawLabels,
+  }) {
+    final labels = _splitStatLabels(rawLabels);
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 104,
+          child: Text(
+            label,
+            style: const TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+        Expanded(
+          child: labels.isEmpty
+              ? const Text('—')
+              : Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '$workoutDays workout day${workoutDays == 1 ? '' : 's'}',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    ...labels.map(
+                      (item) => Padding(
+                        padding: const EdgeInsets.only(bottom: 2),
+                        child: Text(
+                          item,
+                          style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
-              ),
-              const SizedBox(height: 3),
-              Text(
-                label,
-                style: const TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              if (detail != null && detail.isNotEmpty) ...[
-                const SizedBox(height: 3),
+        ),
+      ],
+    );
+  }
+
+  Widget _trainingStatsCard(YearWorkoutStats stats) {
+    return Card(
+      elevation: 0,
+      color: Theme.of(context).colorScheme.surfaceContainerHighest,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.insights_outlined, size: 20),
+                const SizedBox(width: 8),
                 Text(
-                  detail,
+                  '${stats.year} Training',
                   style: const TextStyle(
-                    fontSize: 12,
-                    color: Colors.grey,
+                    fontSize: 17,
+                    fontWeight: FontWeight.w800,
                   ),
                 ),
               ],
-            ],
-          ),
+            ),
+            const SizedBox(height: 14),
+            Row(
+              children: [
+                _compactStat(
+                  label: 'Workout days',
+                  value: '${stats.workoutDays}',
+                ),
+                Container(
+                  width: 1,
+                  height: 42,
+                  color: Theme.of(context).dividerColor,
+                ),
+                _compactStat(
+                  label: 'Estimated hours',
+                  value: stats.estimatedWorkoutHours.toStringAsFixed(1),
+                ),
+              ],
+            ),
+            const Divider(height: 26),
+            _bestPeriodSection(
+              label: 'Best month',
+              workoutDays: stats.bestMonthWorkoutDays,
+              rawLabels: stats.bestMonthLabel,
+            ),
+            const SizedBox(height: 14),
+            _bestPeriodSection(
+              label: 'Best week',
+              workoutDays: stats.bestWeekWorkoutDays,
+              rawLabels: stats.bestWeekLabel,
+            ),
+          ],
         ),
       ),
     );
@@ -516,51 +616,7 @@ class ProfilePageState extends State<ProfilePage> {
                     const SizedBox(height: 16),
 
                     // -------- Year Workout Analytics --------
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: Text(
-                        "${yearWorkoutStats.year} Training",
-                        style: const TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Wrap(
-                      alignment: WrapAlignment.center,
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: [
-                        _yearStatCard(
-                          icon: Icons.calendar_today_outlined,
-                          label: "Workout Days",
-                          value: "${yearWorkoutStats.workoutDays}",
-                          detail: "This year",
-                        ),
-                        _yearStatCard(
-                          icon: Icons.calendar_month_outlined,
-                          label: "Best Month",
-                          value: yearWorkoutStats.bestMonthLabel,
-                          detail:
-                              "${yearWorkoutStats.bestMonthWorkoutDays} workout days",
-                        ),
-                        _yearStatCard(
-                          icon: Icons.date_range_outlined,
-                          label: "Best Week",
-                          value: yearWorkoutStats.bestWeekLabel,
-                          detail:
-                              "${yearWorkoutStats.bestWeekWorkoutDays} workout days",
-                        ),
-                        _yearStatCard(
-                          icon: Icons.schedule_outlined,
-                          label: "Estimated Time",
-                          value:
-                              "${yearWorkoutStats.estimatedWorkoutHours.toStringAsFixed(1)} hrs",
-                          detail: "First to last logged set",
-                        ),
-                      ],
-                    ),
+                    _trainingStatsCard(yearWorkoutStats),
 
                     // -------- Goal Card --------
                     const SizedBox(height: 16),

@@ -678,15 +678,38 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
       await _loadUsernameIfNeeded();
 
-      final sessions = await supabase
-          .from('exercise_sessions')
-          .select(
-            'created_at, weight, reps, exercises!inner(id, name, type, primary_muscle_group)',
-          )
-          .eq('user_id', user.id)
-          .order('created_at', ascending: false);
+      // Supabase limits the number of rows returned by a single request.
+      // Because every logged set is stored as its own exercise_sessions row,
+      // load the complete workout history in pages.
+      final List<Map<String, dynamic>> sessions = [];
+      const int pageSize = 1000;
+      int from = 0;
 
-      final List<DateTime> workoutDays = [];
+      while (true) {
+        final pageRaw = await supabase
+            .from('exercise_sessions')
+            .select(
+              'created_at, weight, reps, exercises!inner(id, name, type, primary_muscle_group)',
+            )
+            .eq('user_id', user.id)
+            .order('created_at', ascending: false)
+            .range(from, from + pageSize - 1);
+
+        final page = (pageRaw as List)
+            .whereType<Map>()
+            .map((row) => Map<String, dynamic>.from(row))
+            .toList();
+
+        sessions.addAll(page);
+
+        if (page.length < pageSize) {
+          break;
+        }
+
+        from += pageSize;
+      }
+
+      final Set<DateTime> workoutDays = {};
       final Map<DateTime, Map<String, Map<String, dynamic>>>
       uniqueExercisesByDay = {};
       final Map<DateTime, Map<String, int>> setCountsByDayByName = {};
@@ -744,10 +767,8 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
         }
       }
 
-      final orderedUniqueDays = <DateTime>[];
-      for (final d in workoutDays) {
-        if (!orderedUniqueDays.contains(d)) orderedUniqueDays.add(d);
-      }
+      final orderedUniqueDays = workoutDays.toList()
+        ..sort((a, b) => b.compareTo(a));
 
       final Map<DateTime, DayWorkoutSummary> result = {};
 
