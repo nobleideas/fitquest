@@ -600,6 +600,123 @@ class EquipmentListPageState extends State<EquipmentListPage> {
     }
   }
 
+
+  Future<void> _moveEquipmentToGym(
+    Map<String, dynamic> equipment,
+  ) async {
+    if (_kindValue(equipment) == 'routine') return;
+
+    final equipmentId = (equipment['id'] ?? '').toString().trim();
+    final equipmentName = (equipment['name'] ?? 'Equipment').toString();
+    if (equipmentId.isEmpty) return;
+
+    final destinationGyms = gyms
+        .where((gym) => gym['id']?.toString() != _activeGymId)
+        .toList();
+
+    if (destinationGyms.isEmpty) {
+      final createGym = await showDialog<bool>(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: const Text('No Other Gym'),
+          content: const Text(
+            'Create another gym before moving this equipment.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Create Gym'),
+            ),
+          ],
+        ),
+      );
+
+      if (createGym == true && mounted) {
+        await _createGym();
+      }
+      return;
+    }
+
+    String selectedGymId = destinationGyms.first['id'].toString();
+
+    final moved = await showDialog<bool>(
+      context: context,
+      builder: (_) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          return AlertDialog(
+            title: Text('Move $equipmentName'),
+            content: DropdownButtonFormField<String>(
+              initialValue: selectedGymId,
+              isExpanded: true,
+              decoration: const InputDecoration(
+                labelText: 'Destination gym',
+                border: OutlineInputBorder(),
+              ),
+              items: destinationGyms
+                  .map(
+                    (gym) => DropdownMenuItem<String>(
+                      value: gym['id'].toString(),
+                      child: Text((gym['name'] ?? 'Gym').toString()),
+                    ),
+                  )
+                  .toList(),
+              onChanged: (value) {
+                if (value != null) {
+                  setDialogState(() => selectedGymId = value);
+                }
+              },
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Cancel'),
+              ),
+              ElevatedButton(
+                onPressed: () async {
+                  try {
+                    await _equipmentService.bulkAssignEquipmentToGym(
+                      equipmentIds: <String>{equipmentId},
+                      gymId: selectedGymId,
+                    );
+
+                    if (!context.mounted) return;
+                    Navigator.pop(context, true);
+                  } catch (e) {
+                    if (!context.mounted) return;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('Failed to move equipment: $e')),
+                    );
+                  }
+                },
+                child: const Text('Move'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+
+    if (moved == true && mounted) {
+      await _loadPageData();
+
+      if (!mounted) return;
+      final destinationName = destinationGyms
+          .firstWhere((gym) => gym['id']?.toString() == selectedGymId)['name']
+          .toString();
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Moved $equipmentName to $destinationName.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
+
   void _toggleEquipmentSelection(Map<String, dynamic> equipment) {
     if (_kindValue(equipment) == 'routine') return;
 
@@ -618,7 +735,18 @@ class EquipmentListPageState extends State<EquipmentListPage> {
   Future<void> _moveSelectedEquipment() async {
     if (_selectedEquipmentIds.isEmpty) return;
 
-    String? selectedGymId = _activeGymId;
+    final destinationGyms = gyms
+        .where((gym) => gym['id']?.toString() != _activeGymId)
+        .toList();
+
+    if (destinationGyms.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Create another gym before moving equipment.')),
+      );
+      return;
+    }
+
+    String? selectedGymId = destinationGyms.first['id'].toString();
 
     final moved = await showDialog<bool>(
       context: context,
@@ -629,13 +757,13 @@ class EquipmentListPageState extends State<EquipmentListPage> {
               'Move ${_selectedEquipmentIds.length} item${_selectedEquipmentIds.length == 1 ? '' : 's'}',
             ),
             content: DropdownButtonFormField<String>(
-              value: selectedGymId,
+              initialValue: selectedGymId,
               isExpanded: true,
               decoration: const InputDecoration(
                 labelText: 'Destination gym',
                 border: OutlineInputBorder(),
               ),
-              items: gyms
+              items: destinationGyms
                   .map(
                     (gym) => DropdownMenuItem<String>(
                       value: gym['id'].toString(),
@@ -1444,6 +1572,9 @@ class EquipmentListPageState extends State<EquipmentListPage> {
       case 'assign':
         await _assignRoutine(equipment);
         break;
+      case 'move_gym':
+        await _moveEquipmentToGym(equipment);
+        break;
       case 'delete':
         await _deleteEquipmentFlow(equipment);
         break;
@@ -1571,12 +1702,22 @@ class EquipmentListPageState extends State<EquipmentListPage> {
                           final kindValue = _kindValue(equipment);
 
                           return ListTile(
-                            leading: Icon(
-                              _kindIcon(equipment),
-                              color: hasSessionToday
-                                  ? Theme.of(context).colorScheme.primary
-                                  : null,
-                            ),
+                            selected: isSelected,
+                            selectedTileColor: Theme.of(
+                              context,
+                            ).colorScheme.secondaryContainer,
+                            leading: _isSelectionMode && kindValue != 'routine'
+                                ? Checkbox(
+                                    value: isSelected,
+                                    onChanged: (_) =>
+                                        _toggleEquipmentSelection(equipment),
+                                  )
+                                : Icon(
+                                    _kindIcon(equipment),
+                                    color: hasSessionToday
+                                        ? Theme.of(context).colorScheme.primary
+                                        : null,
+                                  ),
                             title: Text(
                               equipment['name'],
                               style: hasSessionToday
@@ -1593,9 +1734,20 @@ class EquipmentListPageState extends State<EquipmentListPage> {
                                   ? 'Imported Routine • QR: ${equipment['qr_code'] ?? 'N/A'}'
                                   : '$kindLabel • QR: ${equipment['qr_code'] ?? 'N/A'}',
                             ),
-                            trailing: Row(
-                              mainAxisSize: MainAxisSize.min,
+                            trailing: _isSelectionMode
+                                ? null
+                                : Row(
+                                    mainAxisSize: MainAxisSize.min,
                               children: [
+                                if (kindValue != 'routine')
+                                  IconButton(
+                                    tooltip: 'Move to another gym',
+                                    icon: const Icon(
+                                      Icons.drive_file_move_outline,
+                                    ),
+                                    onPressed: () =>
+                                        _moveEquipmentToGym(equipment),
+                                  ),
                                 Icon(
                                   hasSessionToday
                                       ? Icons.check_circle
@@ -1622,6 +1774,11 @@ class EquipmentListPageState extends State<EquipmentListPage> {
                                           value: 'assign',
                                           child: Text('Assign routine'),
                                         ),
+                                      if (!isRoutine)
+                                        const PopupMenuItem(
+                                          value: 'move_gym',
+                                          child: Text('Move to another gym'),
+                                        ),
                                       const PopupMenuItem(
                                         value: 'delete',
                                         child: Text('Delete'),
@@ -1631,7 +1788,16 @@ class EquipmentListPageState extends State<EquipmentListPage> {
                                 ),
                               ],
                             ),
+                            onLongPress: kindValue == 'routine'
+                                ? null
+                                : () => _toggleEquipmentSelection(equipment),
                             onTap: () async {
+                              if (_isSelectionMode &&
+                                  kindValue != 'routine') {
+                                _toggleEquipmentSelection(equipment);
+                                return;
+                              }
+
                               await Navigator.push(
                                 context,
                                 MaterialPageRoute(
