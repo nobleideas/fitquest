@@ -510,7 +510,7 @@ class EquipmentListPageState extends State<EquipmentListPage> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Text(
-                    'Select equipment to move into ${activeGym?['name'] ?? 'the active gym'}.',
+                    'Select equipment to add to ${activeGym?['name'] ?? 'the active gym'}.',
                   ),
                   const SizedBox(height: 8),
                   CheckboxListTile(
@@ -601,7 +601,7 @@ class EquipmentListPageState extends State<EquipmentListPage> {
   }
 
 
-  Future<void> _moveEquipmentToGym(
+  Future<void> _manageEquipmentGyms(
     Map<String, dynamic> equipment,
   ) async {
     if (_kindValue(equipment) == 'routine') return;
@@ -610,53 +610,184 @@ class EquipmentListPageState extends State<EquipmentListPage> {
     final equipmentName = (equipment['name'] ?? 'Equipment').toString();
     if (equipmentId.isEmpty) return;
 
-    final destinationGyms = gyms
-        .where((gym) => gym['id']?.toString() != _activeGymId)
-        .toList();
-
-    if (destinationGyms.isEmpty) {
-      final createGym = await showDialog<bool>(
-        context: context,
-        builder: (_) => AlertDialog(
-          title: const Text('No Other Gym'),
-          content: const Text(
-            'Create another gym before moving this equipment.',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('Cancel'),
-            ),
-            ElevatedButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('Create Gym'),
-            ),
-          ],
-        ),
+    if (gyms.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Create a gym first.')),
       );
-
-      if (createGym == true && mounted) {
-        await _createGym();
-      }
       return;
     }
 
-    String selectedGymId = destinationGyms.first['id'].toString();
+    final currentGymIds = await _equipmentService.getGymIdsForEquipment(
+      equipmentId,
+    );
+    final selectedGymIds = Set<String>.from(currentGymIds);
+    var isSaving = false;
 
-    final moved = await showDialog<bool>(
+    if (!mounted) return;
+
+    final saved = await showDialog<bool>(
+      context: context,
+      barrierDismissible: !isSaving,
+      builder: (_) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          return AlertDialog(
+            title: Text('Gym availability'),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text(
+                    'Choose every gym where “$equipmentName” is available.',
+                  ),
+                  const SizedBox(height: 12),
+                  Flexible(
+                    child: ListView.builder(
+                      shrinkWrap: true,
+                      itemCount: gyms.length,
+                      itemBuilder: (_, index) {
+                        final gym = gyms[index];
+                        final gymId = gym['id'].toString();
+
+                        return CheckboxListTile(
+                          contentPadding: EdgeInsets.zero,
+                          value: selectedGymIds.contains(gymId),
+                          title: Text((gym['name'] ?? 'Gym').toString()),
+                          onChanged: isSaving
+                              ? null
+                              : (value) {
+                                  setDialogState(() {
+                                    if (value == true) {
+                                      selectedGymIds.add(gymId);
+                                    } else {
+                                      selectedGymIds.remove(gymId);
+                                    }
+                                  });
+                                },
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: isSaving
+                    ? null
+                    : () => Navigator.pop(context, false),
+                child: const Text('Cancel'),
+              ),
+              ElevatedButton.icon(
+                onPressed: isSaving
+                    ? null
+                    : () async {
+                        if (selectedGymIds.isEmpty) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text(
+                                'Equipment must be available at at least one gym.',
+                              ),
+                            ),
+                          );
+                          return;
+                        }
+
+                        setDialogState(() => isSaving = true);
+
+                        try {
+                          await _equipmentService.setGymsForEquipment(
+                            equipmentId: equipmentId,
+                            gymIds: selectedGymIds,
+                          );
+
+                          if (!context.mounted) return;
+                          Navigator.pop(context, true);
+                        } catch (e) {
+                          if (!context.mounted) return;
+                          setDialogState(() => isSaving = false);
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                'Failed to update gym availability: $e',
+                              ),
+                            ),
+                          );
+                        }
+                      },
+                icon: isSaving
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.add_business_outlined),
+                label: Text(isSaving ? 'Saving...' : 'Save'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+
+    if (saved == true && mounted) {
+      await _loadPageData();
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Updated gym availability for $equipmentName.'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
+
+  void _toggleEquipmentSelection(Map<String, dynamic> equipment) {
+    if (_kindValue(equipment) == 'routine') return;
+
+    final id = equipment['id']?.toString() ?? '';
+    if (id.isEmpty) return;
+
+    setState(() {
+      if (_selectedEquipmentIds.contains(id)) {
+        _selectedEquipmentIds.remove(id);
+      } else {
+        _selectedEquipmentIds.add(id);
+      }
+    });
+  }
+
+  Future<void> _addSelectedEquipmentToGym() async {
+    if (_selectedEquipmentIds.isEmpty) return;
+
+    if (gyms.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Create a gym first.')),
+      );
+      return;
+    }
+
+    String selectedGymId =
+        _activeGymId ?? gyms.first['id'].toString();
+
+    final added = await showDialog<bool>(
       context: context,
       builder: (_) => StatefulBuilder(
         builder: (context, setDialogState) {
           return AlertDialog(
-            title: Text('Move $equipmentName'),
+            title: Text(
+              'Add ${_selectedEquipmentIds.length} item${_selectedEquipmentIds.length == 1 ? '' : 's'} to gym',
+            ),
             content: DropdownButtonFormField<String>(
               initialValue: selectedGymId,
               isExpanded: true,
               decoration: const InputDecoration(
-                labelText: 'Destination gym',
+                labelText: 'Gym',
                 border: OutlineInputBorder(),
               ),
-              items: destinationGyms
+              items: gyms
                   .map(
                     (gym) => DropdownMenuItem<String>(
                       value: gym['id'].toString(),
@@ -679,7 +810,9 @@ class EquipmentListPageState extends State<EquipmentListPage> {
                 onPressed: () async {
                   try {
                     await _equipmentService.bulkAssignEquipmentToGym(
-                      equipmentIds: <String>{equipmentId},
+                      equipmentIds: Set<String>.from(
+                        _selectedEquipmentIds,
+                      ),
                       gymId: selectedGymId,
                     );
 
@@ -688,11 +821,13 @@ class EquipmentListPageState extends State<EquipmentListPage> {
                   } catch (e) {
                     if (!context.mounted) return;
                     ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('Failed to move equipment: $e')),
+                      SnackBar(
+                        content: Text('Failed to add equipment to gym: $e'),
+                      ),
                     );
                   }
                 },
-                child: const Text('Move'),
+                child: const Text('Add'),
               ),
             ],
           );
@@ -700,124 +835,7 @@ class EquipmentListPageState extends State<EquipmentListPage> {
       ),
     );
 
-    if (moved == true && mounted) {
-      await _loadPageData();
-
-      if (!mounted) return;
-      final destinationName = destinationGyms
-          .firstWhere((gym) => gym['id']?.toString() == selectedGymId)['name']
-          .toString();
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Moved $equipmentName to $destinationName.'),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-    }
-  }
-
-  void _toggleEquipmentSelection(Map<String, dynamic> equipment) {
-    if (_kindValue(equipment) == 'routine') return;
-
-    final id = equipment['id']?.toString() ?? '';
-    if (id.isEmpty) return;
-
-    setState(() {
-      if (_selectedEquipmentIds.contains(id)) {
-        _selectedEquipmentIds.remove(id);
-      } else {
-        _selectedEquipmentIds.add(id);
-      }
-    });
-  }
-
-  Future<void> _moveSelectedEquipment() async {
-    if (_selectedEquipmentIds.isEmpty) return;
-
-    final destinationGyms = gyms
-        .where((gym) => gym['id']?.toString() != _activeGymId)
-        .toList();
-
-    if (destinationGyms.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Create another gym before moving equipment.')),
-      );
-      return;
-    }
-
-    String? selectedGymId = destinationGyms.first['id'].toString();
-
-    final moved = await showDialog<bool>(
-      context: context,
-      builder: (_) => StatefulBuilder(
-        builder: (context, setDialogState) {
-          return AlertDialog(
-            title: Text(
-              'Move ${_selectedEquipmentIds.length} item${_selectedEquipmentIds.length == 1 ? '' : 's'}',
-            ),
-            content: DropdownButtonFormField<String>(
-              initialValue: selectedGymId,
-              isExpanded: true,
-              decoration: const InputDecoration(
-                labelText: 'Destination gym',
-                border: OutlineInputBorder(),
-              ),
-              items: destinationGyms
-                  .map(
-                    (gym) => DropdownMenuItem<String>(
-                      value: gym['id'].toString(),
-                      child: Text((gym['name'] ?? 'Gym').toString()),
-                    ),
-                  )
-                  .toList(),
-              onChanged: (value) {
-                setDialogState(() => selectedGymId = value);
-              },
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context, false),
-                child: const Text('Cancel'),
-              ),
-              TextButton(
-                onPressed: () async {
-                  Navigator.pop(context, false);
-                  await _createGym();
-                },
-                child: const Text('Create Gym'),
-              ),
-              ElevatedButton(
-                onPressed: selectedGymId == null
-                    ? null
-                    : () async {
-                        try {
-                          await _equipmentService.bulkAssignEquipmentToGym(
-                            equipmentIds: Set<String>.from(
-                              _selectedEquipmentIds,
-                            ),
-                            gymId: selectedGymId!,
-                          );
-                          if (!context.mounted) return;
-                          Navigator.pop(context, true);
-                        } catch (e) {
-                          if (!context.mounted) return;
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: Text('Failed to move equipment: $e'),
-                            ),
-                          );
-                        }
-                      },
-                child: const Text('Move'),
-              ),
-            ],
-          );
-        },
-      ),
-    );
-
-    if (moved == true && mounted) {
+    if (added == true && mounted) {
       await _loadPageData();
     }
   }
@@ -910,9 +928,9 @@ class EquipmentListPageState extends State<EquipmentListPage> {
               ),
             ),
             TextButton.icon(
-              onPressed: _moveSelectedEquipment,
-              icon: const Icon(Icons.drive_file_move_outline),
-              label: const Text('Move to Gym'),
+              onPressed: _addSelectedEquipmentToGym,
+              icon: const Icon(Icons.add_business_outlined),
+              label: const Text('Add to Gym'),
             ),
             IconButton(
               onPressed: () {
@@ -1572,8 +1590,8 @@ class EquipmentListPageState extends State<EquipmentListPage> {
       case 'assign':
         await _assignRoutine(equipment);
         break;
-      case 'move_gym':
-        await _moveEquipmentToGym(equipment);
+      case 'manage_gyms':
+        await _manageEquipmentGyms(equipment);
         break;
       case 'delete':
         await _deleteEquipmentFlow(equipment);
@@ -1741,12 +1759,12 @@ class EquipmentListPageState extends State<EquipmentListPage> {
                               children: [
                                 if (kindValue != 'routine')
                                   IconButton(
-                                    tooltip: 'Move to another gym',
+                                    tooltip: 'Manage gym availability',
                                     icon: const Icon(
-                                      Icons.drive_file_move_outline,
+                                      Icons.add_business_outlined,
                                     ),
                                     onPressed: () =>
-                                        _moveEquipmentToGym(equipment),
+                                        _manageEquipmentGyms(equipment),
                                   ),
                                 Icon(
                                   hasSessionToday
@@ -1776,8 +1794,8 @@ class EquipmentListPageState extends State<EquipmentListPage> {
                                         ),
                                       if (!isRoutine)
                                         const PopupMenuItem(
-                                          value: 'move_gym',
-                                          child: Text('Move to another gym'),
+                                          value: 'manage_gyms',
+                                          child: Text('Manage gym availability'),
                                         ),
                                       const PopupMenuItem(
                                         value: 'delete',
