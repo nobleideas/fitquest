@@ -56,6 +56,7 @@ class EquipmentService {
 
   /// Returns regular equipment assigned to a specific gym.
   ///
+  /// The many-to-many relationship is stored in equipment_gyms.
   /// Routine container rows remain gym-independent and are not returned here.
   Future<List<dynamic>> getEquipmentForGym(String gymId) async {
     final trimmedGymId = gymId.trim();
@@ -64,14 +65,33 @@ class EquipmentService {
     }
 
     final rows = await supabase
-        .from('equipment')
-        .select()
+        .from('equipment_gyms')
+        .select('equipment:equipment_id(*)')
         .eq('user_id', _currentUserId)
-        .eq('kind', 'equipment')
-        .eq('gym_id', trimmedGymId)
-        .order('name');
+        .eq('gym_id', trimmedGymId);
 
-    return _removeHiddenImportedContainer(List<dynamic>.from(rows));
+    final equipment = <dynamic>[];
+
+    for (final row in rows) {
+      final joined = row['equipment'];
+      if (joined is! Map) continue;
+
+      final item = Map<String, dynamic>.from(joined);
+      if ((item['kind'] ?? 'equipment').toString().toLowerCase() !=
+          'equipment') {
+        continue;
+      }
+
+      equipment.add(item);
+    }
+
+    equipment.sort(
+      (a, b) => (a['name'] ?? '').toString().toLowerCase().compareTo(
+        (b['name'] ?? '').toString().toLowerCase(),
+      ),
+    );
+
+    return _removeHiddenImportedContainer(equipment);
   }
 
   /// Returns routine container rows owned by the current user.
@@ -81,15 +101,27 @@ class EquipmentService {
     return getAllEquipment(kind: 'routine');
   }
 
-  /// Returns unassigned regular equipment for migration and management.
+  /// Returns regular equipment that has no equipment_gyms assignment.
   Future<List<dynamic>> getUnassignedEquipment() async {
-    final rows = await supabase
+    final equipmentRows = await supabase
         .from('equipment')
         .select()
         .eq('user_id', _currentUserId)
         .eq('kind', 'equipment')
-        .isFilter('gym_id', null)
         .order('name');
+
+    final assignmentRows = await supabase
+        .from('equipment_gyms')
+        .select('equipment_id')
+        .eq('user_id', _currentUserId);
+
+    final assignedIds = assignmentRows
+        .map<String>((row) => row['equipment_id'].toString())
+        .toSet();
+
+    final rows = equipmentRows
+        .where((row) => !assignedIds.contains(row['id'].toString()))
+        .toList();
 
     return _removeHiddenImportedContainer(List<dynamic>.from(rows));
   }
@@ -117,7 +149,8 @@ class EquipmentService {
 
   /// Creates equipment in the supplied gym.
   ///
-  /// Routine rows do not receive a gym_id.
+  /// Routine rows remain gym-independent. During the migration period,
+  /// equipment.gym_id is also populated as a compatibility fallback.
   Future<Map<String, dynamic>> insertEquipment(
     String name, {
     String kind = 'equipment',
@@ -131,12 +164,10 @@ class EquipmentService {
     }
 
     final normalizedKind = _normalizeKind(kind);
+    final trimmedGymId = gymId?.trim() ?? '';
 
-    if (normalizedKind == 'equipment') {
-      final trimmedGymId = gymId?.trim() ?? '';
-      if (trimmedGymId.isEmpty) {
-        throw StateError('A gym must be selected before creating equipment.');
-      }
+    if (normalizedKind == 'equipment' && trimmedGymId.isEmpty) {
+      throw StateError('A gym must be selected before creating equipment.');
     }
 
     final values = <String, dynamic>{
@@ -146,7 +177,7 @@ class EquipmentService {
     };
 
     if (normalizedKind == 'equipment') {
-      values['gym_id'] = gymId!.trim();
+      values['gym_id'] = trimmedGymId;
     } else {
       values['gym_id'] = null;
       values['source_routine_id'] = sourceRoutineId;
@@ -159,20 +190,34 @@ class EquipmentService {
         .select()
         .single();
 
-    return Map<String, dynamic>.from(res);
+    final equipment = Map<String, dynamic>.from(res);
+
+    if (normalizedKind == 'equipment') {
+      await supabase.from('equipment_gyms').upsert(
+        {
+          'equipment_id': equipment['id'],
+          'gym_id': trimmedGymId,
+          'user_id': _currentUserId,
+        },
+        onConflict: 'equipment_id,gym_id',
+      );
+    }
+
+    return equipment;
   }
 
-  /// Moves one equipment row to a gym owned by the current user.
+  /// Adds one equipment row to a gym without removing other assignments.
   Future<void> assignEquipmentToGym({
     required String equipmentId,
     required String gymId,
   }) async {
-    await bulkAssignEquipmentToGym(equipmentIds: {equipmentId}, gymId: gymId);
+    await bulkAssignEquipmentToGym(
+      equipmentIds: {equipmentId},
+      gymId: gymId,
+    );
   }
 
-  /// Moves multiple regular equipment rows to a gym in one update.
-  ///
-  /// RLS verifies that the destination gym belongs to the current user.
+  /// Adds multiple regular equipment rows to a gym.
   Future<void> bulkAssignEquipmentToGym({
     required Set<String> equipmentIds,
     required String gymId,
@@ -180,7 +225,7 @@ class EquipmentService {
     final ids = equipmentIds
         .map((id) => id.trim())
         .where((id) => id.isNotEmpty)
-        .toList();
+        .toSet();
 
     final trimmedGymId = gymId.trim();
 
@@ -192,15 +237,154 @@ class EquipmentService {
       throw ArgumentError('Gym ID cannot be blank.');
     }
 
+    final ownedRows = await supabase
+        .from('equipment')
+        .select('id')
+        .eq('user_id', _currentUserId)
+        .eq('kind', 'equipment')
+        .inFilter('id', ids.toList());
+
+    final ownedIds = ownedRows
+        .map<String>((row) => row['id'].toString())
+        .toSet();
+
+    if (ownedIds.length != ids.length) {
+      throw StateError('One or more selected equipment items are invalid.');
+    }
+
+    await supabase.from('equipment_gyms').upsert(
+      ownedIds
+          .map(
+            (equipmentId) => {
+              'equipment_id': equipmentId,
+              'gym_id': trimmedGymId,
+              'user_id': _currentUserId,
+            },
+          )
+          .toList(),
+      onConflict: 'equipment_id,gym_id',
+    );
+
+    // Temporary compatibility fallback for older code paths.
     await supabase
         .from('equipment')
         .update({'gym_id': trimmedGymId})
         .eq('user_id', _currentUserId)
         .eq('kind', 'equipment')
-        .inFilter('id', ids);
+        .inFilter('id', ownedIds.toList())
+        .isFilter('gym_id', null);
   }
 
-  /// Removes gym assignment from multiple regular equipment rows.
+  /// Removes one equipment assignment from one gym.
+  Future<void> removeEquipmentFromGym({
+    required String equipmentId,
+    required String gymId,
+  }) async {
+    final trimmedEquipmentId = equipmentId.trim();
+    final trimmedGymId = gymId.trim();
+
+    if (trimmedEquipmentId.isEmpty || trimmedGymId.isEmpty) {
+      throw ArgumentError('Equipment ID and gym ID are required.');
+    }
+
+    await supabase
+        .from('equipment_gyms')
+        .delete()
+        .eq('user_id', _currentUserId)
+        .eq('equipment_id', trimmedEquipmentId)
+        .eq('gym_id', trimmedGymId);
+  }
+
+  /// Returns every gym ID where this equipment is available.
+  Future<Set<String>> getGymIdsForEquipment(String equipmentId) async {
+    final trimmedEquipmentId = equipmentId.trim();
+    if (trimmedEquipmentId.isEmpty) {
+      throw ArgumentError('Equipment ID cannot be blank.');
+    }
+
+    final rows = await supabase
+        .from('equipment_gyms')
+        .select('gym_id')
+        .eq('user_id', _currentUserId)
+        .eq('equipment_id', trimmedEquipmentId);
+
+    return rows
+        .map<String>((row) => row['gym_id'].toString())
+        .toSet();
+  }
+
+  /// Replaces all gym assignments for one equipment row.
+  ///
+  /// At least one gym is required.
+  Future<void> setGymsForEquipment({
+    required String equipmentId,
+    required Set<String> gymIds,
+  }) async {
+    final trimmedEquipmentId = equipmentId.trim();
+    final cleanedGymIds = gymIds
+        .map((id) => id.trim())
+        .where((id) => id.isNotEmpty)
+        .toSet();
+
+    if (trimmedEquipmentId.isEmpty) {
+      throw ArgumentError('Equipment ID cannot be blank.');
+    }
+
+    if (cleanedGymIds.isEmpty) {
+      throw StateError('Equipment must be available at at least one gym.');
+    }
+
+    final equipment = await supabase
+        .from('equipment')
+        .select('id')
+        .eq('id', trimmedEquipmentId)
+        .eq('user_id', _currentUserId)
+        .eq('kind', 'equipment')
+        .maybeSingle();
+
+    if (equipment == null) {
+      throw StateError('Equipment not found or not owned by the current user.');
+    }
+
+    final currentGymIds = await getGymIdsForEquipment(trimmedEquipmentId);
+    final toAdd = cleanedGymIds.difference(currentGymIds);
+    final toRemove = currentGymIds.difference(cleanedGymIds);
+
+    if (toAdd.isNotEmpty) {
+      await supabase.from('equipment_gyms').upsert(
+        toAdd
+            .map(
+              (gymId) => {
+                'equipment_id': trimmedEquipmentId,
+                'gym_id': gymId,
+                'user_id': _currentUserId,
+              },
+            )
+            .toList(),
+        onConflict: 'equipment_id,gym_id',
+      );
+    }
+
+    if (toRemove.isNotEmpty) {
+      await supabase
+          .from('equipment_gyms')
+          .delete()
+          .eq('user_id', _currentUserId)
+          .eq('equipment_id', trimmedEquipmentId)
+          .inFilter('gym_id', toRemove.toList());
+    }
+
+    // Temporary compatibility fallback for code that still reads equipment.gym_id.
+    await supabase
+        .from('equipment')
+        .update({'gym_id': cleanedGymIds.first})
+        .eq('id', trimmedEquipmentId)
+        .eq('user_id', _currentUserId);
+  }
+
+  /// Removes all gym assignments from multiple equipment rows.
+  ///
+  /// Retained for migration/administrative flows only.
   Future<void> bulkUnassignEquipment({
     required Set<String> equipmentIds,
   }) async {
@@ -212,6 +396,12 @@ class EquipmentService {
     if (ids.isEmpty) {
       throw ArgumentError('Select at least one equipment item.');
     }
+
+    await supabase
+        .from('equipment_gyms')
+        .delete()
+        .eq('user_id', _currentUserId)
+        .inFilter('equipment_id', ids);
 
     await supabase
         .from('equipment')
