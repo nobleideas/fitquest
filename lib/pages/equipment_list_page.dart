@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../services/equipment_service.dart';
+import '../services/gym_service.dart';
 import 'exercise_list_page.dart';
 
 class EquipmentListPage extends StatefulWidget {
@@ -14,9 +15,18 @@ class EquipmentListPage extends StatefulWidget {
 class EquipmentListPageState extends State<EquipmentListPage> {
   final supabase = Supabase.instance.client;
   final _equipmentService = EquipmentService();
+  final _gymService = GymService();
 
   List<Map<String, dynamic>> equipmentList = [];
+  List<Map<String, dynamic>> gyms = [];
+  List<Map<String, dynamic>> unassignedEquipment = [];
+  Map<String, dynamic>? activeGym;
+  final Set<String> _selectedEquipmentIds = <String>{};
   bool isLoading = true;
+  bool _isChangingGym = false;
+
+  String? get _activeGymId => activeGym?['id']?.toString();
+  bool get _isSelectionMode => _selectedEquipmentIds.isNotEmpty;
 
   /// Equipment IDs that have at least one exercise session today
   Set<String> equipmentWithSessionsToday = {};
@@ -43,13 +53,13 @@ class EquipmentListPageState extends State<EquipmentListPage> {
   final Map<String, Set<String>> _equipmentMuscleGroups = {};
 
   Future<void> refresh() async {
-    await _loadEquipment();
+    await _loadPageData();
   }
 
   @override
   void initState() {
     super.initState();
-    _loadEquipment();
+    _loadPageData();
   }
 
   String _normalizeMuscle(dynamic value) {
@@ -86,10 +96,10 @@ class EquipmentListPageState extends State<EquipmentListPage> {
   bool _isImportedRoutine(Map<String, dynamic> item) {
     if (_kindValue(item) != 'routine') return false;
 
-    final sourceRoutineId =
-        (item['source_routine_id'] ?? '').toString().trim();
-    final sourceTrainerUserId =
-        (item['source_trainer_user_id'] ?? '').toString().trim();
+    final sourceRoutineId = (item['source_routine_id'] ?? '').toString().trim();
+    final sourceTrainerUserId = (item['source_trainer_user_id'] ?? '')
+        .toString()
+        .trim();
 
     return sourceRoutineId.isNotEmpty || sourceTrainerUserId.isNotEmpty;
   }
@@ -123,7 +133,55 @@ class EquipmentListPageState extends State<EquipmentListPage> {
   }
 
   IconData _kindIcon(Map<String, dynamic> item) {
-    return _kindValue(item) == 'routine' ? Icons.view_list : Icons.fitness_center;
+    return _kindValue(item) == 'routine'
+        ? Icons.view_list
+        : Icons.fitness_center;
+  }
+
+  Future<void> _loadPageData() async {
+    if (!mounted) return;
+    setState(() => isLoading = true);
+
+    try {
+      final loadedGyms = await _gymService.getGyms();
+      Map<String, dynamic>? loadedActiveGym = await _gymService.getActiveGym();
+
+      if (loadedActiveGym == null && loadedGyms.isNotEmpty) {
+        await _gymService.setActiveGym(loadedGyms.first['id'].toString());
+        loadedActiveGym = loadedGyms.first;
+      }
+
+      final loadedUnassigned = await _equipmentService.getUnassignedEquipment();
+
+      if (!mounted) return;
+      setState(() {
+        gyms = loadedGyms;
+        activeGym = loadedActiveGym;
+        unassignedEquipment = List<Map<String, dynamic>>.from(loadedUnassigned);
+        _selectedEquipmentIds.clear();
+      });
+
+      await _loadEquipment();
+    } catch (e, st) {
+      debugPrint('Error loading gym/equipment data: $e');
+      debugPrint('$st');
+
+      if (!mounted) return;
+      setState(() {
+        gyms = [];
+        activeGym = null;
+        equipmentList = [];
+        unassignedEquipment = [];
+        equipmentWithSessionsToday = {};
+        _equipmentMuscleGroups.clear();
+        _selectedEquipmentIds.clear();
+        isLoading = false;
+      });
+
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed to load equipment: $e')));
+    }
   }
 
   Future<void> _loadEquipment() async {
@@ -131,13 +189,17 @@ class EquipmentListPageState extends State<EquipmentListPage> {
     setState(() => isLoading = true);
 
     try {
-      final list = await _equipmentService.getAllEquipment();
+      final gymId = _activeGymId;
+
+      final list = gymId == null
+          ? await _equipmentService.getRoutines()
+          : await _equipmentService.getEquipmentPageItems(gymId: gymId);
 
       final sorted = List<Map<String, dynamic>>.from(list)
         ..sort(
-          (a, b) => (a['name'] as String).toLowerCase().compareTo(
-                (b['name'] as String).toLowerCase(),
-              ),
+          (a, b) => (a['name'] ?? '').toString().toLowerCase().compareTo(
+            (b['name'] ?? '').toString().toLowerCase(),
+          ),
         );
 
       final todaySet = await _loadEquipmentIdsWithSessionsToday();
@@ -183,9 +245,9 @@ class EquipmentListPageState extends State<EquipmentListPage> {
         isLoading = false;
       });
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to load equipment: $e')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed to load equipment: $e')));
     }
   }
 
@@ -254,6 +316,489 @@ class EquipmentListPageState extends State<EquipmentListPage> {
     return ids;
   }
 
+  Future<void> _createGym({bool makeActive = true}) async {
+    final controller = TextEditingController();
+
+    final created = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Create Gym'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          textCapitalization: TextCapitalization.words,
+          decoration: const InputDecoration(
+            labelText: 'Gym name',
+            hintText: 'Example: Summit Athletic Club',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              final name = controller.text.trim();
+              if (name.isEmpty) return;
+
+              try {
+                await _gymService.createGym(name, makeActive: makeActive);
+
+                if (!context.mounted) return;
+                Navigator.pop(context, true);
+              } catch (e) {
+                if (!context.mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Failed to create gym: $e')),
+                );
+              }
+            },
+            child: const Text('Create'),
+          ),
+        ],
+      ),
+    );
+
+    if (created == true && mounted) {
+      await _loadPageData();
+    }
+  }
+
+  Future<void> _changeActiveGym(String gymId) async {
+    if (_isChangingGym || gymId == _activeGymId) return;
+
+    setState(() => _isChangingGym = true);
+
+    try {
+      await _gymService.setActiveGym(gymId);
+      final selected = gyms.firstWhere((gym) => gym['id']?.toString() == gymId);
+
+      if (!mounted) return;
+      setState(() {
+        activeGym = selected;
+        _selectedEquipmentIds.clear();
+      });
+
+      await _loadEquipment();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Failed to switch gyms: $e')));
+    } finally {
+      if (mounted) {
+        setState(() => _isChangingGym = false);
+      }
+    }
+  }
+
+  Future<void> _showGymMenu() async {
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (_) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.add_business),
+              title: const Text('Create new gym'),
+              onTap: () => Navigator.pop(context, 'create'),
+            ),
+            if (activeGym != null)
+              ListTile(
+                leading: const Icon(Icons.edit),
+                title: const Text('Rename active gym'),
+                onTap: () => Navigator.pop(context, 'rename'),
+              ),
+            if (unassignedEquipment.isNotEmpty)
+              ListTile(
+                leading: const Icon(Icons.inventory_2_outlined),
+                title: Text(
+                  'Assign unassigned equipment (${unassignedEquipment.length})',
+                ),
+                onTap: () => Navigator.pop(context, 'unassigned'),
+              ),
+          ],
+        ),
+      ),
+    );
+
+    switch (action) {
+      case 'create':
+        await _createGym();
+        break;
+      case 'rename':
+        await _renameActiveGym();
+        break;
+      case 'unassigned':
+        await _showUnassignedEquipment();
+        break;
+    }
+  }
+
+  Future<void> _renameActiveGym() async {
+    final gym = activeGym;
+    if (gym == null) return;
+
+    final controller = TextEditingController(
+      text: (gym['name'] ?? '').toString(),
+    );
+
+    final renamed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Rename Gym'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          textCapitalization: TextCapitalization.words,
+          decoration: const InputDecoration(labelText: 'Gym name'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              final name = controller.text.trim();
+              if (name.isEmpty) return;
+
+              try {
+                await _gymService.renameGym(
+                  gymId: gym['id'].toString(),
+                  name: name,
+                );
+                if (!context.mounted) return;
+                Navigator.pop(context, true);
+              } catch (e) {
+                if (!context.mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Failed to rename gym: $e')),
+                );
+              }
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+
+    if (renamed == true && mounted) {
+      await _loadPageData();
+    }
+  }
+
+  Future<void> _showUnassignedEquipment() async {
+    if (unassignedEquipment.isEmpty) return;
+
+    final selected = <String>{};
+
+    final assigned = await showDialog<bool>(
+      context: context,
+      builder: (_) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          final allSelected = selected.length == unassignedEquipment.length;
+
+          return AlertDialog(
+            title: const Text('Unassigned Equipment'),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    'Select equipment to move into ${activeGym?['name'] ?? 'the active gym'}.',
+                  ),
+                  const SizedBox(height: 8),
+                  CheckboxListTile(
+                    contentPadding: EdgeInsets.zero,
+                    value: allSelected,
+                    title: const Text(
+                      'Select all',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    onChanged: (value) {
+                      setDialogState(() {
+                        selected.clear();
+                        if (value == true) {
+                          selected.addAll(
+                            unassignedEquipment.map(
+                              (item) => item['id'].toString(),
+                            ),
+                          );
+                        }
+                      });
+                    },
+                  ),
+                  const Divider(),
+                  Flexible(
+                    child: ListView.builder(
+                      shrinkWrap: true,
+                      itemCount: unassignedEquipment.length,
+                      itemBuilder: (_, index) {
+                        final item = unassignedEquipment[index];
+                        final id = item['id'].toString();
+
+                        return CheckboxListTile(
+                          contentPadding: EdgeInsets.zero,
+                          value: selected.contains(id),
+                          title: Text((item['name'] ?? 'Equipment').toString()),
+                          onChanged: (value) {
+                            setDialogState(() {
+                              if (value == true) {
+                                selected.add(id);
+                              } else {
+                                selected.remove(id);
+                              }
+                            });
+                          },
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Cancel'),
+              ),
+              ElevatedButton(
+                onPressed: selected.isEmpty || _activeGymId == null
+                    ? null
+                    : () async {
+                        try {
+                          await _equipmentService.bulkAssignEquipmentToGym(
+                            equipmentIds: selected,
+                            gymId: _activeGymId!,
+                          );
+                          if (!context.mounted) return;
+                          Navigator.pop(context, true);
+                        } catch (e) {
+                          if (!context.mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text('Failed to assign equipment: $e'),
+                            ),
+                          );
+                        }
+                      },
+                child: const Text('Assign'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+
+    if (assigned == true && mounted) {
+      await _loadPageData();
+    }
+  }
+
+  void _toggleEquipmentSelection(Map<String, dynamic> equipment) {
+    if (_kindValue(equipment) == 'routine') return;
+
+    final id = equipment['id']?.toString() ?? '';
+    if (id.isEmpty) return;
+
+    setState(() {
+      if (_selectedEquipmentIds.contains(id)) {
+        _selectedEquipmentIds.remove(id);
+      } else {
+        _selectedEquipmentIds.add(id);
+      }
+    });
+  }
+
+  Future<void> _moveSelectedEquipment() async {
+    if (_selectedEquipmentIds.isEmpty) return;
+
+    String? selectedGymId = _activeGymId;
+
+    final moved = await showDialog<bool>(
+      context: context,
+      builder: (_) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          return AlertDialog(
+            title: Text(
+              'Move ${_selectedEquipmentIds.length} item${_selectedEquipmentIds.length == 1 ? '' : 's'}',
+            ),
+            content: DropdownButtonFormField<String>(
+              value: selectedGymId,
+              isExpanded: true,
+              decoration: const InputDecoration(
+                labelText: 'Destination gym',
+                border: OutlineInputBorder(),
+              ),
+              items: gyms
+                  .map(
+                    (gym) => DropdownMenuItem<String>(
+                      value: gym['id'].toString(),
+                      child: Text((gym['name'] ?? 'Gym').toString()),
+                    ),
+                  )
+                  .toList(),
+              onChanged: (value) {
+                setDialogState(() => selectedGymId = value);
+              },
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('Cancel'),
+              ),
+              TextButton(
+                onPressed: () async {
+                  Navigator.pop(context, false);
+                  await _createGym();
+                },
+                child: const Text('Create Gym'),
+              ),
+              ElevatedButton(
+                onPressed: selectedGymId == null
+                    ? null
+                    : () async {
+                        try {
+                          await _equipmentService.bulkAssignEquipmentToGym(
+                            equipmentIds: Set<String>.from(
+                              _selectedEquipmentIds,
+                            ),
+                            gymId: selectedGymId!,
+                          );
+                          if (!context.mounted) return;
+                          Navigator.pop(context, true);
+                        } catch (e) {
+                          if (!context.mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text('Failed to move equipment: $e'),
+                            ),
+                          );
+                        }
+                      },
+                child: const Text('Move'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+
+    if (moved == true && mounted) {
+      await _loadPageData();
+    }
+  }
+
+  Widget _buildGymHeader() {
+    if (gyms.isEmpty) {
+      return Card(
+        margin: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            children: [
+              const Icon(Icons.fitness_center, size: 36),
+              const SizedBox(height: 8),
+              Text(
+                'Create your first gym',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const SizedBox(height: 4),
+              const Text(
+                'Your equipment will be organized by gym so suggestions only use machines available at your active location.',
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 12),
+              ElevatedButton.icon(
+                onPressed: _createGym,
+                icon: const Icon(Icons.add),
+                label: const Text('Create Gym'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+      child: Row(
+        children: [
+          Expanded(
+            child: DropdownButtonFormField<String>(
+              value: _activeGymId,
+              isExpanded: true,
+              decoration: const InputDecoration(
+                labelText: 'Active Gym',
+                border: OutlineInputBorder(),
+                prefixIcon: Icon(Icons.location_on_outlined),
+              ),
+              items: gyms
+                  .map(
+                    (gym) => DropdownMenuItem<String>(
+                      value: gym['id'].toString(),
+                      child: Text((gym['name'] ?? 'Gym').toString()),
+                    ),
+                  )
+                  .toList(),
+              onChanged: _isChangingGym
+                  ? null
+                  : (value) {
+                      if (value != null) {
+                        _changeActiveGym(value);
+                      }
+                    },
+            ),
+          ),
+          const SizedBox(width: 8),
+          IconButton.filledTonal(
+            onPressed: _showGymMenu,
+            tooltip: 'Manage gyms',
+            icon: const Icon(Icons.more_horiz),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSelectionBar() {
+    if (!_isSelectionMode) return const SizedBox.shrink();
+
+    return Material(
+      color: Theme.of(context).colorScheme.secondaryContainer,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                '${_selectedEquipmentIds.length} selected',
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
+            ),
+            TextButton.icon(
+              onPressed: _moveSelectedEquipment,
+              icon: const Icon(Icons.drive_file_move_outline),
+              label: const Text('Move to Gym'),
+            ),
+            IconButton(
+              onPressed: () {
+                setState(() => _selectedEquipmentIds.clear());
+              },
+              tooltip: 'Cancel selection',
+              icon: const Icon(Icons.close),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Future<void> _addEquipmentOrRoutine() async {
     final kind = await showModalBottomSheet<String>(
       context: context,
@@ -281,6 +826,14 @@ class EquipmentListPageState extends State<EquipmentListPage> {
     );
 
     if (kind == null) return;
+
+    if (kind == 'equipment' && _activeGymId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Create or select an active gym first.')),
+      );
+      return;
+    }
+
     await _addNamedItem(kind: kind);
   }
 
@@ -306,12 +859,16 @@ class EquipmentListPageState extends State<EquipmentListPage> {
               final name = controller.text.trim();
               if (name.isEmpty) return;
 
-              await _equipmentService.insertEquipment(name, kind: kind);
+              await _equipmentService.insertEquipment(
+                name,
+                kind: kind,
+                gymId: kind == 'equipment' ? _activeGymId : null,
+              );
 
               if (!mounted) return;
               Navigator.pop(context);
 
-              await _loadEquipment();
+              await _loadPageData();
               if (!mounted) return;
 
               ScaffoldMessenger.of(context).showSnackBar(
@@ -361,7 +918,7 @@ class EquipmentListPageState extends State<EquipmentListPage> {
               if (!mounted) return;
               Navigator.pop(context);
 
-              await _loadEquipment();
+              await _loadPageData();
               if (!mounted) return;
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(
@@ -382,8 +939,9 @@ class EquipmentListPageState extends State<EquipmentListPage> {
     final equipmentId = equipment['id']?.toString() ?? '';
     final equipmentName = (equipment['name'] ?? 'this item').toString();
 
-    final exerciseCount =
-        await _equipmentService.getExerciseCountForEquipment(equipmentId);
+    final exerciseCount = await _equipmentService.getExerciseCountForEquipment(
+      equipmentId,
+    );
 
     if (exerciseCount == 0) {
       final confirm = await showDialog<bool>(
@@ -413,7 +971,7 @@ class EquipmentListPageState extends State<EquipmentListPage> {
       await _equipmentService.deleteEquipment(equipmentId);
 
       if (!mounted) return;
-      await _loadEquipment();
+      await _loadPageData();
       if (!mounted) return;
 
       ScaffoldMessenger.of(context).showSnackBar(
@@ -498,7 +1056,7 @@ class EquipmentListPageState extends State<EquipmentListPage> {
       await _equipmentService.deleteEquipmentCascade(equipmentId);
 
       if (!mounted) return;
-      await _loadEquipment();
+      await _loadPageData();
       if (!mounted) return;
 
       ScaffoldMessenger.of(context).showSnackBar(
@@ -517,15 +1075,16 @@ class EquipmentListPageState extends State<EquipmentListPage> {
     required int exerciseCount,
   }) async {
     final equipmentListDynamic = await _equipmentService.getAllEquipment();
-    final equipmentOptions = equipmentListDynamic
-        .map((e) => Map<String, dynamic>.from(e as Map))
-        .where((e) => e['id'].toString() != fromEquipmentId)
-        .toList()
-      ..sort(
-        (a, b) => (a['name'] as String).toLowerCase().compareTo(
+    final equipmentOptions =
+        equipmentListDynamic
+            .map((e) => Map<String, dynamic>.from(e as Map))
+            .where((e) => e['id'].toString() != fromEquipmentId)
+            .toList()
+          ..sort(
+            (a, b) => (a['name'] as String).toLowerCase().compareTo(
               (b['name'] as String).toLowerCase(),
             ),
-      );
+          );
 
     String? selectedEquipmentId;
     String? targetEquipmentName;
@@ -539,8 +1098,9 @@ class EquipmentListPageState extends State<EquipmentListPage> {
             final typedName = newEquipmentController.text.trim();
 
             final canMove =
-                (selectedEquipmentId != null && selectedEquipmentId!.isNotEmpty) ||
-                    typedName.isNotEmpty;
+                (selectedEquipmentId != null &&
+                    selectedEquipmentId!.isNotEmpty) ||
+                typedName.isNotEmpty;
 
             return AlertDialog(
               title: Text(
@@ -609,15 +1169,17 @@ class EquipmentListPageState extends State<EquipmentListPage> {
                           final typed = newEquipmentController.text.trim();
 
                           if (typed.isNotEmpty) {
-                            final created =
-                                await _equipmentService.insertEquipment(typed);
+                            final created = await _equipmentService
+                                .insertEquipment(typed, gymId: _activeGymId);
                             targetEquipmentId = created['id'].toString();
                             targetEquipmentName = created['name'].toString();
                           } else {
                             targetEquipmentId = selectedEquipmentId!;
                             targetEquipmentName = equipmentOptions
-                                .firstWhere((e) =>
-                                    e['id'].toString() == selectedEquipmentId)['name']
+                                .firstWhere(
+                                  (e) =>
+                                      e['id'].toString() == selectedEquipmentId,
+                                )['name']
                                 .toString();
                           }
 
@@ -626,7 +1188,9 @@ class EquipmentListPageState extends State<EquipmentListPage> {
                             toEquipmentId: targetEquipmentId,
                           );
 
-                          await _equipmentService.deleteEquipment(fromEquipmentId);
+                          await _equipmentService.deleteEquipment(
+                            fromEquipmentId,
+                          );
 
                           if (!mounted) return;
                           Navigator.pop(context, true);
@@ -653,7 +1217,7 @@ class EquipmentListPageState extends State<EquipmentListPage> {
 
     if (moved != true) return;
     if (!mounted) return;
-    await _loadEquipment();
+    await _loadPageData();
   }
 
   Future<void> _assignRoutine(Map<String, dynamic> routine) async {
@@ -690,7 +1254,9 @@ class EquipmentListPageState extends State<EquipmentListPage> {
       if (friends.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('You do not have any accepted friends to assign this routine to.'),
+            content: Text(
+              'You do not have any accepted friends to assign this routine to.',
+            ),
             behavior: SnackBarBehavior.floating,
           ),
         );
@@ -706,11 +1272,14 @@ class EquipmentListPageState extends State<EquipmentListPage> {
           return StatefulBuilder(
             builder: (context, setDialogState) {
               final allFriendIds = friends
-                  .map((friend) => (friend['friend_id'] ?? '').toString().trim())
+                  .map(
+                    (friend) => (friend['friend_id'] ?? '').toString().trim(),
+                  )
                   .where((id) => id.isNotEmpty)
                   .toSet();
 
-              final allSelected = allFriendIds.isNotEmpty &&
+              final allSelected =
+                  allFriendIds.isNotEmpty &&
                   allFriendIds.every(selectedFriendIds.contains);
 
               return AlertDialog(
@@ -755,16 +1324,22 @@ class EquipmentListPageState extends State<EquipmentListPage> {
                           itemCount: friends.length,
                           itemBuilder: (context, index) {
                             final friend = friends[index];
-                            final friendId =
-                                (friend['friend_id'] ?? '').toString().trim();
-                            final username =
-                                (friend['username'] ?? 'Friend').toString().trim();
-                            final selected = selectedFriendIds.contains(friendId);
+                            final friendId = (friend['friend_id'] ?? '')
+                                .toString()
+                                .trim();
+                            final username = (friend['username'] ?? 'Friend')
+                                .toString()
+                                .trim();
+                            final selected = selectedFriendIds.contains(
+                              friendId,
+                            );
 
                             return CheckboxListTile(
                               contentPadding: EdgeInsets.zero,
                               value: selected,
-                              title: Text(username.isEmpty ? 'Friend' : '@$username'),
+                              title: Text(
+                                username.isEmpty ? 'Friend' : '@$username',
+                              ),
                               onChanged: isSaving || friendId.isEmpty
                                   ? null
                                   : (value) {
@@ -785,7 +1360,9 @@ class EquipmentListPageState extends State<EquipmentListPage> {
                 ),
                 actions: [
                   TextButton(
-                    onPressed: isSaving ? null : () => Navigator.pop(context, false),
+                    onPressed: isSaving
+                        ? null
+                        : () => Navigator.pop(context, false),
                     child: const Text('Cancel'),
                   ),
                   ElevatedButton.icon(
@@ -807,7 +1384,9 @@ class EquipmentListPageState extends State<EquipmentListPage> {
                               setDialogState(() => isSaving = false);
                               ScaffoldMessenger.of(context).showSnackBar(
                                 SnackBar(
-                                  content: Text('Failed to save assignments: $e'),
+                                  content: Text(
+                                    'Failed to save assignments: $e',
+                                  ),
                                   behavior: SnackBarBehavior.floating,
                                 ),
                               );
@@ -854,7 +1433,10 @@ class EquipmentListPageState extends State<EquipmentListPage> {
     }
   }
 
-  Future<void> _onMenuSelected(String value, Map<String, dynamic> equipment) async {
+  Future<void> _onMenuSelected(
+    String value,
+    Map<String, dynamic> equipment,
+  ) async {
     switch (value) {
       case 'edit':
         await _editEquipmentName(equipment);
@@ -951,6 +1533,8 @@ class EquipmentListPageState extends State<EquipmentListPage> {
             ? const Center(child: CircularProgressIndicator())
             : Column(
                 children: [
+                  _buildGymHeader(),
+                  _buildSelectionBar(),
                   _buildKindFilterBar(), // ✅ NEW
                   _buildMuscleFilterBar(),
                   Expanded(
@@ -958,12 +1542,30 @@ class EquipmentListPageState extends State<EquipmentListPage> {
                       onRefresh: _loadEquipment,
                       child: ListView.builder(
                         physics: const AlwaysScrollableScrollPhysics(),
-                        itemCount: _filteredEquipment.length,
+                        itemCount: _filteredEquipment.isEmpty
+                            ? 1
+                            : _filteredEquipment.length,
                         itemBuilder: (context, index) {
+                          if (_filteredEquipment.isEmpty) {
+                            return Padding(
+                              padding: const EdgeInsets.all(32),
+                              child: Center(
+                                child: Text(
+                                  gyms.isEmpty
+                                      ? 'Create a gym to begin organizing equipment.'
+                                      : 'No equipment or routines match these filters.',
+                                  textAlign: TextAlign.center,
+                                ),
+                              ),
+                            );
+                          }
                           final equipment = _filteredEquipment[index];
                           final equipmentId = equipment['id']?.toString() ?? '';
-                          final hasSessionToday =
-                              equipmentWithSessionsToday.contains(equipmentId);
+                          final hasSessionToday = equipmentWithSessionsToday
+                              .contains(equipmentId);
+                          final isSelected = _selectedEquipmentIds.contains(
+                            equipmentId,
+                          );
 
                           final kindLabel = _kindLabel(equipment);
                           final kindValue = _kindValue(equipment);
@@ -980,7 +1582,9 @@ class EquipmentListPageState extends State<EquipmentListPage> {
                               style: hasSessionToday
                                   ? TextStyle(
                                       fontWeight: FontWeight.bold,
-                                      color: Theme.of(context).colorScheme.primary,
+                                      color: Theme.of(
+                                        context,
+                                      ).colorScheme.primary,
                                     )
                                   : null,
                             ),
@@ -1039,7 +1643,7 @@ class EquipmentListPageState extends State<EquipmentListPage> {
                                 ),
                               );
 
-                              await _loadEquipment();
+                              await _loadPageData();
                             },
                           );
                         },
