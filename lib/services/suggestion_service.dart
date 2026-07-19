@@ -75,7 +75,7 @@ class SuggestionService {
         dayType: dayType,
         minutes: minutes,
         exercises: const [],
-        message: 'No suggestions available.',
+        message: 'No suggestions are available for the active gym.',
       );
     }
 
@@ -149,7 +149,7 @@ class SuggestionService {
         dayType: dayType,
         minutes: minutes,
         exercises: const [],
-        message: 'No suggestions available.',
+        message: 'No suggestions are available for the active gym.',
       );
     }
 
@@ -206,7 +206,8 @@ class SuggestionService {
         break;
       }
 
-      if (picked == null && routine.exercises.length > balancedExercises.length) {
+      if (picked == null &&
+          routine.exercises.length > balancedExercises.length) {
         final original = Map<String, dynamic>.from(
           routine.exercises[balancedExercises.length],
         );
@@ -314,7 +315,9 @@ class SuggestionService {
 
     var sharedHistory = buildSharedHistory();
 
-    final existingIds = routine.exercises.asMap().entries
+    final existingIds = routine.exercises
+        .asMap()
+        .entries
         .where((entry) => entry.key != index)
         .map((entry) => (entry.value['id'] ?? '').toString())
         .where((id) => id.trim().isNotEmpty)
@@ -442,8 +445,9 @@ class SuggestionService {
   ) async {
     if (routine.exercises.isEmpty) return routine;
 
-    final enrichedExercises =
-        await _enrichExercisesWithVideoAvailability(routine.exercises);
+    final enrichedExercises = await _enrichExercisesWithVideoAvailability(
+      routine.exercises,
+    );
 
     return SuggestedRoutine(
       dayType: routine.dayType,
@@ -461,8 +465,10 @@ class SuggestionService {
         .toList();
 
     final sourceIds = enriched
-        .map((exercise) =>
-            (exercise['video_source_exercise_id'] ?? '').toString().trim())
+        .map(
+          (exercise) =>
+              (exercise['video_source_exercise_id'] ?? '').toString().trim(),
+        )
         .where((id) => id.isNotEmpty)
         .toSet();
 
@@ -479,8 +485,9 @@ class SuggestionService {
 
     for (final exercise in enriched) {
       final userVideoUrl = (exercise['video_url'] ?? '').toString().trim();
-      final sourceId =
-          (exercise['video_source_exercise_id'] ?? '').toString().trim();
+      final sourceId = (exercise['video_source_exercise_id'] ?? '')
+          .toString()
+          .trim();
 
       exercise['has_user_video'] = userVideoUrl.isNotEmpty;
       exercise['has_trainer_video'] =
@@ -696,6 +703,17 @@ class SuggestionService {
     }
   }
 
+  Future<String?> _loadActiveGymId(String userId) async {
+    final profile = await supabase
+        .from('profiles')
+        .select('active_gym_id')
+        .eq('id', userId)
+        .maybeSingle();
+
+    final gymId = (profile?['active_gym_id'] ?? '').toString().trim();
+    return gymId.isEmpty ? null : gymId;
+  }
+
   Future<List<Map<String, dynamic>>> _loadReplacementCandidates({
     required String muscleGroup,
     required String exerciseType,
@@ -703,6 +721,9 @@ class SuggestionService {
   }) async {
     final user = supabase.auth.currentUser;
     if (user == null) return <Map<String, dynamic>>[];
+
+    final activeGymId = await _loadActiveGymId(user.id);
+    if (activeGymId == null) return <Map<String, dynamic>>[];
 
     final canonicalMuscleGroup = _canonicalMuscleGroup(muscleGroup);
     final normalizedExerciseType = exerciseType.trim().toLowerCase();
@@ -724,7 +745,8 @@ class SuggestionService {
                 video_source_exercise_id,
                 equipment:equipment_id (
                   name,
-                  kind
+                  kind,
+                  gym_id
                 )
               ''')
               .eq('user_id', user.id)
@@ -740,7 +762,8 @@ class SuggestionService {
                 video_source_exercise_id,
                 equipment:equipment_id (
                   name,
-                  kind
+                  kind,
+                  gym_id
                 )
               ''')
               .eq('user_id', user.id)
@@ -768,6 +791,9 @@ class SuggestionService {
         continue;
       }
 
+      final equipmentGymId = (equipment['gym_id'] ?? '').toString().trim();
+      if (equipmentGymId != activeGymId) continue;
+
       ex['equipment_name'] = (equipment['name'] ?? '').toString();
 
       candidates.add(ex);
@@ -775,8 +801,9 @@ class SuggestionService {
 
     if (candidates.isEmpty) return candidates;
 
-    final enrichedCandidates =
-        await _enrichExercisesWithVideoAvailability(candidates);
+    final enrichedCandidates = await _enrichExercisesWithVideoAvailability(
+      candidates,
+    );
 
     final candidateIds = enrichedCandidates
         .map((ex) => (ex['id'] ?? '').toString())
