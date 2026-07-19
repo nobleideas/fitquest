@@ -206,8 +206,7 @@ class SuggestionService {
         break;
       }
 
-      if (picked == null &&
-          routine.exercises.length > balancedExercises.length) {
+      if (picked == null && routine.exercises.length > balancedExercises.length) {
         final original = Map<String, dynamic>.from(
           routine.exercises[balancedExercises.length],
         );
@@ -315,9 +314,7 @@ class SuggestionService {
 
     var sharedHistory = buildSharedHistory();
 
-    final existingIds = routine.exercises
-        .asMap()
-        .entries
+    final existingIds = routine.exercises.asMap().entries
         .where((entry) => entry.key != index)
         .map((entry) => (entry.value['id'] ?? '').toString())
         .where((id) => id.trim().isNotEmpty)
@@ -445,9 +442,8 @@ class SuggestionService {
   ) async {
     if (routine.exercises.isEmpty) return routine;
 
-    final enrichedExercises = await _enrichExercisesWithVideoAvailability(
-      routine.exercises,
-    );
+    final enrichedExercises =
+        await _enrichExercisesWithVideoAvailability(routine.exercises);
 
     return SuggestedRoutine(
       dayType: routine.dayType,
@@ -465,10 +461,8 @@ class SuggestionService {
         .toList();
 
     final sourceIds = enriched
-        .map(
-          (exercise) =>
-              (exercise['video_source_exercise_id'] ?? '').toString().trim(),
-        )
+        .map((exercise) =>
+            (exercise['video_source_exercise_id'] ?? '').toString().trim())
         .where((id) => id.isNotEmpty)
         .toSet();
 
@@ -485,9 +479,8 @@ class SuggestionService {
 
     for (final exercise in enriched) {
       final userVideoUrl = (exercise['video_url'] ?? '').toString().trim();
-      final sourceId = (exercise['video_source_exercise_id'] ?? '')
-          .toString()
-          .trim();
+      final sourceId =
+          (exercise['video_source_exercise_id'] ?? '').toString().trim();
 
       exercise['has_user_video'] = userVideoUrl.isNotEmpty;
       exercise['has_trainer_video'] =
@@ -703,6 +696,7 @@ class SuggestionService {
     }
   }
 
+
   Future<String?> _loadActiveGymId(String userId) async {
     final profile = await supabase
         .from('profiles')
@@ -732,50 +726,57 @@ class SuggestionService {
       return <Map<String, dynamic>>[];
     }
 
-    final dynamic exerciseRows = normalizedExerciseType.isEmpty
-        ? await supabase
-              .from('exercises')
-              .select('''
-                id,
-                name,
-                type,
-                primary_muscle_group,
-                equipment_id,
-                video_url,
-                video_source_exercise_id,
-                equipment:equipment_id (
-                  name,
-                  kind,
-                  gym_id
-                )
-              ''')
-              .eq('user_id', user.id)
-        : await supabase
-              .from('exercises')
-              .select('''
-                id,
-                name,
-                type,
-                primary_muscle_group,
-                equipment_id,
-                video_url,
-                video_source_exercise_id,
-                equipment:equipment_id (
-                  name,
-                  kind,
-                  gym_id
-                )
-              ''')
-              .eq('user_id', user.id)
-              .eq('type', normalizedExerciseType);
+    // Resolve the active gym's equipment first. This avoids relying on an
+    // embedded Supabase relationship to enforce gym membership.
+    final equipmentRows = await supabase
+        .from('equipment')
+        .select('id, name, kind')
+        .eq('user_id', user.id)
+        .eq('gym_id', activeGymId)
+        .eq('kind', 'equipment');
 
+    final equipmentById = <String, Map<String, dynamic>>{};
+
+    for (final raw in equipmentRows) {
+      final row = Map<String, dynamic>.from(raw as Map);
+      final id = (row['id'] ?? '').toString().trim();
+      if (id.isNotEmpty) {
+        equipmentById[id] = row;
+      }
+    }
+
+    if (equipmentById.isEmpty) return <Map<String, dynamic>>[];
+
+    dynamic query = supabase
+        .from('exercises')
+        .select('''
+          id,
+          name,
+          type,
+          primary_muscle_group,
+          equipment_id,
+          video_url,
+          video_source_exercise_id
+        ''')
+        .eq('user_id', user.id)
+        .inFilter('equipment_id', equipmentById.keys.toList());
+
+    if (normalizedExerciseType.isNotEmpty) {
+      query = query.eq('type', normalizedExerciseType);
+    }
+
+    final exerciseRows = await query;
     final candidates = <Map<String, dynamic>>[];
 
-    for (final row in exerciseRows) {
-      final ex = Map<String, dynamic>.from(row as Map);
+    for (final raw in exerciseRows) {
+      final ex = Map<String, dynamic>.from(raw as Map);
 
-      final id = (ex['id'] ?? '').toString();
-      if (id.trim().isEmpty || excludeIds.contains(id)) continue;
+      final id = (ex['id'] ?? '').toString().trim();
+      if (id.isEmpty || excludeIds.contains(id)) continue;
+
+      final equipmentId = (ex['equipment_id'] ?? '').toString().trim();
+      final equipment = equipmentById[equipmentId];
+      if (equipment == null) continue;
 
       final exerciseMuscleGroup = _canonicalMuscleGroup(
         ex['primary_muscle_group'],
@@ -783,27 +784,14 @@ class SuggestionService {
 
       if (exerciseMuscleGroup != canonicalMuscleGroup) continue;
 
-      final equipment = ex['equipment'] == null
-          ? <String, dynamic>{}
-          : Map<String, dynamic>.from(ex['equipment'] as Map);
-
-      if ((equipment['kind'] ?? '').toString().toLowerCase() != 'equipment') {
-        continue;
-      }
-
-      final equipmentGymId = (equipment['gym_id'] ?? '').toString().trim();
-      if (equipmentGymId != activeGymId) continue;
-
       ex['equipment_name'] = (equipment['name'] ?? '').toString();
-
       candidates.add(ex);
     }
 
     if (candidates.isEmpty) return candidates;
 
-    final enrichedCandidates = await _enrichExercisesWithVideoAvailability(
-      candidates,
-    );
+    final enrichedCandidates =
+        await _enrichExercisesWithVideoAvailability(candidates);
 
     final candidateIds = enrichedCandidates
         .map((ex) => (ex['id'] ?? '').toString())
