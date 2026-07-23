@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../services/equipment_service.dart';
 import '../services/gym_service.dart';
+import '../data/equipment_catalog.dart';
 import 'exercise_list_page.dart';
 
 class EquipmentListPage extends StatefulWidget {
@@ -985,51 +986,203 @@ class EquipmentListPageState extends State<EquipmentListPage> {
 
   Future<void> _addNamedItem({required String kind}) async {
     final controller = TextEditingController();
+    final focusNode = FocusNode();
     final kindTitle = kind == 'routine' ? 'Routine' : 'Equipment';
+    var isSaving = false;
 
-    await showDialog(
+    Future<void> saveItem(
+      BuildContext dialogContext,
+      void Function(void Function()) setDialogState,
+    ) async {
+      final name = controller.text.trim();
+      if (name.isEmpty || isSaving) return;
+
+      if (kind == 'equipment') {
+        final normalizedName = name.toLowerCase();
+        final alreadyExists = equipmentList.any(
+          (item) =>
+              _kindValue(item) != 'routine' &&
+              (item['name'] ?? '').toString().trim().toLowerCase() ==
+                  normalizedName,
+        );
+
+        if (alreadyExists) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                '“$name” is already in ${activeGym?['name'] ?? 'the active gym'}.',
+              ),
+            ),
+          );
+          return;
+        }
+      }
+
+      setDialogState(() => isSaving = true);
+
+      try {
+        await _equipmentService.insertEquipment(
+          name,
+          kind: kind,
+          gymId: kind == 'equipment' ? _activeGymId : null,
+        );
+
+        if (!dialogContext.mounted) return;
+        Navigator.pop(dialogContext);
+
+        await _loadPageData();
+        if (!mounted) return;
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Added $kindTitle: $name'),
+            behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      } catch (e) {
+        if (!dialogContext.mounted) return;
+        setDialogState(() => isSaving = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to add $kindTitle: $e')),
+        );
+      }
+    }
+
+    await showDialog<void>(
       context: context,
-      builder: (_) => AlertDialog(
-        title: Text('Add New $kindTitle'),
-        content: TextField(
-          controller: controller,
-          decoration: InputDecoration(labelText: '$kindTitle Name'),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text("Cancel"),
-          ),
-          ElevatedButton(
-            onPressed: () async {
-              final name = controller.text.trim();
-              if (name.isEmpty) return;
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) {
+          return AlertDialog(
+            title: Text('Add New $kindTitle'),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: kind == 'routine'
+                  ? TextField(
+                      controller: controller,
+                      focusNode: focusNode,
+                      autofocus: true,
+                      textCapitalization: TextCapitalization.words,
+                      textInputAction: TextInputAction.done,
+                      decoration: const InputDecoration(
+                        labelText: 'Routine Name',
+                        border: OutlineInputBorder(),
+                      ),
+                      onChanged: (_) => setDialogState(() {}),
+                      onSubmitted: (_) =>
+                          saveItem(dialogContext, setDialogState),
+                    )
+                  : RawAutocomplete<String>(
+                      textEditingController: controller,
+                      focusNode: focusNode,
+                      optionsBuilder: (TextEditingValue value) {
+                        final query = value.text.trim().toLowerCase();
 
-              await _equipmentService.insertEquipment(
-                name,
-                kind: kind,
-                gymId: kind == 'equipment' ? _activeGymId : null,
-              );
+                        final matches = EquipmentCatalog.all.where((name) {
+                          if (query.isEmpty) return true;
+                          return name.toLowerCase().contains(query);
+                        }).toList();
 
-              if (!mounted) return;
-              Navigator.pop(context);
+                        matches.sort((a, b) {
+                          final aLower = a.toLowerCase();
+                          final bLower = b.toLowerCase();
+                          final aStarts = aLower.startsWith(query);
+                          final bStarts = bLower.startsWith(query);
 
-              await _loadPageData();
-              if (!mounted) return;
+                          if (aStarts != bStarts) return aStarts ? -1 : 1;
+                          return aLower.compareTo(bLower);
+                        });
 
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: Text('Added $kindTitle: $name'),
-                  behavior: SnackBarBehavior.floating,
-                  duration: const Duration(seconds: 2),
-                ),
-              );
-            },
-            child: const Text("Add"),
-          ),
-        ],
+                        return matches.take(40);
+                      },
+                      displayStringForOption: (option) => option,
+                      onSelected: (_) => setDialogState(() {}),
+                      fieldViewBuilder: (
+                        context,
+                        textController,
+                        fieldFocusNode,
+                        onFieldSubmitted,
+                      ) {
+                        return TextField(
+                          controller: textController,
+                          focusNode: fieldFocusNode,
+                          autofocus: true,
+                          textCapitalization: TextCapitalization.words,
+                          textInputAction: TextInputAction.done,
+                          decoration: const InputDecoration(
+                            labelText: 'Equipment Name',
+                            hintText: 'Start typing or enter a custom name',
+                            border: OutlineInputBorder(),
+                            prefixIcon: Icon(Icons.search),
+                          ),
+                          onChanged: (_) => setDialogState(() {}),
+                          onSubmitted: (_) =>
+                              saveItem(dialogContext, setDialogState),
+                        );
+                      },
+                      optionsViewBuilder: (context, onSelected, options) {
+                        final optionList = options.toList();
+
+                        return Align(
+                          alignment: Alignment.topLeft,
+                          child: Material(
+                            elevation: 8,
+                            borderRadius: BorderRadius.circular(8),
+                            clipBehavior: Clip.antiAlias,
+                            child: ConstrainedBox(
+                              constraints: const BoxConstraints(
+                                maxHeight: 300,
+                                maxWidth: 520,
+                              ),
+                              child: ListView.separated(
+                                padding: EdgeInsets.zero,
+                                shrinkWrap: true,
+                                itemCount: optionList.length,
+                                separatorBuilder: (_, __) =>
+                                    const Divider(height: 1),
+                                itemBuilder: (context, index) {
+                                  final option = optionList[index];
+                                  return ListTile(
+                                    dense: true,
+                                    leading:
+                                        const Icon(Icons.fitness_center_outlined),
+                                    title: Text(option),
+                                    onTap: () => onSelected(option),
+                                  );
+                                },
+                              ),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+            ),
+            actions: [
+              TextButton(
+                onPressed:
+                    isSaving ? null : () => Navigator.pop(dialogContext),
+                child: const Text('Cancel'),
+              ),
+              ElevatedButton(
+                onPressed: isSaving || controller.text.trim().isEmpty
+                    ? null
+                    : () => saveItem(dialogContext, setDialogState),
+                child: isSaving
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Text('Add'),
+              ),
+            ],
+          );
+        },
       ),
     );
+
+    controller.dispose();
+    focusNode.dispose();
   }
 
   Future<void> _editEquipmentName(Map<String, dynamic> equipment) async {
