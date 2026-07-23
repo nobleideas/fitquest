@@ -269,8 +269,8 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
                       DropdownButton<String>(
                         value: type,
                         items: const [
-                          DropdownMenuItem(value: 'push', child: Text('Push')),
-                          DropdownMenuItem(value: 'pull', child: Text('Pull')),
+                          DropdownMenuItem(value: 'push', child: Text('push')),
+                          DropdownMenuItem(value: 'pull', child: Text('pull')),
                         ],
                         onChanged: (val) {
                           if (val != null) setDialogState(() => type = val);
@@ -575,8 +575,8 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
                       border: OutlineInputBorder(),
                     ),
                     items: const [
-                      DropdownMenuItem(value: 'push', child: Text('Push')),
-                      DropdownMenuItem(value: 'pull', child: Text('Pull')),
+                      DropdownMenuItem(value: 'push', child: Text('push')),
+                      DropdownMenuItem(value: 'pull', child: Text('pull')),
                     ],
                     onChanged: (val) {
                       if (val == null) return;
