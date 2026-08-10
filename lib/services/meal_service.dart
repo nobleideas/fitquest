@@ -62,6 +62,24 @@ class MealService {
   MealService([SupabaseClient? client])
       : supabase = client ?? Supabase.instance.client;
 
+  String _sanitizeDisplayText(String value) {
+    final cleaned = value
+        .trim()
+        .replaceAll(RegExp(r'[_-]+'), ' ')
+        .replaceAll(RegExp(r'\s+'), ' ');
+
+    if (cleaned.isEmpty) return '';
+
+    return cleaned
+        .split(' ')
+        .where((word) => word.isNotEmpty)
+        .map((word) {
+          if (word.length == 1) return word.toUpperCase();
+          return '${word[0].toUpperCase()}${word.substring(1).toLowerCase()}';
+        })
+        .join(' ');
+  }
+
   String get _userId {
     final user = supabase.auth.currentUser;
     if (user == null) throw StateError('User must be logged in.');
@@ -75,10 +93,18 @@ class MealService {
         .eq('user_id', _userId)
         .order('name', ascending: true);
 
-    return (rows as List)
+    final foods = (rows as List)
         .whereType<Map>()
         .map((row) => FoodItem.fromMap(Map<String, dynamic>.from(row)))
         .toList();
+
+    foods.sort((a, b) {
+      final nameCompare = a.name.toLowerCase().compareTo(b.name.toLowerCase());
+      if (nameCompare != 0) return nameCompare;
+      return a.brand.toLowerCase().compareTo(b.brand.toLowerCase());
+    });
+
+    return foods;
   }
 
   Future<FoodItem> addFoodItem({
@@ -93,8 +119,8 @@ class MealService {
         .from('food_items')
         .insert({
           'user_id': _userId,
-          'name': name.trim(),
-          'brand': brand.trim(),
+          'name': _sanitizeDisplayText(name),
+          'brand': _sanitizeDisplayText(brand),
           'calories': calories,
           'fat': fat,
           'carbs': carbs,

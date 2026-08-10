@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../services/meal_service.dart';
 
@@ -85,6 +86,12 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
         ..sort((a, b) => b.day.compareTo(a.day));
 
       if (!mounted) return;
+      foods.sort((a, b) {
+        final nameCompare = a.name.toLowerCase().compareTo(b.name.toLowerCase());
+        if (nameCompare != 0) return nameCompare;
+        return a.brand.toLowerCase().compareTo(b.brand.toLowerCase());
+      });
+
       setState(() {
         _foodItems = foods;
         _dailySummaries = summaries;
@@ -328,7 +335,7 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                           (food) => DropdownMenuItem(
                             value: food,
                             child: Text(
-                              '${food.brand} • ${food.name}',
+                              food.brand.trim().isEmpty ? food.name : '${food.name} • ${food.brand}',
                               overflow: TextOverflow.ellipsis,
                             ),
                           ),
@@ -409,10 +416,159 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
     servings.dispose();
   }
 
+  String _foodDisplayName(FoodItem food) {
+    final name = food.name.trim();
+    final brand = food.brand.trim();
+    if (brand.isEmpty) return name;
+    return '$name • $brand';
+  }
+
+  String _buildFoodLogShareText(List<DailyMealSummary> summaries) {
+    final buffer = StringBuffer('Fit Quest — Food Log');
+    buffer.writeln();
+    buffer.writeln();
+
+    final ordered = [...summaries]..sort((a, b) => b.day.compareTo(a.day));
+
+    for (final summary in ordered) {
+      buffer.writeln(_formatDate(summary.day));
+      buffer.writeln(
+        '${_formatNumber(summary.calories)} calories • '
+        'P ${_formatNumber(summary.protein)}g • '
+        'C ${_formatNumber(summary.carbs)}g • '
+        'F ${_formatNumber(summary.fat)}g',
+      );
+
+      for (final item in summary.items) {
+        buffer.writeln(
+          '• ${_foodDisplayName(item.food)} × ${_formatNumber(item.servings)} — '
+          '${_formatNumber(item.calories)} cal • '
+          'P ${_formatNumber(item.protein)}g • '
+          'C ${_formatNumber(item.carbs)}g • '
+          'F ${_formatNumber(item.fat)}g',
+        );
+      }
+
+      buffer.writeln();
+    }
+
+    return buffer.toString().trim();
+  }
+
+  Future<void> _shareFoodLogs(List<DailyMealSummary> summaries) async {
+    if (summaries.isEmpty) return;
+    await Share.share(
+      _buildFoodLogShareText(summaries),
+      subject: 'Fit Quest Food Log',
+    );
+  }
+
+  Future<void> _openShareFoodLogPicker() async {
+    if (_dailySummaries.isEmpty) return;
+
+    final selectedDays = <DateTime>{};
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setLocal) {
+          void toggleAll(bool select) {
+            setLocal(() {
+              selectedDays.clear();
+              if (select) {
+                selectedDays.addAll(_dailySummaries.map((summary) => summary.day));
+              }
+            });
+          }
+
+          return AlertDialog(
+            title: const Text('Share food logs'),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    children: [
+                      TextButton(
+                        onPressed: () => toggleAll(true),
+                        child: const Text('Select all'),
+                      ),
+                      TextButton(
+                        onPressed: () => toggleAll(false),
+                        child: const Text('Clear'),
+                      ),
+                      const Spacer(),
+                      Text(
+                        '${selectedDays.length}/${_dailySummaries.length}',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ],
+                  ),
+                  const Divider(),
+                  Flexible(
+                    child: ListView.builder(
+                      shrinkWrap: true,
+                      itemCount: _dailySummaries.length,
+                      itemBuilder: (context, index) {
+                        final summary = _dailySummaries[index];
+                        final checked = selectedDays.contains(summary.day);
+
+                        return CheckboxListTile(
+                          value: checked,
+                          controlAffinity: ListTileControlAffinity.leading,
+                          title: Text(_formatDate(summary.day)),
+                          subtitle: Text(
+                            '${_formatNumber(summary.calories)} cal • '
+                            'P ${_formatNumber(summary.protein)}g • '
+                            'C ${_formatNumber(summary.carbs)}g • '
+                            'F ${_formatNumber(summary.fat)}g',
+                          ),
+                          onChanged: (value) {
+                            setLocal(() {
+                              if (value == true) {
+                                selectedDays.add(summary.day);
+                              } else {
+                                selectedDays.remove(summary.day);
+                              }
+                            });
+                          },
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                child: const Text('Cancel'),
+              ),
+              ElevatedButton.icon(
+                onPressed: selectedDays.isEmpty
+                    ? null
+                    : () async {
+                        final picked = _dailySummaries
+                            .where((summary) => selectedDays.contains(summary.day))
+                            .toList();
+                        Navigator.of(dialogContext).pop();
+                        await _shareFoodLogs(picked);
+                      },
+                icon: const Icon(Icons.share),
+                label: const Text('Share selected'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
   Future<bool> _confirmDeleteConsumedFood(ConsumedFood item) async {
     final foodName = item.food.brand.trim().isEmpty
         ? item.food.name
-        : '${item.food.brand} ${item.food.name}';
+        : '${item.food.name} • ${item.food.brand}';
 
     final confirmed = await showDialog<bool>(
       context: context,
@@ -511,77 +667,83 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
   Widget _dailySummaryCard(DailyMealSummary summary) {
     return Card(
       margin: const EdgeInsets.only(bottom: 14),
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    _formatDate(summary.day),
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.bold,
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: () => _shareFoodLogs([summary]),
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      _formatDate(summary.day),
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                            fontWeight: FontWeight.bold,
+                          ),
+                    ),
+                  ),
+                  _macroHeaderCell('P'),
+                  _macroHeaderCell('C'),
+                  _macroHeaderCell('F'),
+                ],
+              ),
+              const SizedBox(height: 10),
+              ...summary.items.map(
+                (item) => Dismissible(
+                  key: ValueKey('consumed-${item.id}'),
+                  direction: DismissDirection.endToStart,
+                  confirmDismiss: (_) => _confirmDeleteConsumedFood(item),
+                  background: Container(
+                    margin: const EdgeInsets.only(bottom: 8),
+                    padding: const EdgeInsets.symmetric(horizontal: 18),
+                    alignment: Alignment.centerRight,
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).colorScheme.errorContainer,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Icon(
+                      Icons.delete_outline,
+                      color: Theme.of(context).colorScheme.onErrorContainer,
+                    ),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        Expanded(
+                          child: Text(
+                            '${_foodDisplayName(item.food)} × '
+                            '${_formatNumber(item.servings)}'
+                            '  •  ${_formatNumber(item.calories)} cal',
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
-                  ),
-                ),
-                _macroHeaderCell('P'),
-                _macroHeaderCell('C'),
-                _macroHeaderCell('F'),
-              ],
-            ),
-            const SizedBox(height: 10),
-            ...summary.items.map(
-              (item) => Dismissible(
-                key: ValueKey('consumed-${item.id}'),
-                direction: DismissDirection.endToStart,
-                confirmDismiss: (_) => _confirmDeleteConsumedFood(item),
-                background: Container(
-                  margin: const EdgeInsets.only(bottom: 8),
-                  padding: const EdgeInsets.symmetric(horizontal: 18),
-                  alignment: Alignment.centerRight,
-                  decoration: BoxDecoration(
-                    color: Theme.of(context).colorScheme.errorContainer,
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Icon(
-                    Icons.delete_outline,
-                    color: Theme.of(context).colorScheme.onErrorContainer,
-                  ),
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      Expanded(
-                        child: Text(
-                          '${item.food.brand} ${item.food.name} × '
-                          '${_formatNumber(item.servings)}'
-                          '  •  ${_formatNumber(item.calories)} cal',
-                        ),
-                      ),
-                      _macroValueCell(item.protein),
-                      _macroValueCell(item.carbs),
-                      _macroValueCell(item.fat),
-                    ],
+                        _macroValueCell(item.protein),
+                        _macroValueCell(item.carbs),
+                        _macroValueCell(item.fat),
+                      ],
+                    ),
                   ),
                 ),
               ),
-            ),
-            const Divider(),
-            Wrap(
-              spacing: 12,
-              runSpacing: 6,
-              children: [
-                Text('${_formatNumber(summary.calories)} calories'),
-                Text('${_formatNumber(summary.protein)}g protein'),
-                Text('${_formatNumber(summary.carbs)}g carbs'),
-                Text('${_formatNumber(summary.fat)}g fat'),
-              ],
-            ),
-          ],
+              const Divider(),
+              Wrap(
+                spacing: 12,
+                runSpacing: 6,
+                children: [
+                  Text('${_formatNumber(summary.calories)} calories'),
+                  Text('${_formatNumber(summary.protein)}g protein'),
+                  Text('${_formatNumber(summary.carbs)}g carbs'),
+                  Text('${_formatNumber(summary.fat)}g fat'),
+                ],
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -592,7 +754,16 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
     final today = _todaySummary;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Meal Tracker')),
+      appBar: AppBar(
+        title: const Text('Meal Tracker'),
+        actions: [
+          IconButton(
+            tooltip: 'Share food log',
+            onPressed: _dailySummaries.isEmpty ? null : _openShareFoodLogPicker,
+            icon: const Icon(Icons.share),
+          ),
+        ],
+      ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
           : RefreshIndicator(
