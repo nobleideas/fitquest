@@ -713,6 +713,7 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
       final Map<DateTime, Map<String, Map<String, dynamic>>>
       uniqueExercisesByDay = {};
       final Map<DateTime, Map<String, int>> setCountsByDayByName = {};
+      final Map<DateTime, Map<String, DateTime>> firstSessionByExerciseByDay = {};
       final Map<DateTime, DateTime> firstSessionLocalByDay = {};
       final Map<DateTime, DateTime> lastSessionLocalByDay = {};
       final Map<DateTime, double> legsVolumeByDay = {};
@@ -747,10 +748,19 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
         uniqueExercisesByDay.putIfAbsent(day, () => {});
         setCountsByDayByName.putIfAbsent(day, () => {});
+        firstSessionByExerciseByDay.putIfAbsent(day, () => {});
         legsVolumeByDay.putIfAbsent(day, () => 0.0);
         coreVolumeByDay.putIfAbsent(day, () => 0.0);
 
-        uniqueExercisesByDay[day]![ex['id'].toString()] = ex;
+        final exerciseId = ex['id'].toString();
+        uniqueExercisesByDay[day]![exerciseId] = ex;
+
+        final existingFirstExerciseSession =
+            firstSessionByExerciseByDay[day]![exerciseId];
+        if (existingFirstExerciseSession == null ||
+            local.isBefore(existingFirstExerciseSession)) {
+          firstSessionByExerciseByDay[day]![exerciseId] = local;
+        }
 
         final exName = (ex['name'] ?? '').toString().trim();
         if (exName.isNotEmpty) {
@@ -774,15 +784,24 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
       for (final day in orderedUniqueDays) {
         final uniqueExercises = (uniqueExercisesByDay[day] ?? {}).values
-            .toList();
+            .toList()
+          ..sort((a, b) {
+            final aId = (a['id'] ?? '').toString();
+            final bId = (b['id'] ?? '').toString();
 
-        final names =
-            uniqueExercises
-                .map((e) => (e['name'] ?? '').toString())
-                .where((s) => s.trim().isNotEmpty)
-                .toSet()
-                .toList()
-              ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+            final aTime = firstSessionByExerciseByDay[day]?[aId];
+            final bTime = firstSessionByExerciseByDay[day]?[bId];
+
+            if (aTime == null && bTime == null) return 0;
+            if (aTime == null) return 1;
+            if (bTime == null) return -1;
+            return aTime.compareTo(bTime);
+          });
+
+        final names = uniqueExercises
+            .map((e) => (e['name'] ?? '').toString())
+            .where((s) => s.trim().isNotEmpty)
+            .toList();
 
         final Map<String, int> muscleCounts = {};
         int push = 0, pull = 0, legs = 0, core = 0;
