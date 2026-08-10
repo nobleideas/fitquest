@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'equipment_service.dart';
@@ -126,60 +127,20 @@ class FriendProfileService {
 
 
   Future<List<Map<String, dynamic>>> getAcceptedFriends() async {
-    final user = supabase.auth.currentUser;
-    if (user == null) return <Map<String, dynamic>>[];
-
-    final rows = await supabase
-        .from('friend_requests')
-        .select('requester_id, recipient_id, status')
-        .eq('status', 'accepted')
-        .or('requester_id.eq.${user.id},recipient_id.eq.${user.id}');
-
-    final friendIds = <String>{};
-
-    for (final raw in rows) {
-      if (raw is! Map) continue;
-      final row = Map<String, dynamic>.from(raw);
-
-      final requesterId = (row['requester_id'] ?? '').toString().trim();
-      final recipientId = (row['recipient_id'] ?? '').toString().trim();
-
-      if (requesterId == user.id && recipientId.isNotEmpty) {
-        friendIds.add(recipientId);
-      } else if (recipientId == user.id && requesterId.isNotEmpty) {
-        friendIds.add(requesterId);
-      }
-    }
-
-    if (friendIds.isEmpty) return <Map<String, dynamic>>[];
-
-    final profiles = await supabase
-        .from('profiles')
-        .select('id, username')
-        .inFilter('id', friendIds.toList());
-
-    final result = (profiles as List)
-        .whereType<Map>()
-        .map((row) => Map<String, dynamic>.from(row))
-        .where((row) => (row['id'] ?? '').toString().trim().isNotEmpty)
-        .toList();
-
-    result.sort((a, b) {
-      final aUsername = (a['username'] ?? '').toString().toLowerCase();
-      final bUsername = (b['username'] ?? '').toString().toLowerCase();
-      return aUsername.compareTo(bUsername);
-    });
-
-    return result;
+    // Reuse the exact accepted-friends source already used elsewhere in Fit Quest.
+    // EquipmentService calls the existing get_accepted_friends RPC and returns
+    // rows shaped like: friend_id + username.
+    return equipmentService.getAcceptedFriends();
   }
 
   Future<List<FriendWorkoutFeedData>> loadAcceptedFriendWorkoutFeed() async {
     final friends = await getAcceptedFriends();
+    debugPrint('Workout feed: accepted friends found = ${friends.length}');
     if (friends.isEmpty) return <FriendWorkoutFeedData>[];
 
     final results = await Future.wait(
       friends.map((friend) async {
-        final friendUserId = (friend['id'] ?? '').toString().trim();
+        final friendUserId = (friend['friend_id'] ?? friend['id'] ?? '').toString().trim();
         final username = (friend['username'] ?? '').toString().trim();
 
         if (friendUserId.isEmpty) {
@@ -200,9 +161,12 @@ class FriendProfileService {
             username: username,
             history: _mapList(historyRaw),
           );
-        } catch (_) {
+        } catch (e) {
           // One inaccessible friend should not prevent the rest of the feed
-          // from loading.
+          // from loading, but keep the failure visible while testing.
+          debugPrint(
+            'Workout feed: failed to load @$username ($friendUserId): $e',
+          );
           return null;
         }
       }),
