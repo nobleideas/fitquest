@@ -51,11 +51,16 @@ class DayWorkoutSummary {
 }
 
 
+enum WorkoutFilter { all, push, pull, legs, core }
+
 class HomePageState extends State<HomePage> with WidgetsBindingObserver {
   final supabase = Supabase.instance.client;
 
   bool isLoading = true;
   List<DayWorkoutSummary> workoutFeed = [];
+
+  WorkoutFilter _selectedFilter = WorkoutFilter.all;
+  bool _showFriends = true;
 
   final FriendProfileService _friendProfileService = FriendProfileService();
 
@@ -393,11 +398,49 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
   bool _isCoreGroup(String group) => group.trim().toLowerCase() == 'core';
 
 
+  String _filterLabel(WorkoutFilter filter) {
+    switch (filter) {
+      case WorkoutFilter.all:
+        return 'All';
+      case WorkoutFilter.push:
+        return 'Push';
+      case WorkoutFilter.pull:
+        return 'Pull';
+      case WorkoutFilter.legs:
+        return 'Legs';
+      case WorkoutFilter.core:
+        return 'Core';
+    }
+  }
+
+  bool _matchesWorkoutFilter(DayWorkoutSummary summary) {
+    if (_selectedFilter == WorkoutFilter.all) return true;
+
+    final label = summary.dayTypeLabel.trim().toLowerCase();
+
+    switch (_selectedFilter) {
+      case WorkoutFilter.all:
+        return true;
+      case WorkoutFilter.push:
+        return label == 'push';
+      case WorkoutFilter.pull:
+        return label == 'pull';
+      case WorkoutFilter.legs:
+        return label == 'legs';
+      case WorkoutFilter.core:
+        return label == 'core';
+    }
+  }
+
   String _formatDate(DateTime d) => '${d.month}/${d.day}/${d.year}';
 
   List<DayWorkoutSummary> _workoutEntries() {
-    final list = [...workoutFeed]
+    final list = workoutFeed.where((summary) {
+      if (!_showFriends && !summary.isCurrentUser) return false;
+      return _matchesWorkoutFilter(summary);
+    }).toList()
       ..sort((a, b) => b.sortTime.compareTo(a.sortTime));
+
     return list;
   }
 
@@ -409,7 +452,9 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
     final title =
         titleOverride ??
-        'Fit Quest — Workout Summary for ${_shareHandle()}';
+        (_selectedFilter == WorkoutFilter.all
+            ? 'Fit Quest — Workout Summary for ${_shareHandle()}'
+            : 'Fit Quest — ${_filterLabel(_selectedFilter)} Workout Summary for ${_shareHandle()}');
     b.writeln(title);
     b.writeln('');
 
@@ -1405,6 +1450,76 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
     );
   }
 
+  Widget _buildWorkoutFilterBar() {
+    return Row(
+      children: WorkoutFilter.values.map((filter) {
+        final selected = _selectedFilter == filter;
+
+        return Expanded(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 2),
+            child: OutlinedButton(
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 10),
+                backgroundColor: selected
+                    ? Theme.of(context)
+                        .colorScheme
+                        .primary
+                        .withValues(alpha: 0.15)
+                    : null,
+                side: BorderSide(
+                  color: selected
+                      ? Theme.of(context).colorScheme.primary
+                      : Theme.of(context).dividerColor,
+                ),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+              onPressed: () {
+                setState(() => _selectedFilter = filter);
+              },
+              child: FittedBox(
+                fit: BoxFit.scaleDown,
+                child: Text(
+                  _filterLabel(filter),
+                  style: TextStyle(
+                    fontWeight:
+                        selected ? FontWeight.bold : FontWeight.w600,
+                    color: selected
+                        ? Theme.of(context).colorScheme.primary
+                        : null,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      }).toList(),
+    );
+  }
+
+  Widget _buildFriendsToggle() {
+    return Row(
+      children: [
+        const Icon(Icons.people_outline, size: 20),
+        const SizedBox(width: 8),
+        const Expanded(
+          child: Text(
+            'Show friends in workout summary',
+            style: TextStyle(fontWeight: FontWeight.w600),
+          ),
+        ),
+        Switch(
+          value: _showFriends,
+          onChanged: (value) {
+            setState(() => _showFriends = value);
+          },
+        ),
+      ],
+    );
+  }
+
   // ===================== UI =====================
 
   @override
@@ -1471,10 +1586,15 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
             _buildSuggestedRoutineCard(),
             if (_suggestedRoutine != null) const SizedBox(height: 12),
 
+            _buildWorkoutFilterBar(),
+            const SizedBox(height: 10),
+            _buildFriendsToggle(),
+            const SizedBox(height: 12),
+
             if (workoutFeed.isEmpty)
               const Text('No workouts logged yet.')
             else if (entries.isEmpty)
-              const Text('No workouts found.')
+              const Text('No workouts match the current filters.')
             else
               ...entries.map((s) {
                 final date = s.day;

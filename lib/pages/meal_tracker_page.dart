@@ -419,7 +419,7 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
       builder: (dialogContext) => AlertDialog(
         title: const Text('Remove consumed item?'),
         content: Text(
-          'Remove $foodName from this day\\'s food log? '
+          "Remove $foodName from this day's food log? "
           'This will not delete the saved food item itself.',
         ),
         actions: [
