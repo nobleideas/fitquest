@@ -119,6 +119,19 @@ class MealService {
     });
   }
 
+  Future<void> deleteConsumption(String consumptionId) async {
+    final user = supabase.auth.currentUser;
+    if (user == null) {
+      throw StateError('User must be logged in.');
+    }
+
+    await supabase
+        .from('food_consumptions')
+        .delete()
+        .eq('id', consumptionId)
+        .eq('user_id', user.id);
+  }
+
   Future<List<ConsumedFood>> getConsumptionHistory({int limit = 1000}) async {
     final rows = await supabase
         .from('food_consumptions')
