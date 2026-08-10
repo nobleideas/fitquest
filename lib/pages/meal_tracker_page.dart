@@ -326,6 +326,8 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                   DropdownButtonFormField<FoodItem>(
                     value: selected,
                     isExpanded: true,
+                    itemHeight: null,
+                    menuMaxHeight: 420,
                     decoration: const InputDecoration(
                       labelText: 'Food item',
                       border: OutlineInputBorder(),
@@ -334,9 +336,38 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                         .map(
                           (food) => DropdownMenuItem(
                             value: food,
-                            child: Text(
-                              food.brand.trim().isEmpty ? food.name : '${food.name} • ${food.brand}',
-                              overflow: TextOverflow.ellipsis,
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 6),
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    food.name,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                  if (food.brand.trim().isNotEmpty) ...[
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      food.brand,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: Theme.of(context)
+                                          .textTheme
+                                          .bodySmall
+                                          ?.copyWith(
+                                            color: Theme.of(context)
+                                                .colorScheme
+                                                .onSurfaceVariant,
+                                          ),
+                                    ),
+                                  ],
+                                ],
+                              ),
                             ),
                           ),
                         )
@@ -424,32 +455,47 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
   }
 
   String _buildFoodLogShareText(List<DailyMealSummary> summaries) {
-    final buffer = StringBuffer('Fit Quest — Food Log');
-    buffer.writeln();
+    final buffer = StringBuffer();
+    buffer.writeln('Fit Quest — Food Log');
     buffer.writeln();
 
     final ordered = [...summaries]..sort((a, b) => b.day.compareTo(a.day));
 
-    for (final summary in ordered) {
+    for (var summaryIndex = 0;
+        summaryIndex < ordered.length;
+        summaryIndex++) {
+      final summary = ordered[summaryIndex];
+
       buffer.writeln(_formatDate(summary.day));
-      buffer.writeln(
-        '${_formatNumber(summary.calories)} calories • '
-        'P ${_formatNumber(summary.protein)}g • '
-        'C ${_formatNumber(summary.carbs)}g • '
-        'F ${_formatNumber(summary.fat)}g',
-      );
+      buffer.writeln('FOODS');
+      buffer.writeln();
 
       for (final item in summary.items) {
+        buffer.writeln(_foodDisplayName(item.food));
         buffer.writeln(
-          '• ${_foodDisplayName(item.food)} × ${_formatNumber(item.servings)} — '
-          '${_formatNumber(item.calories)} cal • '
-          'P ${_formatNumber(item.protein)}g • '
-          'C ${_formatNumber(item.carbs)}g • '
-          'F ${_formatNumber(item.fat)}g',
+          '${_formatNumber(item.servings)} serving'
+          '${item.servings == 1 ? '' : 's'}',
         );
+        buffer.writeln('Calories: ${_formatNumber(item.calories)}');
+        buffer.writeln(
+          'Protein: ${_formatNumber(item.protein)}g   '
+          'Carbs: ${_formatNumber(item.carbs)}g   '
+          'Fat: ${_formatNumber(item.fat)}g',
+        );
+        buffer.writeln();
       }
 
-      buffer.writeln();
+      buffer.writeln('DAILY TOTAL');
+      buffer.writeln('Calories: ${_formatNumber(summary.calories)}');
+      buffer.writeln('Protein: ${_formatNumber(summary.protein)}g');
+      buffer.writeln('Carbs: ${_formatNumber(summary.carbs)}g');
+      buffer.writeln('Fat: ${_formatNumber(summary.fat)}g');
+
+      if (summaryIndex < ordered.length - 1) {
+        buffer.writeln();
+        buffer.writeln('--------------------');
+        buffer.writeln();
+      }
     }
 
     return buffer.toString().trim();
