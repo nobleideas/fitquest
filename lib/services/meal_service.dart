@@ -1,0 +1,167 @@
+import 'package:supabase_flutter/supabase_flutter.dart';
+
+class FoodItem {
+  final String id;
+  final String name;
+  final String brand;
+  final double calories;
+  final double fat;
+  final double carbs;
+  final double protein;
+
+  const FoodItem({
+    required this.id,
+    required this.name,
+    required this.brand,
+    required this.calories,
+    required this.fat,
+    required this.carbs,
+    required this.protein,
+  });
+
+  factory FoodItem.fromMap(Map<String, dynamic> map) {
+    double toDouble(dynamic value) {
+      if (value is num) return value.toDouble();
+      return double.tryParse((value ?? '').toString()) ?? 0;
+    }
+
+    return FoodItem(
+      id: (map['id'] ?? '').toString(),
+      name: (map['name'] ?? '').toString(),
+      brand: (map['brand'] ?? '').toString(),
+      calories: toDouble(map['calories']),
+      fat: toDouble(map['fat']),
+      carbs: toDouble(map['carbs']),
+      protein: toDouble(map['protein']),
+    );
+  }
+}
+
+class ConsumedFood {
+  final String id;
+  final DateTime consumedAt;
+  final double servings;
+  final FoodItem food;
+
+  const ConsumedFood({
+    required this.id,
+    required this.consumedAt,
+    required this.servings,
+    required this.food,
+  });
+
+  double get calories => food.calories * servings;
+  double get fat => food.fat * servings;
+  double get carbs => food.carbs * servings;
+  double get protein => food.protein * servings;
+}
+
+class MealService {
+  final SupabaseClient supabase;
+
+  MealService([SupabaseClient? client])
+      : supabase = client ?? Supabase.instance.client;
+
+  String get _userId {
+    final user = supabase.auth.currentUser;
+    if (user == null) throw StateError('User must be logged in.');
+    return user.id;
+  }
+
+  Future<List<FoodItem>> getFoodItems() async {
+    final rows = await supabase
+        .from('food_items')
+        .select('id, name, brand, calories, fat, carbs, protein')
+        .eq('user_id', _userId)
+        .order('name', ascending: true);
+
+    return (rows as List)
+        .whereType<Map>()
+        .map((row) => FoodItem.fromMap(Map<String, dynamic>.from(row)))
+        .toList();
+  }
+
+  Future<FoodItem> addFoodItem({
+    required String name,
+    required String brand,
+    required double calories,
+    required double fat,
+    required double carbs,
+    required double protein,
+  }) async {
+    final row = await supabase
+        .from('food_items')
+        .insert({
+          'user_id': _userId,
+          'name': name.trim(),
+          'brand': brand.trim(),
+          'calories': calories,
+          'fat': fat,
+          'carbs': carbs,
+          'protein': protein,
+        })
+        .select('id, name, brand, calories, fat, carbs, protein')
+        .single();
+
+    return FoodItem.fromMap(Map<String, dynamic>.from(row));
+  }
+
+  Future<void> consumeFood({
+    required String foodItemId,
+    required double servings,
+    DateTime? consumedAt,
+  }) async {
+    await supabase.from('food_consumptions').insert({
+      'user_id': _userId,
+      'food_item_id': foodItemId,
+      'servings': servings,
+      'consumed_at': (consumedAt ?? DateTime.now()).toUtc().toIso8601String(),
+    });
+  }
+
+  Future<List<ConsumedFood>> getConsumptionHistory({int limit = 1000}) async {
+    final rows = await supabase
+        .from('food_consumptions')
+        .select(
+          'id, consumed_at, servings, food_items!inner(id, name, brand, calories, fat, carbs, protein)',
+        )
+        .eq('user_id', _userId)
+        .order('consumed_at', ascending: false)
+        .limit(limit);
+
+    final result = <ConsumedFood>[];
+
+    for (final raw in (rows as List)) {
+      if (raw is! Map) continue;
+      final row = Map<String, dynamic>.from(raw);
+
+      final joined = row['food_items'];
+      Map<String, dynamic>? foodMap;
+      if (joined is Map) {
+        foodMap = Map<String, dynamic>.from(joined);
+      } else if (joined is List && joined.isNotEmpty && joined.first is Map) {
+        foodMap = Map<String, dynamic>.from(joined.first as Map);
+      }
+      if (foodMap == null) continue;
+
+      final parsed = DateTime.tryParse((row['consumed_at'] ?? '').toString());
+      if (parsed == null) continue;
+
+      final servingsRaw = row['servings'];
+      final servings = servingsRaw is num
+          ? servingsRaw.toDouble()
+          : double.tryParse((servingsRaw ?? '').toString()) ?? 0;
+
+      result.add(
+        ConsumedFood(
+          id: (row['id'] ?? '').toString(),
+          consumedAt: parsed.toLocal(),
+          servings: servings,
+          food: FoodItem.fromMap(foodMap),
+        ),
+      );
+    }
+
+    return result;
+  }
+}
