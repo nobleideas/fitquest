@@ -317,21 +317,37 @@ class _HistoryTabState extends State<_HistoryTab> {
       }
 
       final Map<String, int> setsByName = {};
+      final Map<String, DateTime> firstTimeByExerciseName = {};
+      final Map<String, Map<String, dynamic>> firstRowByExerciseName = {};
+
       for (final r in dayRows) {
         final name = (r['exercise_name'] ?? '').toString().trim();
         if (name.isEmpty) continue;
+
         setsByName[name] = (setsByName[name] ?? 0) + 1;
+
+        final dt = _rowCreatedAtLocal(r);
+        if (dt != null) {
+          final existing = firstTimeByExerciseName[name];
+          if (existing == null || dt.isBefore(existing)) {
+            firstTimeByExerciseName[name] = dt;
+            firstRowByExerciseName[name] = r;
+          }
+        } else {
+          firstRowByExerciseName.putIfAbsent(name, () => r);
+        }
       }
 
       final names = setsByName.keys.toList()
-        ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+        ..sort((a, b) {
+          final aTime = firstTimeByExerciseName[a];
+          final bTime = firstTimeByExerciseName[b];
 
-      final Map<String, Map<String, dynamic>> firstRowByExerciseName = {};
-      for (final r in dayRows) {
-        final name = (r['exercise_name'] ?? '').toString().trim();
-        if (name.isEmpty) continue;
-        firstRowByExerciseName.putIfAbsent(name, () => r);
-      }
+          if (aTime == null && bTime == null) return 0;
+          if (aTime == null) return 1;
+          if (bTime == null) return -1;
+          return aTime.compareTo(bTime);
+        });
 
       final Map<String, int> muscleCounts = {};
       int push = 0, pull = 0, legs = 0, core = 0;
