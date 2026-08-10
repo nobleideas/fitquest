@@ -6,7 +6,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../services/suggestion_service.dart';
+import '../services/friend_profile_service.dart';
 import 'exercise_session_page.dart';
+import 'meal_tracker_page.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -17,31 +19,45 @@ class HomePage extends StatefulWidget {
 
 class DayWorkoutSummary {
   final DateTime day;
+  final String userId;
+  final String username;
+  final bool isCurrentUser;
   final List<String> exerciseNames;
   final Map<String, int> exerciseSetCountsByName;
   final Map<String, int> muscleGroupCounts;
   final String dayTypeLabel;
   final int workoutDurationMinutes;
+  final DateTime sortTime;
 
   DayWorkoutSummary({
     required this.day,
+    required this.userId,
+    required this.username,
+    required this.isCurrentUser,
     required this.exerciseNames,
     required this.exerciseSetCountsByName,
     required this.muscleGroupCounts,
     required this.dayTypeLabel,
     required this.workoutDurationMinutes,
+    required this.sortTime,
   });
+
+  String get displayOwner {
+    if (isCurrentUser) return 'You';
+    final clean = username.trim();
+    if (clean.isEmpty) return 'Friend';
+    return clean.startsWith('@') ? clean : '@$clean';
+  }
 }
 
-enum WorkoutFilter { all, push, pull, legs, core }
 
 class HomePageState extends State<HomePage> with WidgetsBindingObserver {
   final supabase = Supabase.instance.client;
 
   bool isLoading = true;
-  Map<DateTime, DayWorkoutSummary> summaryByDay = {};
+  List<DayWorkoutSummary> workoutFeed = [];
 
-  WorkoutFilter _selectedFilter = WorkoutFilter.all;
+  final FriendProfileService _friendProfileService = FriendProfileService();
 
   bool _isSubmittingReport = false;
   final TextEditingController _reportController = TextEditingController();
@@ -376,68 +392,34 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
   bool _isLegsGroup(String group) => group.trim().toLowerCase() == 'legs';
   bool _isCoreGroup(String group) => group.trim().toLowerCase() == 'core';
 
-  String _filterLabel(WorkoutFilter f) {
-    switch (f) {
-      case WorkoutFilter.all:
-        return 'All';
-      case WorkoutFilter.push:
-        return 'Push';
-      case WorkoutFilter.pull:
-        return 'Pull';
-      case WorkoutFilter.legs:
-        return 'Legs';
-      case WorkoutFilter.core:
-        return 'Core';
-    }
-  }
-
-  bool _matchesFilter(DayWorkoutSummary s) {
-    if (_selectedFilter == WorkoutFilter.all) return true;
-    final label = s.dayTypeLabel.trim().toLowerCase();
-    switch (_selectedFilter) {
-      case WorkoutFilter.all:
-        return true;
-      case WorkoutFilter.push:
-        return label == 'push';
-      case WorkoutFilter.pull:
-        return label == 'pull';
-      case WorkoutFilter.legs:
-        return label == 'legs';
-      case WorkoutFilter.core:
-        return label == 'core';
-    }
-  }
 
   String _formatDate(DateTime d) => '${d.month}/${d.day}/${d.year}';
 
-  List<MapEntry<DateTime, DayWorkoutSummary>> _filteredEntries() {
-    final list =
-        summaryByDay.entries.where((e) => _matchesFilter(e.value)).toList()
-          ..sort((a, b) => b.key.compareTo(a.key));
+  List<DayWorkoutSummary> _workoutEntries() {
+    final list = [...workoutFeed]
+      ..sort((a, b) => b.sortTime.compareTo(a.sortTime));
     return list;
   }
 
   String _buildShareText(
-    List<MapEntry<DateTime, DayWorkoutSummary>> entries, {
+    List<DayWorkoutSummary> entries, {
     String? titleOverride,
   }) {
-    final filterName = _filterLabel(_selectedFilter);
     final b = StringBuffer();
 
     final title =
         titleOverride ??
-        'Fit Quest — Workout Summary for ${_shareHandle()} ($filterName)';
+        'Fit Quest — Workout Summary for ${_shareHandle()}';
     b.writeln(title);
     b.writeln('');
 
     if (entries.isEmpty) {
-      b.writeln('No workouts found for this filter.');
+      b.writeln('No workouts found.');
       return b.toString().trim();
     }
 
-    for (final entry in entries) {
-      final date = entry.key;
-      final s = entry.value;
+    for (final s in entries) {
+      final date = s.day;
 
       final durationText = ' • ${s.workoutDurationMinutes} min';
       b.writeln('${_formatDate(date)}$durationText — ${s.dayTypeLabel}');
@@ -465,7 +447,7 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
   }
 
   Future<void> _shareEntries(
-    List<MapEntry<DateTime, DayWorkoutSummary>> entries, {
+    List<DayWorkoutSummary> entries, {
     String? subject,
   }) async {
     await _loadUsernameIfNeeded();
@@ -474,7 +456,9 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
   }
 
   Future<void> _openSharePicker() async {
-    final entries = _filteredEntries();
+    final entries = _workoutEntries()
+        .where((summary) => summary.isCurrentUser)
+        .toList();
     if (entries.isEmpty) return;
 
     final selected = <DateTime>{};
@@ -486,12 +470,12 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
           void toggleAll(bool select) {
             setLocal(() {
               selected.clear();
-              if (select) selected.addAll(entries.map((e) => e.key));
+              if (select) selected.addAll(entries.map((e) => e.day));
             });
           }
 
           return AlertDialog(
-            title: Text('Share workouts (${_filterLabel(_selectedFilter)})'),
+            title: const Text('Share workouts'),
             content: SizedBox(
               width: double.maxFinite,
               child: Column(
@@ -532,9 +516,8 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
                       shrinkWrap: true,
                       itemCount: entries.length,
                       itemBuilder: (context, i) {
-                        final e = entries[i];
-                        final day = e.key;
-                        final s = e.value;
+                        final s = entries[i];
+                        final day = s.day;
 
                         final isChecked = selected.contains(day);
 
@@ -578,8 +561,7 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
                   Navigator.pop(context);
                   await _shareEntries(
                     entries,
-                    subject:
-                        'Workout Summary (${_filterLabel(_selectedFilter)})',
+                    subject: 'Workout Summary',
                   );
                 },
                 child: const Text('Share all shown'),
@@ -591,13 +573,12 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
                     ? null
                     : () async {
                         final picked = entries
-                            .where((e) => selected.contains(e.key))
+                            .where((e) => selected.contains(e.day))
                             .toList();
                         Navigator.pop(context);
                         await _shareEntries(
                           picked,
-                          subject:
-                              'Workout Summary (${_filterLabel(_selectedFilter)})',
+                          subject: 'Workout Summary',
                         );
                       },
               ),
@@ -605,50 +586,6 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
           );
         },
       ),
-    );
-  }
-
-  Widget _buildFilterBar() {
-    return Row(
-      children: WorkoutFilter.values.map((f) {
-        final isSelected = _selectedFilter == f;
-        return Expanded(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 2),
-            child: OutlinedButton(
-              style: OutlinedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 10),
-                backgroundColor: isSelected
-                    ? Theme.of(
-                        context,
-                      ).colorScheme.primary.withValues(alpha: 0.15)
-                    : null,
-                side: BorderSide(
-                  color: isSelected
-                      ? Theme.of(context).colorScheme.primary
-                      : Theme.of(context).dividerColor,
-                ),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(8),
-                ),
-              ),
-              onPressed: () => setState(() => _selectedFilter = f),
-              child: FittedBox(
-                fit: BoxFit.scaleDown,
-                child: Text(
-                  _filterLabel(f),
-                  style: TextStyle(
-                    fontWeight: isSelected ? FontWeight.bold : FontWeight.w600,
-                    color: isSelected
-                        ? Theme.of(context).colorScheme.primary
-                        : null,
-                  ),
-                ),
-              ),
-            ),
-          ),
-        );
-      }).toList(),
     );
   }
 
@@ -665,6 +602,166 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
     return int.tryParse(v.toString()) ?? 0;
   }
 
+  DateTime? _friendRowCreatedAtLocal(Map<String, dynamic> row) {
+    final value = row['created_at'];
+    if (value == null) return null;
+    return DateTime.tryParse(value.toString())?.toLocal();
+  }
+
+  String _friendRowMuscleGroup(Map<String, dynamic> row) {
+    final value = row['primary_muscle_group'] ??
+        row['muscle_group'] ??
+        row['exercise_primary_muscle_group'] ??
+        row['exercise_muscle_group'];
+    return (value ?? '').toString();
+  }
+
+  String _friendRowType(Map<String, dynamic> row) {
+    return (row['type'] ?? row['exercise_type'] ?? '').toString();
+  }
+
+  List<DayWorkoutSummary> _buildFriendWorkoutSummaries(
+    FriendWorkoutFeedData friend,
+  ) {
+    final byDay = <DateTime, List<Map<String, dynamic>>>{};
+
+    for (final row in friend.history) {
+      final local = _friendRowCreatedAtLocal(row);
+      if (local == null) continue;
+
+      final day = DateTime(local.year, local.month, local.day);
+      byDay.putIfAbsent(day, () => <Map<String, dynamic>>[]).add(row);
+    }
+
+    final summaries = <DayWorkoutSummary>[];
+
+    for (final entry in byDay.entries) {
+      final day = entry.key;
+      final rows = entry.value;
+
+      DateTime? first;
+      DateTime? last;
+
+      final setsByName = <String, int>{};
+      final firstTimeByName = <String, DateTime>{};
+      final firstRowByName = <String, Map<String, dynamic>>{};
+
+      double legsVolume = 0;
+      double coreVolume = 0;
+
+      for (final row in rows) {
+        final local = _friendRowCreatedAtLocal(row);
+
+        if (local != null) {
+          if (first == null || local.isBefore(first)) first = local;
+          if (last == null || local.isAfter(last)) last = local;
+        }
+
+        final name = (row['exercise_name'] ?? '').toString().trim();
+        if (name.isNotEmpty) {
+          setsByName[name] = (setsByName[name] ?? 0) + 1;
+
+          if (local != null) {
+            final existing = firstTimeByName[name];
+            if (existing == null || local.isBefore(existing)) {
+              firstTimeByName[name] = local;
+              firstRowByName[name] = row;
+            }
+          } else {
+            firstRowByName.putIfAbsent(name, () => row);
+          }
+        }
+
+        final mg = _friendRowMuscleGroup(row);
+        final volume = _numToDouble(row['weight']) * _numToInt(row['reps']);
+
+        if (_isLegsGroup(mg)) legsVolume += volume;
+        if (_isCoreGroup(mg)) coreVolume += volume;
+      }
+
+      final names = setsByName.keys.toList()
+        ..sort((a, b) {
+          final aTime = firstTimeByName[a];
+          final bTime = firstTimeByName[b];
+
+          if (aTime == null && bTime == null) return 0;
+          if (aTime == null) return 1;
+          if (bTime == null) return -1;
+          return aTime.compareTo(bTime);
+        });
+
+      final muscleCounts = <String, int>{};
+      int push = 0;
+      int pull = 0;
+      int legs = 0;
+      int core = 0;
+
+      for (final name in names) {
+        final row = firstRowByName[name];
+        if (row == null) continue;
+
+        final mg = _friendRowMuscleGroup(row);
+        if (mg.trim().isNotEmpty) {
+          muscleCounts[mg] = (muscleCounts[mg] ?? 0) + 1;
+        }
+
+        if (_isLegsGroup(mg)) legs++;
+        if (_isCoreGroup(mg)) core++;
+
+        final type = _friendRowType(row).trim().toLowerCase();
+        if (type == 'push') push++;
+        if (type == 'pull') pull++;
+      }
+
+      String label;
+      if (legs > 0 || core > 0) {
+        if (legs > core) {
+          label = 'Legs';
+        } else if (core > legs) {
+          label = 'Core';
+        } else {
+          label = legsVolume >= coreVolume ? 'Legs' : 'Core';
+        }
+      } else if (pull > push) {
+        label = 'Pull';
+      } else {
+        label = 'Push';
+      }
+
+      var durationMinutes = 0;
+      if (first != null && last != null) {
+        durationMinutes = last.difference(first).inMinutes;
+        if (durationMinutes < 0) durationMinutes = 0;
+      }
+
+      summaries.add(
+        DayWorkoutSummary(
+          day: day,
+          userId: friend.userId,
+          username: friend.username,
+          isCurrentUser: false,
+          exerciseNames: names,
+          exerciseSetCountsByName: setsByName,
+          muscleGroupCounts: muscleCounts,
+          dayTypeLabel: label,
+          workoutDurationMinutes: durationMinutes,
+          sortTime: last ?? first ?? day,
+        ),
+      );
+    }
+
+    return summaries;
+  }
+
+  Future<void> _openMealTracker() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => const MealTrackerPage(),
+      ),
+    );
+  }
+
   Future<void> _loadRecentExercises() async {
     if (!mounted) return;
     setState(() => isLoading = true);
@@ -672,7 +769,7 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
     try {
       final user = supabase.auth.currentUser;
       if (user == null) {
-        setState(() => summaryByDay = {});
+        setState(() => workoutFeed = []);
         return;
       }
 
@@ -780,7 +877,7 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
       final orderedUniqueDays = workoutDays.toList()
         ..sort((a, b) => b.compareTo(a));
 
-      final Map<DateTime, DayWorkoutSummary> result = {};
+      final List<DayWorkoutSummary> ownSummaries = [];
 
       for (final day in orderedUniqueDays) {
         final uniqueExercises = (uniqueExercisesByDay[day] ?? {}).values
@@ -843,26 +940,45 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
           if (durationMin < 0) durationMin = 0;
         }
 
-        result[day] = DayWorkoutSummary(
-          day: day,
-          exerciseNames: names,
-          exerciseSetCountsByName: Map<String, int>.from(
-            setCountsByDayByName[day] ?? const {},
+        ownSummaries.add(
+          DayWorkoutSummary(
+            day: day,
+            userId: user.id,
+            username: _username ?? '',
+            isCurrentUser: true,
+            exerciseNames: names,
+            exerciseSetCountsByName: Map<String, int>.from(
+              setCountsByDayByName[day] ?? const {},
+            ),
+            muscleGroupCounts: muscleCounts,
+            dayTypeLabel: label,
+            workoutDurationMinutes: durationMin,
+            sortTime: last ?? first ?? day,
           ),
-          muscleGroupCounts: muscleCounts,
-          dayTypeLabel: label,
-          workoutDurationMinutes: durationMin,
         );
       }
 
+      final friendFeed =
+          await _friendProfileService.loadAcceptedFriendWorkoutFeed();
+
+      final friendSummaries = <DayWorkoutSummary>[];
+      for (final friend in friendFeed) {
+        friendSummaries.addAll(_buildFriendWorkoutSummaries(friend));
+      }
+
+      final merged = <DayWorkoutSummary>[
+        ...ownSummaries,
+        ...friendSummaries,
+      ]..sort((a, b) => b.sortTime.compareTo(a.sortTime));
+
       if (!mounted) return;
-      setState(() => summaryByDay = result);
+      setState(() => workoutFeed = merged);
     } catch (e, st) {
       debugPrint('Error loading workout summary: $e');
       debugPrint('$st');
       if (!mounted) return;
 
-      setState(() => summaryByDay = {});
+      setState(() => workoutFeed = []);
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text('Failed to load workouts: $e')));
@@ -1295,7 +1411,7 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
   Widget build(BuildContext context) {
     if (isLoading) return const Center(child: CircularProgressIndicator());
 
-    final entries = _filteredEntries();
+    final entries = _workoutEntries();
 
     // ✅ BEFORE-pop handling: prevent pop, show warning once, then pop manually.
     return PopScope(
@@ -1315,12 +1431,12 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
         child: ListView(
           children: [
             Row(
+              mainAxisAlignment: MainAxisAlignment.end,
               children: [
-                Expanded(
-                  child: Text(
-                    'Workout Summary',
-                    style: Theme.of(context).textTheme.headlineSmall,
-                  ),
+                IconButton(
+                  tooltip: 'Meal Tracker',
+                  onPressed: _openMealTracker,
+                  icon: const Icon(Icons.restaurant),
                 ),
                 IconButton(
                   tooltip: 'Suggest Routine',
@@ -1340,27 +1456,28 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 ),
                 IconButton(
                   tooltip: 'Share',
-                  onPressed: entries.isEmpty ? null : _openSharePicker,
+                  onPressed:
+                      entries.any((s) => s.isCurrentUser) ? _openSharePicker : null,
                   icon: const Icon(Icons.share),
                 ),
               ],
+            ),
+            Text(
+              'Workout Summary',
+              style: Theme.of(context).textTheme.headlineSmall,
             ),
             const SizedBox(height: 12),
 
             _buildSuggestedRoutineCard(),
             if (_suggestedRoutine != null) const SizedBox(height: 12),
 
-            _buildFilterBar(),
-            const SizedBox(height: 16),
-
-            if (summaryByDay.isEmpty)
+            if (workoutFeed.isEmpty)
               const Text('No workouts logged yet.')
             else if (entries.isEmpty)
-              const Text('No workouts found for this filter.')
+              const Text('No workouts found.')
             else
-              ...entries.map((entry) {
-                final date = entry.key;
-                final s = entry.value;
+              ...entries.map((s) {
+                final date = s.day;
 
                 final muscleEntries = s.muscleGroupCounts.entries.toList()
                   ..sort((a, b) => b.value.compareTo(a.value));
@@ -1387,6 +1504,15 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                   style: Theme.of(context).textTheme.bodySmall,
                                 ),
                               ],
+                            ),
+                          ),
+                          Padding(
+                            padding: const EdgeInsets.only(right: 8),
+                            child: Text(
+                              s.displayOwner,
+                              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                    fontWeight: FontWeight.w700,
+                                  ),
                             ),
                           ),
                           Container(
