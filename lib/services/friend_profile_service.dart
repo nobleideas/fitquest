@@ -14,6 +14,18 @@ class FriendProfileData {
   });
 }
 
+class FriendWorkoutFeedData {
+  final String userId;
+  final String username;
+  final List<Map<String, dynamic>> history;
+
+  const FriendWorkoutFeedData({
+    required this.userId,
+    required this.username,
+    required this.history,
+  });
+}
+
 class FriendImportResult {
   final int addedContainers;
   final int skippedContainers;
@@ -110,6 +122,93 @@ class FriendProfileService {
       containers: _mapList(results[1]),
       exercises: _mapList(results[2]),
     );
+  }
+
+
+  Future<List<Map<String, dynamic>>> getAcceptedFriends() async {
+    final user = supabase.auth.currentUser;
+    if (user == null) return <Map<String, dynamic>>[];
+
+    final rows = await supabase
+        .from('friend_requests')
+        .select('requester_id, recipient_id, status')
+        .eq('status', 'accepted')
+        .or('requester_id.eq.${user.id},recipient_id.eq.${user.id}');
+
+    final friendIds = <String>{};
+
+    for (final raw in rows) {
+      if (raw is! Map) continue;
+      final row = Map<String, dynamic>.from(raw);
+
+      final requesterId = (row['requester_id'] ?? '').toString().trim();
+      final recipientId = (row['recipient_id'] ?? '').toString().trim();
+
+      if (requesterId == user.id && recipientId.isNotEmpty) {
+        friendIds.add(recipientId);
+      } else if (recipientId == user.id && requesterId.isNotEmpty) {
+        friendIds.add(requesterId);
+      }
+    }
+
+    if (friendIds.isEmpty) return <Map<String, dynamic>>[];
+
+    final profiles = await supabase
+        .from('profiles')
+        .select('id, username')
+        .inFilter('id', friendIds.toList());
+
+    final result = (profiles as List)
+        .whereType<Map>()
+        .map((row) => Map<String, dynamic>.from(row))
+        .where((row) => (row['id'] ?? '').toString().trim().isNotEmpty)
+        .toList();
+
+    result.sort((a, b) {
+      final aUsername = (a['username'] ?? '').toString().toLowerCase();
+      final bUsername = (b['username'] ?? '').toString().toLowerCase();
+      return aUsername.compareTo(bUsername);
+    });
+
+    return result;
+  }
+
+  Future<List<FriendWorkoutFeedData>> loadAcceptedFriendWorkoutFeed() async {
+    final friends = await getAcceptedFriends();
+    if (friends.isEmpty) return <FriendWorkoutFeedData>[];
+
+    final results = await Future.wait(
+      friends.map((friend) async {
+        final friendUserId = (friend['id'] ?? '').toString().trim();
+        final username = (friend['username'] ?? '').toString().trim();
+
+        if (friendUserId.isEmpty) {
+          return null;
+        }
+
+        try {
+          final historyRaw = await supabase.rpc(
+            'get_friend_workout_history',
+            params: {
+              'friend_user_id': friendUserId,
+              'max_rows': 250,
+            },
+          );
+
+          return FriendWorkoutFeedData(
+            userId: friendUserId,
+            username: username,
+            history: _mapList(historyRaw),
+          );
+        } catch (_) {
+          // One inaccessible friend should not prevent the rest of the feed
+          // from loading.
+          return null;
+        }
+      }),
+    );
+
+    return results.whereType<FriendWorkoutFeedData>().toList();
   }
 
   List<Map<String, dynamic>> _mapList(dynamic value) {
