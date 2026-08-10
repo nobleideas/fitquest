@@ -331,6 +331,7 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                     decoration: const InputDecoration(
                       labelText: 'Food item',
                       border: OutlineInputBorder(),
+                      contentPadding: EdgeInsets.fromLTRB(12, 16, 12, 12),
                     ),
                     items: _foodItems
                         .map(
@@ -372,6 +373,41 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                           ),
                         )
                         .toList(),
+                    selectedItemBuilder: (context) {
+                      return _foodItems.map((food) {
+                        return SizedBox(
+                          height: 48,
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                food.name,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                              if (food.brand.trim().isNotEmpty)
+                                Text(
+                                  food.brand,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .bodySmall
+                                      ?.copyWith(
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .onSurfaceVariant,
+                                      ),
+                                ),
+                            ],
+                          ),
+                        );
+                      }).toList();
+                    },
                     onChanged: saving
                         ? null
                         : (value) {
