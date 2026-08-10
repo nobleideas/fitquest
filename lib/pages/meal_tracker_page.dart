@@ -409,6 +409,56 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
     servings.dispose();
   }
 
+  Future<bool> _confirmDeleteConsumedFood(ConsumedFood item) async {
+    final foodName = item.food.brand.trim().isEmpty
+        ? item.food.name
+        : '${item.food.brand} ${item.food.name}';
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Remove consumed item?'),
+        content: Text(
+          'Remove $foodName from this day\\'s food log? '
+          'This will not delete the saved food item itself.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return false;
+
+    try {
+      await _mealService.deleteConsumption(item.id);
+      await _loadData();
+
+      if (!mounted) return true;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Consumed item removed.')),
+      );
+
+      return true;
+    } catch (e) {
+      if (!mounted) return false;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not remove consumed item: $e')),
+      );
+
+      return false;
+    }
+  }
+
   Widget _metricBox(String label, double value, {String suffix = 'g'}) {
     return Expanded(
       child: Container(
@@ -437,6 +487,27 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
     );
   }
 
+  Widget _macroHeaderCell(String label) {
+    return SizedBox(
+      width: 44,
+      child: Text(
+        label,
+        textAlign: TextAlign.right,
+        style: const TextStyle(fontWeight: FontWeight.w700),
+      ),
+    );
+  }
+
+  Widget _macroValueCell(double value) {
+    return SizedBox(
+      width: 44,
+      child: Text(
+        _formatNumber(value),
+        textAlign: TextAlign.right,
+      ),
+    );
+  }
+
   Widget _dailySummaryCard(DailyMealSummary summary) {
     return Card(
       margin: const EdgeInsets.only(bottom: 14),
@@ -445,28 +516,57 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              _formatDate(summary.day),
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.bold,
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    _formatDate(summary.day),
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.bold,
+                        ),
                   ),
+                ),
+                _macroHeaderCell('P'),
+                _macroHeaderCell('C'),
+                _macroHeaderCell('F'),
+              ],
             ),
             const SizedBox(height: 10),
             ...summary.items.map(
-              (item) => Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text('• '),
-                    Expanded(
-                      child: Text(
-                        '${item.food.brand} ${item.food.name} × '
-                        '${_formatNumber(item.servings)}',
+              (item) => Dismissible(
+                key: ValueKey('consumed-${item.id}'),
+                direction: DismissDirection.endToStart,
+                confirmDismiss: (_) => _confirmDeleteConsumedFood(item),
+                background: Container(
+                  margin: const EdgeInsets.only(bottom: 8),
+                  padding: const EdgeInsets.symmetric(horizontal: 18),
+                  alignment: Alignment.centerRight,
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.errorContainer,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Icon(
+                    Icons.delete_outline,
+                    color: Theme.of(context).colorScheme.onErrorContainer,
+                  ),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      Expanded(
+                        child: Text(
+                          '${item.food.brand} ${item.food.name} × '
+                          '${_formatNumber(item.servings)}'
+                          '  •  ${_formatNumber(item.calories)} cal',
+                        ),
                       ),
-                    ),
-                    Text('${_formatNumber(item.calories)} cal'),
-                  ],
+                      _macroValueCell(item.protein),
+                      _macroValueCell(item.carbs),
+                      _macroValueCell(item.fat),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -476,8 +576,8 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
               runSpacing: 6,
               children: [
                 Text('${_formatNumber(summary.calories)} calories'),
-                Text('${_formatNumber(summary.carbs)}g carbs'),
                 Text('${_formatNumber(summary.protein)}g protein'),
+                Text('${_formatNumber(summary.carbs)}g carbs'),
                 Text('${_formatNumber(summary.fat)}g fat'),
               ],
             ),
