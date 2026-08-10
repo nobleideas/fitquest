@@ -331,7 +331,7 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                     decoration: const InputDecoration(
                       labelText: 'Food item',
                       border: OutlineInputBorder(),
-                      contentPadding: EdgeInsets.fromLTRB(12, 16, 12, 12),
+                      contentPadding: EdgeInsets.fromLTRB(12, 18, 12, 18),
                     ),
                     items: _foodItems
                         .map(
@@ -376,7 +376,7 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                     selectedItemBuilder: (context) {
                       return _foodItems.map((food) {
                         return SizedBox(
-                          height: 48,
+                          height: 56,
                           child: Column(
                             mainAxisAlignment: MainAxisAlignment.center,
                             crossAxisAlignment: CrossAxisAlignment.start,
