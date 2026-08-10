@@ -28,9 +28,6 @@ class ProfilePageState extends State<ProfilePage> {
   final _friendUsernameController = TextEditingController();
   bool _isSendingRequest = false;
 
-  // Duplicate cleanup UI state
-  bool _isMergingDuplicates = false;
-
   // Reset stats UI state
   bool _isResettingStats = false;
 
@@ -215,79 +212,6 @@ class ProfilePageState extends State<ProfilePage> {
   }
 
   
-
-  Future<void> _mergeDuplicateExercises(BuildContext context) async {
-    
-    final confirm = await showDialog<bool>(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text("Merge duplicate exercises?"),
-        content: const Text(
-          "This will combine exercises with equivalent names, preserve "
-          "workout history, routine links, and form-video references, then "
-          "delete the redundant exercise records.\n\n"
-          "Examples treated as the same include Push Up, Push-Ups, and Pushups.",
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text("Cancel"),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text("Merge"),
-          ),
-        ],
-      ),
-    );
-
-    if (confirm != true) return;
-
-    setState(() => _isMergingDuplicates = true);
-
-    try {
-      final result = await _exerciseService.mergeMyDuplicateExercises();
-      final deletedEquipment = result['deleted_equipment'] ?? 0;
-      final deletedRoutines = result['deleted_routines'] ?? 0;
-
-      if (!mounted) return;
-
-      final mergedGroups = result['merged_groups'] ?? 0;
-      final deletedExercises = result['deleted_exercises'] ?? 0;
-      final movedSessions = result['moved_sessions'] ?? 0;
-      final movedRoutineLinks = result['moved_routine_links'] ?? 0;
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          behavior: SnackBarBehavior.floating,
-          duration: const Duration(seconds: 6),
-          content: Text(
-          "Merged $mergedGroups group(s) • "
-          "Deleted $deletedExercises duplicate exercise(s) • "
-          "Moved $movedSessions session(s) • "
-          "Moved $movedRoutineLinks routine link(s) • "
-          "Deleted $deletedEquipment empty equipment item(s) • "
-          "Deleted $deletedRoutines empty routine(s)",
-        ),
-        ),
-      );
-
-      refresh();
-    } catch (e) {
-      if (!mounted) return;
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          behavior: SnackBarBehavior.floating,
-          content: Text("Duplicate cleanup failed: $e"),
-        ),
-      );
-    } finally {
-      if (mounted) {
-        setState(() => _isMergingDuplicates = false);
-      }
-    }
-  }
 
   Future<void> _resetStats(BuildContext context) async {
     final confirm = await showDialog<bool>(
@@ -791,29 +715,6 @@ class ProfilePageState extends State<ProfilePage> {
               _volumeBar("Arms", arms),
               _volumeBar("Legs", legs),
               _volumeBar("Core", core),
-
-              // Merge duplicate exercises
-              const SizedBox(height: 8),
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton.icon(
-                  icon: _isMergingDuplicates
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.merge_type),
-                  label: Text(
-                    _isMergingDuplicates
-                        ? "Merging Duplicate Exercises..."
-                        : "Merge Duplicate Exercises",
-                  ),
-                  onPressed: _isMergingDuplicates || _isResettingStats
-                      ? null
-                      : () => _mergeDuplicateExercises(context),
-                ),
-              ),
 
               // Reset Stats after stats
               const SizedBox(height: 12),

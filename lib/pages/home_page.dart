@@ -452,9 +452,9 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
     final title =
         titleOverride ??
-        _selectedFilter == WorkoutFilter.all
+        (_selectedFilter == WorkoutFilter.all
             ? 'Fit Quest — Workout Summary for ${_shareHandle()}'
-            : 'Fit Quest — ${_filterLabel(_selectedFilter)} Workout Summary for ${_shareHandle()}';
+            : 'Fit Quest — ${_filterLabel(_selectedFilter)} Workout Summary for ${_shareHandle()}');
     b.writeln(title);
     b.writeln('');
 
