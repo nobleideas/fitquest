@@ -30,13 +30,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
   Map<String, List<Map<String, dynamic>>> sessionsByDayKey = {};
   Map<String, double> volumeByDayKey = {};
 
-  // -------- Profile Goal / Suggestions --------
-  String? _userGoal; // gain_strength, gain_mass, lose_weight
-  double? _suggestedWeight;
-  int? _suggestedReps;
-  int? _suggestedSets;
-  String? _suggestionNote;
-
+  // -------- Progress --------
   double? _strengthTrendPercent;
   double? _volumeTrendPercent;
   String _strengthTrendLabel = 'Not enough data';
@@ -97,44 +91,6 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
     return int.tryParse(v.toString()) ?? 0;
   }
 
-  double _roundTo(double value, double step) {
-    if (step <= 0) return value;
-    return (value / step).round() * step;
-  }
-
-  double _median(List<double> values) {
-    if (values.isEmpty) return 0;
-    final sorted = [...values]..sort();
-    final mid = sorted.length ~/ 2;
-    if (sorted.length.isOdd) return sorted[mid];
-    return (sorted[mid - 1] + sorted[mid]) / 2.0;
-  }
-
-  // ---------- Load user goal ----------
-  Future<void> _loadUserGoal() async {
-    try {
-      final client = Supabase.instance.client;
-      final user = client.auth.currentUser;
-      if (user == null) return;
-
-      final data = await client
-          .from('profiles')
-          .select('goal')
-          .eq('id', user.id)
-          .maybeSingle();
-
-      final goal = data?['goal']?.toString().trim();
-      if (!mounted) return;
-
-      setState(() {
-        _userGoal = (goal != null && goal.isNotEmpty) ? goal : null;
-      });
-
-      _computeSuggestion();
-    } catch (_) {
-      // suggestions still work without a goal
-    }
-  }
 
   // ---------- Sessions ----------
   Future<void> _loadTodayAndLast4Days() async {
@@ -214,7 +170,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
       volumeByDayKey = volMap;
     });
 
-    await _computeSuggestion();
+    await _loadProgress();
   }
 
   Future<void> _deleteSession(String sessionId) async {
@@ -292,8 +248,8 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
   }
 }
 
-  // ---------- Rolling suggestion and progress ----------
-  Future<void> _computeSuggestion() async {
+  // ---------- Rolling progress ----------
+  Future<void> _loadProgress() async {
     try {
       final exerciseId = (widget.exercise['id'] ?? '').toString().trim();
       if (exerciseId.isEmpty) return;
@@ -304,10 +260,6 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
 
       if (!mounted) return;
       setState(() {
-        _suggestedWeight = performance.suggestedWeight;
-        _suggestedReps = performance.suggestedReps;
-        _suggestedSets = performance.suggestedSets;
-        _suggestionNote = performance.suggestionNote;
         _strengthTrendPercent = performance.strengthTrendPercent;
         _volumeTrendPercent = performance.volumeTrendPercent;
         _strengthTrendLabel = performance.strengthTrendLabel;
@@ -317,7 +269,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
     } catch (e) {
       if (!mounted) return;
       setState(() {
-        _suggestionNote = 'Could not calculate suggestions: $e';
+        _progressSummary = 'Could not calculate progress: $e';
       });
     }
   }
@@ -825,70 +777,6 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
 
             const SizedBox(height: 16),
 
-            // ----------------- Suggested Next Session -----------------
-            if (_suggestedReps != null && _suggestedSets != null)
-              Card(
-                elevation: 2,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          const Icon(Icons.auto_awesome),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              "Suggested Next Session",
-                              style: Theme.of(context).textTheme.titleMedium,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                        ],
-                      ),
-                      if (_suggestionNote != null) ...[
-                        const SizedBox(height: 6),
-                        Text(
-                          _suggestionNote!,
-                          style: Theme.of(context).textTheme.bodySmall,
-                        ),
-                      ],
-                      const SizedBox(height: 10),
-                      Wrap(
-                        spacing: 8,
-                        runSpacing: 8,
-                        children: [
-                          if (_suggestedWeight != null)
-                            Chip(
-                              label: Text(
-                                "Weight: ${_suggestedWeight!.toStringAsFixed(_suggestedWeight! % 1 == 0 ? 0 : 1)}",
-                              ),
-                            )
-                          else
-                            const Chip(label: Text("Weight: —")),
-                          Chip(label: Text("Reps: $_suggestedReps")),
-                          Chip(label: Text("Sets: $_suggestedSets")),
-                          if (_userGoal != null && _userGoal!.isNotEmpty)
-                            Chip(label: Text("Goal: $_userGoal")),
-                        ],
-                      ),
-                      const SizedBox(height: 6),
-                      Text(
-                        "Tip: Aim for $_suggestedSets × $_suggestedReps${_suggestedWeight == null ? '' : ' at the suggested weight.'}",
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-
-            const SizedBox(height: 12),
-
             if (_progressSummary != null)
               Card(
                 elevation: 2,
@@ -946,7 +834,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
             const SizedBox(height: 8),
             Text(
               "Today's sets are shown here but are excluded from the current "
-              "suggestion and progress calculations until the calendar day changes.",
+              "progress calculations until the calendar day changes.",
               style: Theme.of(context).textTheme.bodySmall,
             ),
             const SizedBox(height: 12),
