@@ -132,6 +132,60 @@ class MealService {
     return FoodItem.fromMap(Map<String, dynamic>.from(row));
   }
 
+  Future<FoodItem> updateFoodItem({
+    required String foodItemId,
+    required String name,
+    required String brand,
+    required double calories,
+    required double fat,
+    required double carbs,
+    required double protein,
+  }) async {
+    final row = await supabase
+        .from('food_items')
+        .update({
+          'name': _toTitleCase(name),
+          'brand': _toTitleCase(brand),
+          'calories': calories,
+          'fat': fat,
+          'carbs': carbs,
+          'protein': protein,
+        })
+        .eq('id', foodItemId)
+        .eq('user_id', _userId)
+        .select('id, name, brand, calories, fat, carbs, protein')
+        .single();
+
+    return FoodItem.fromMap(Map<String, dynamic>.from(row));
+  }
+
+  Future<void> deleteFoodItem(String foodItemId) async {
+    final user = supabase.auth.currentUser;
+    if (user == null) {
+      throw StateError('User must be logged in.');
+    }
+
+    final usageRows = await supabase
+        .from('food_consumptions')
+        .select('id')
+        .eq('user_id', user.id)
+        .eq('food_item_id', foodItemId)
+        .limit(1);
+
+    if ((usageRows as List).isNotEmpty) {
+      throw StateError(
+        'This food has already been used in your food log. '
+        'Remove its consumed entries from the food log first, then delete the saved food item.',
+      );
+    }
+
+    await supabase
+        .from('food_items')
+        .delete()
+        .eq('id', foodItemId)
+        .eq('user_id', user.id);
+  }
+
   Future<void> consumeFood({
     required String foodItemId,
     required double servings,
