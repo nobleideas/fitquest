@@ -799,6 +799,12 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
       final summary = ordered[summaryIndex];
 
       buffer.writeln(_formatDate(summary.day));
+      buffer.writeln('DAILY TOTAL');
+      buffer.writeln('Calories: ${_formatNumber(summary.calories)}');
+      buffer.writeln('Protein: ${_formatNumber(summary.protein)}g');
+      buffer.writeln('Carbs: ${_formatNumber(summary.carbs)}g');
+      buffer.writeln('Fat: ${_formatNumber(summary.fat)}g');
+      buffer.writeln();
       buffer.writeln('FOODS');
       buffer.writeln();
 
@@ -817,14 +823,7 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
         buffer.writeln();
       }
 
-      buffer.writeln('DAILY TOTAL');
-      buffer.writeln('Calories: ${_formatNumber(summary.calories)}');
-      buffer.writeln('Protein: ${_formatNumber(summary.protein)}g');
-      buffer.writeln('Carbs: ${_formatNumber(summary.carbs)}g');
-      buffer.writeln('Fat: ${_formatNumber(summary.fat)}g');
-
       if (summaryIndex < ordered.length - 1) {
-        buffer.writeln();
         buffer.writeln('--------------------');
         buffer.writeln();
       }
