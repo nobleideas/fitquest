@@ -37,6 +37,40 @@ class FoodItem {
   }
 }
 
+
+class MealComponent {
+  final String foodItemId;
+  final FoodItem food;
+  final double servings;
+
+  const MealComponent({
+    required this.foodItemId,
+    required this.food,
+    required this.servings,
+  });
+}
+
+class SavedMeal {
+  final String id;
+  final String name;
+  final List<MealComponent> components;
+
+  const SavedMeal({
+    required this.id,
+    required this.name,
+    required this.components,
+  });
+
+  double get calories =>
+      components.fold(0, (sum, item) => sum + item.food.calories * item.servings);
+  double get fat =>
+      components.fold(0, (sum, item) => sum + item.food.fat * item.servings);
+  double get carbs =>
+      components.fold(0, (sum, item) => sum + item.food.carbs * item.servings);
+  double get protein =>
+      components.fold(0, (sum, item) => sum + item.food.protein * item.servings);
+}
+
 class ConsumedFood {
   final String id;
   final DateTime consumedAt;
@@ -184,6 +218,151 @@ class MealService {
         .delete()
         .eq('id', foodItemId)
         .eq('user_id', user.id);
+  }
+
+  Future<List<SavedMeal>> getMeals() async {
+    final rows = await supabase
+        .from('meals')
+        .select(
+          'id, name, meal_items(servings, food_item_id, food_items(id, name, brand, calories, fat, carbs, protein))',
+        )
+        .eq('user_id', _userId)
+        .order('name', ascending: true);
+
+    final meals = <SavedMeal>[];
+
+    for (final raw in (rows as List)) {
+      if (raw is! Map) continue;
+      final row = Map<String, dynamic>.from(raw);
+
+      final components = <MealComponent>[];
+      final itemRows = row['meal_items'];
+
+      if (itemRows is List) {
+        for (final itemRaw in itemRows) {
+          if (itemRaw is! Map) continue;
+          final item = Map<String, dynamic>.from(itemRaw);
+
+          final joinedFood = item['food_items'];
+          if (joinedFood is! Map) continue;
+
+          final servingsRaw = item['servings'];
+          final servings = servingsRaw is num
+              ? servingsRaw.toDouble()
+              : double.tryParse((servingsRaw ?? '').toString()) ?? 0;
+
+          final food = FoodItem.fromMap(
+            Map<String, dynamic>.from(joinedFood),
+          );
+
+          components.add(
+            MealComponent(
+              foodItemId: (item['food_item_id'] ?? food.id).toString(),
+              food: food,
+              servings: servings,
+            ),
+          );
+        }
+      }
+
+      meals.add(
+        SavedMeal(
+          id: (row['id'] ?? '').toString(),
+          name: (row['name'] ?? '').toString(),
+          components: components,
+        ),
+      );
+    }
+
+    meals.sort(
+      (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
+    );
+
+    return meals;
+  }
+
+  Future<SavedMeal> addMeal({
+    required String name,
+    required Map<String, double> foodServings,
+  }) async {
+    final cleanName = _sanitizeDisplayText(name);
+
+    if (cleanName.isEmpty) {
+      throw StateError('Enter a meal name.');
+    }
+
+    final validItems = foodServings.entries
+        .where((entry) => entry.value > 0)
+        .toList();
+
+    if (validItems.isEmpty) {
+      throw StateError('Select at least one food item for the meal.');
+    }
+
+    final mealRow = await supabase
+        .from('meals')
+        .insert({
+          'user_id': _userId,
+          'name': cleanName,
+        })
+        .select('id, name')
+        .single();
+
+    final mealId = (mealRow['id'] ?? '').toString();
+
+    try {
+      await supabase.from('meal_items').insert(
+        validItems
+            .map(
+              (entry) => {
+                'meal_id': mealId,
+                'food_item_id': entry.key,
+                'servings': entry.value,
+              },
+            )
+            .toList(),
+      );
+    } catch (_) {
+      await supabase
+          .from('meals')
+          .delete()
+          .eq('id', mealId)
+          .eq('user_id', _userId);
+      rethrow;
+    }
+
+    final meals = await getMeals();
+    return meals.firstWhere((meal) => meal.id == mealId);
+  }
+
+  Future<void> consumeMeal({
+    required SavedMeal meal,
+    double mealQuantity = 1,
+    DateTime? consumedAt,
+  }) async {
+    if (mealQuantity <= 0) {
+      throw StateError('Meal quantity must be greater than zero.');
+    }
+
+    if (meal.components.isEmpty) {
+      throw StateError('This meal does not contain any food items.');
+    }
+
+    final timestamp =
+        (consumedAt ?? DateTime.now()).toUtc().toIso8601String();
+
+    await supabase.from('food_consumptions').insert(
+      meal.components
+          .map(
+            (component) => {
+              'user_id': _userId,
+              'food_item_id': component.foodItemId,
+              'servings': component.servings * mealQuantity,
+              'consumed_at': timestamp,
+            },
+          )
+          .toList(),
+    );
   }
 
   Future<void> consumeFood({
