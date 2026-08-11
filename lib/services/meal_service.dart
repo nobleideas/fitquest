@@ -144,8 +144,8 @@ class MealService {
     final row = await supabase
         .from('food_items')
         .update({
-          'name': _toTitleCase(name),
-          'brand': _toTitleCase(brand),
+          'name': _sanitizeDisplayText(name),
+          'brand': _sanitizeDisplayText(brand),
           'calories': calories,
           'fat': fat,
           'carbs': carbs,
