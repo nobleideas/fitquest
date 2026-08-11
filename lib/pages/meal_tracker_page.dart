@@ -438,6 +438,346 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
     protein.dispose();
   }
 
+  Future<void> _openEditMealDialog(SavedMeal meal) async {
+    final mealName = TextEditingController(text: meal.name);
+
+    final selectedIds = meal.components
+        .map((component) => component.foodItemId)
+        .toSet();
+
+    final servingControllers = <String, TextEditingController>{
+      for (final food in _foodItems)
+        food.id: TextEditingController(
+          text: _formatNumber(
+            meal.components
+                .where((component) => component.foodItemId == food.id)
+                .map((component) => component.servings)
+                .fold<double>(0, (sum, value) => sum + value),
+          ),
+        ),
+    };
+
+    for (final food in _foodItems) {
+      if (!selectedIds.contains(food.id)) {
+        servingControllers[food.id]!.text = '1';
+      }
+    }
+
+    bool saving = false;
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setLocal) {
+          Future<void> saveMeal() async {
+            final name = mealName.text.trim();
+
+            if (name.isEmpty || selectedIds.isEmpty) {
+              ScaffoldMessenger.of(this.context).showSnackBar(
+                const SnackBar(
+                  content: Text(
+                    'Enter a meal name and select at least one food item.',
+                  ),
+                ),
+              );
+              return;
+            }
+
+            final components = <String, double>{};
+
+            for (final foodId in selectedIds) {
+              final quantity = double.tryParse(
+                servingControllers[foodId]!.text.trim(),
+              );
+
+              if (quantity == null || quantity <= 0) {
+                ScaffoldMessenger.of(this.context).showSnackBar(
+                  const SnackBar(
+                    content: Text(
+                      'Every selected food needs a serving quantity greater than zero.',
+                    ),
+                  ),
+                );
+                return;
+              }
+
+              components[foodId] = quantity;
+            }
+
+            setLocal(() => saving = true);
+
+            try {
+              await _mealService.updateMeal(
+                mealId: meal.id,
+                name: name,
+                foodServings: components,
+              );
+
+              if (!mounted) return;
+              Navigator.of(dialogContext).pop();
+              await _loadData();
+
+              if (!mounted) return;
+              ScaffoldMessenger.of(this.context).showSnackBar(
+                const SnackBar(content: Text('Meal updated.')),
+              );
+            } catch (e) {
+              if (!mounted) return;
+              setLocal(() => saving = false);
+              ScaffoldMessenger.of(this.context).showSnackBar(
+                SnackBar(content: Text('Could not update meal: $e')),
+              );
+            }
+          }
+
+          return AlertDialog(
+            title: const Text('Edit Meal'),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(
+                    controller: mealName,
+                    decoration: const InputDecoration(
+                      labelText: 'Meal name',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Flexible(
+                    child: ListView.separated(
+                      shrinkWrap: true,
+                      itemCount: _foodItems.length,
+                      separatorBuilder: (_, __) => const Divider(height: 1),
+                      itemBuilder: (context, index) {
+                        final food = _foodItems[index];
+                        final selected = selectedIds.contains(food.id);
+
+                        return Row(
+                          children: [
+                            Checkbox(
+                              value: selected,
+                              onChanged: saving
+                                  ? null
+                                  : (value) {
+                                      setLocal(() {
+                                        if (value == true) {
+                                          selectedIds.add(food.id);
+                                        } else {
+                                          selectedIds.remove(food.id);
+                                        }
+                                      });
+                                    },
+                            ),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    food.name,
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                  if (food.brand.trim().isNotEmpty)
+                                    Text(
+                                      food.brand,
+                                      style:
+                                          Theme.of(context).textTheme.bodySmall,
+                                    ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            SizedBox(
+                              width: 72,
+                              child: TextField(
+                                controller: servingControllers[food.id],
+                                enabled: selected && !saving,
+                                keyboardType:
+                                    const TextInputType.numberWithOptions(
+                                  decimal: true,
+                                ),
+                                textAlign: TextAlign.center,
+                                decoration: const InputDecoration(
+                                  labelText: 'Qty',
+                                  isDense: true,
+                                  border: OutlineInputBorder(),
+                                ),
+                              ),
+                            ),
+                          ],
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed:
+                    saving ? null : () => Navigator.of(dialogContext).pop(),
+                child: const Text('Cancel'),
+              ),
+              ElevatedButton.icon(
+                onPressed: saving ? null : saveMeal,
+                icon: saving
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.save),
+                label: const Text('Save Changes'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+
+    mealName.dispose();
+    for (final controller in servingControllers.values) {
+      controller.dispose();
+    }
+  }
+
+  Future<void> _openManageMealsDialog() async {
+    if (_meals.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No saved meals to manage.')),
+      );
+      return;
+    }
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setLocal) {
+          return AlertDialog(
+            title: const Text('Manage Meals'),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: _meals.isEmpty
+                  ? const Text('No saved meals.')
+                  : ListView.separated(
+                      shrinkWrap: true,
+                      itemCount: _meals.length,
+                      separatorBuilder: (_, __) => const Divider(height: 1),
+                      itemBuilder: (context, index) {
+                        final meal = _meals[index];
+
+                        final componentText = meal.components
+                            .map(
+                              (component) =>
+                                  '${component.food.name} × ${_formatNumber(component.servings)}',
+                            )
+                            .join(' • ');
+
+                        return ListTile(
+                          contentPadding: EdgeInsets.zero,
+                          title: Text(
+                            meal.name,
+                            style: const TextStyle(fontWeight: FontWeight.w700),
+                          ),
+                          subtitle: Text(
+                            componentText,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          trailing: Wrap(
+                            spacing: 0,
+                            children: [
+                              IconButton(
+                                tooltip: 'Edit meal',
+                                icon: const Icon(Icons.edit_outlined),
+                                onPressed: () async {
+                                  await _openEditMealDialog(meal);
+                                  if (mounted) setLocal(() {});
+                                },
+                              ),
+                              IconButton(
+                                tooltip: 'Delete meal',
+                                icon: const Icon(Icons.delete_outline),
+                                onPressed: () async {
+                                  final confirmed = await showDialog<bool>(
+                                    context: this.context,
+                                    builder: (confirmContext) => AlertDialog(
+                                      title: const Text('Delete meal?'),
+                                      content: Text(
+                                        'Delete ${meal.name} from your saved meals?\\n\\n'
+                                        'This only deletes the reusable meal template. '
+                                        'Food-log entries you already consumed will remain.',
+                                      ),
+                                      actions: [
+                                        TextButton(
+                                          onPressed: () =>
+                                              Navigator.of(confirmContext)
+                                                  .pop(false),
+                                          child: const Text('Cancel'),
+                                        ),
+                                        ElevatedButton(
+                                          onPressed: () =>
+                                              Navigator.of(confirmContext)
+                                                  .pop(true),
+                                          child: const Text('Delete'),
+                                        ),
+                                      ],
+                                    ),
+                                  );
+
+                                  if (confirmed != true) return;
+
+                                  try {
+                                    await _mealService.deleteMeal(meal.id);
+                                    await _loadData();
+
+                                    if (!mounted) return;
+                                    setLocal(() {});
+
+                                    ScaffoldMessenger.of(this.context)
+                                        .showSnackBar(
+                                      SnackBar(
+                                        content: Text('${meal.name} deleted.'),
+                                      ),
+                                    );
+
+                                    if (_meals.isEmpty &&
+                                        Navigator.of(dialogContext).canPop()) {
+                                      Navigator.of(dialogContext).pop();
+                                    }
+                                  } catch (e) {
+                                    if (!mounted) return;
+                                    ScaffoldMessenger.of(this.context)
+                                        .showSnackBar(
+                                      SnackBar(
+                                        content:
+                                            Text('Could not delete meal: $e'),
+                                      ),
+                                    );
+                                  }
+                                },
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                child: const Text('Done'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
   Future<void> _openManageFoodItemsDialog() async {
     if (_foodItems.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1584,6 +1924,16 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                           : _openManageFoodItemsDialog,
                       icon: const Icon(Icons.inventory_2_outlined),
                       label: const Text('Manage Food Items'),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed:
+                          _meals.isEmpty ? null : _openManageMealsDialog,
+                      icon: const Icon(Icons.menu_book_outlined),
+                      label: const Text('Manage Meals'),
                     ),
                   ),
                   const SizedBox(height: 24),

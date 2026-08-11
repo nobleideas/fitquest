@@ -335,6 +335,60 @@ class MealService {
     return meals.firstWhere((meal) => meal.id == mealId);
   }
 
+  Future<SavedMeal> updateMeal({
+    required String mealId,
+    required String name,
+    required Map<String, double> foodServings,
+  }) async {
+    final cleanName = _sanitizeDisplayText(name);
+
+    if (cleanName.isEmpty) {
+      throw StateError('Enter a meal name.');
+    }
+
+    final validItems = foodServings.entries
+        .where((entry) => entry.value > 0)
+        .toList();
+
+    if (validItems.isEmpty) {
+      throw StateError('Select at least one food item for the meal.');
+    }
+
+    await supabase
+        .from('meals')
+        .update({'name': cleanName})
+        .eq('id', mealId)
+        .eq('user_id', _userId);
+
+    await supabase
+        .from('meal_items')
+        .delete()
+        .eq('meal_id', mealId);
+
+    await supabase.from('meal_items').insert(
+      validItems
+          .map(
+            (entry) => {
+              'meal_id': mealId,
+              'food_item_id': entry.key,
+              'servings': entry.value,
+            },
+          )
+          .toList(),
+    );
+
+    final meals = await getMeals();
+    return meals.firstWhere((meal) => meal.id == mealId);
+  }
+
+  Future<void> deleteMeal(String mealId) async {
+    await supabase
+        .from('meals')
+        .delete()
+        .eq('id', mealId)
+        .eq('user_id', _userId);
+  }
+
   Future<void> consumeMeal({
     required SavedMeal meal,
     double mealQuantity = 1,
