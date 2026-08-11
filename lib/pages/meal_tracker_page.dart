@@ -30,6 +30,7 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
 
   bool _isLoading = true;
   List<FoodItem> _foodItems = [];
+  List<SavedMeal> _meals = [];
   List<DailyMealSummary> _dailySummaries = [];
 
   DateTime _dayOnly(DateTime value) {
@@ -66,6 +67,7 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
 
     try {
       final foods = await _mealService.getFoodItems();
+      final meals = await _mealService.getMeals();
       final history = await _mealService.getConsumptionHistory();
 
       final grouped = <DateTime, List<ConsumedFood>>{};
@@ -94,6 +96,7 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
 
       setState(() {
         _foodItems = foods;
+        _meals = meals;
         _dailySummaries = summaries;
       });
     } catch (e) {
@@ -559,6 +562,368 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
         },
       ),
     );
+  }
+
+  Future<void> _openAddMealDialog() async {
+    if (_foodItems.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Add food items before creating a meal.'),
+        ),
+      );
+      return;
+    }
+
+    final mealName = TextEditingController();
+    final selectedIds = <String>{};
+    final servingControllers = <String, TextEditingController>{
+      for (final food in _foodItems)
+        food.id: TextEditingController(text: '1'),
+    };
+
+    bool saving = false;
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setLocal) {
+          Future<void> saveMeal() async {
+            final name = mealName.text.trim();
+
+            if (name.isEmpty || selectedIds.isEmpty) {
+              ScaffoldMessenger.of(this.context).showSnackBar(
+                const SnackBar(
+                  content: Text(
+                    'Enter a meal name and select at least one food item.',
+                  ),
+                ),
+              );
+              return;
+            }
+
+            final components = <String, double>{};
+
+            for (final foodId in selectedIds) {
+              final quantity = double.tryParse(
+                servingControllers[foodId]!.text.trim(),
+              );
+
+              if (quantity == null || quantity <= 0) {
+                ScaffoldMessenger.of(this.context).showSnackBar(
+                  const SnackBar(
+                    content: Text(
+                      'Every selected food needs a serving quantity greater than zero.',
+                    ),
+                  ),
+                );
+                return;
+              }
+
+              components[foodId] = quantity;
+            }
+
+            setLocal(() => saving = true);
+
+            try {
+              await _mealService.addMeal(
+                name: name,
+                foodServings: components,
+              );
+
+              if (!mounted) return;
+              Navigator.of(dialogContext).pop();
+              await _loadData();
+
+              if (!mounted) return;
+              ScaffoldMessenger.of(this.context).showSnackBar(
+                const SnackBar(content: Text('Meal saved.')),
+              );
+            } catch (e) {
+              if (!mounted) return;
+              setLocal(() => saving = false);
+              ScaffoldMessenger.of(this.context).showSnackBar(
+                SnackBar(content: Text('Could not save meal: $e')),
+              );
+            }
+          }
+
+          return AlertDialog(
+            title: const Text('Add Meal'),
+            content: SizedBox(
+              width: double.maxFinite,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextField(
+                    controller: mealName,
+                    decoration: const InputDecoration(
+                      labelText: 'Meal name',
+                      hintText: 'Quart Tupperware Of Ground Beef Alfredo Pasta',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Flexible(
+                    child: ListView.separated(
+                      shrinkWrap: true,
+                      itemCount: _foodItems.length,
+                      separatorBuilder: (_, __) => const Divider(height: 1),
+                      itemBuilder: (context, index) {
+                        final food = _foodItems[index];
+                        final selected = selectedIds.contains(food.id);
+
+                        return Row(
+                          children: [
+                            Checkbox(
+                              value: selected,
+                              onChanged: saving
+                                  ? null
+                                  : (value) {
+                                      setLocal(() {
+                                        if (value == true) {
+                                          selectedIds.add(food.id);
+                                        } else {
+                                          selectedIds.remove(food.id);
+                                        }
+                                      });
+                                    },
+                            ),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    food.name,
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                  if (food.brand.trim().isNotEmpty)
+                                    Text(
+                                      food.brand,
+                                      style:
+                                          Theme.of(context).textTheme.bodySmall,
+                                    ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            SizedBox(
+                              width: 72,
+                              child: TextField(
+                                controller: servingControllers[food.id],
+                                enabled: selected && !saving,
+                                keyboardType:
+                                    const TextInputType.numberWithOptions(
+                                  decimal: true,
+                                ),
+                                textAlign: TextAlign.center,
+                                decoration: const InputDecoration(
+                                  labelText: 'Qty',
+                                  isDense: true,
+                                  border: OutlineInputBorder(),
+                                ),
+                              ),
+                            ),
+                          ],
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed:
+                    saving ? null : () => Navigator.of(dialogContext).pop(),
+                child: const Text('Cancel'),
+              ),
+              ElevatedButton.icon(
+                onPressed: saving ? null : saveMeal,
+                icon: saving
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.save),
+                label: const Text('Save Meal'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+
+    mealName.dispose();
+    for (final controller in servingControllers.values) {
+      controller.dispose();
+    }
+  }
+
+  Future<void> _openConsumeMealDialog() async {
+    if (_meals.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Add a meal before trying to consume one.'),
+        ),
+      );
+      return;
+    }
+
+    SavedMeal selected = _meals.first;
+    final quantity = TextEditingController(text: '1');
+    bool saving = false;
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setLocal) {
+          final multiplier =
+              double.tryParse(quantity.text.trim()) ?? 0;
+
+          Future<void> consume() async {
+            final count = double.tryParse(quantity.text.trim());
+
+            if (count == null || count <= 0) {
+              ScaffoldMessenger.of(this.context).showSnackBar(
+                const SnackBar(
+                  content: Text('Enter a meal quantity greater than zero.'),
+                ),
+              );
+              return;
+            }
+
+            setLocal(() => saving = true);
+
+            try {
+              await _mealService.consumeMeal(
+                meal: selected,
+                mealQuantity: count,
+              );
+
+              if (!mounted) return;
+              Navigator.of(dialogContext).pop();
+              await _loadData();
+            } catch (e) {
+              if (!mounted) return;
+              setLocal(() => saving = false);
+              ScaffoldMessenger.of(this.context).showSnackBar(
+                SnackBar(content: Text('Could not consume meal: $e')),
+              );
+            }
+          }
+
+          return AlertDialog(
+            title: const Text('Consume Meal'),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  DropdownButtonFormField<SavedMeal>(
+                    value: selected,
+                    isExpanded: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Meal',
+                      border: OutlineInputBorder(),
+                    ),
+                    items: _meals
+                        .map(
+                          (meal) => DropdownMenuItem(
+                            value: meal,
+                            child: Text(
+                              meal.name,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: saving
+                        ? null
+                        : (value) {
+                            if (value != null) {
+                              setLocal(() => selected = value);
+                            }
+                          },
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: quantity,
+                    onChanged: (_) => setLocal(() {}),
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    decoration: const InputDecoration(
+                      labelText: 'Meal quantity',
+                      hintText: 'Example: 1, 0.5, 2',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  Text(
+                    '1 meal',
+                    style: Theme.of(context).textTheme.titleSmall,
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    '${_formatNumber(selected.calories)} cal • '
+                    '${_formatNumber(selected.protein)}g protein • '
+                    '${_formatNumber(selected.carbs)}g carbs • '
+                    '${_formatNumber(selected.fat)}g fat',
+                  ),
+                  const SizedBox(height: 10),
+                  ...selected.components.map(
+                    (component) => Padding(
+                      padding: const EdgeInsets.only(bottom: 4),
+                      child: Text(
+                        '• ${_foodDisplayName(component.food)} × '
+                        '${_formatNumber(component.servings)}',
+                      ),
+                    ),
+                  ),
+                  if (multiplier > 0) ...[
+                    const SizedBox(height: 12),
+                    Text(
+                      'This entry',
+                      style: Theme.of(context).textTheme.titleSmall,
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      '${_formatNumber(selected.calories * multiplier)} cal • '
+                      '${_formatNumber(selected.protein * multiplier)}g protein • '
+                      '${_formatNumber(selected.carbs * multiplier)}g carbs • '
+                      '${_formatNumber(selected.fat * multiplier)}g fat',
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed:
+                    saving ? null : () => Navigator.of(dialogContext).pop(),
+                child: const Text('Cancel'),
+              ),
+              ElevatedButton.icon(
+                onPressed: saving ? null : consume,
+                icon: saving
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.restaurant_menu),
+                label: const Text('Consume Meal'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+
+    quantity.dispose();
   }
 
   Future<void> _openConsumeFoodDialog() async {
@@ -1184,6 +1549,28 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                           onPressed: _openAddFoodDialog,
                           icon: const Icon(Icons.add),
                           label: const Text('Add Food Item'),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: ElevatedButton.icon(
+                          onPressed:
+                              _meals.isEmpty ? null : _openConsumeMealDialog,
+                          icon: const Icon(Icons.restaurant_menu),
+                          label: const Text('Consume Meal'),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed:
+                              _foodItems.isEmpty ? null : _openAddMealDialog,
+                          icon: const Icon(Icons.add_circle_outline),
+                          label: const Text('Add Meal'),
                         ),
                       ),
                     ],
