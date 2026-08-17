@@ -31,6 +31,9 @@ class ProfilePageState extends State<ProfilePage> {
   // Reset stats UI state
   bool _isResettingStats = false;
 
+  // Body weight UI state
+  bool _isSavingWeight = false;
+
   static const _goalOptions = <String, String>{
     'lose_weight': 'Lose Weight',
     'gain_mass': 'Gain Mass',
@@ -100,6 +103,9 @@ class ProfilePageState extends State<ProfilePage> {
     final yearWorkoutStatsFuture =
         _profileService.getCurrentYearWorkoutStats();
 
+    final bodyWeightHistoryFuture =
+        _profileService.getBodyWeightHistory();
+
     final results = await Future.wait<dynamic>([
       profileFuture,
       volumeFuture,
@@ -107,6 +113,7 @@ class ProfilePageState extends State<ProfilePage> {
       incomingRequestsFuture,
       exerciseVideoStatsFuture,
       yearWorkoutStatsFuture,
+      bodyWeightHistoryFuture,
     ]);
 
     final profile = Map<String, dynamic>.from(results[0] as Map);
@@ -142,6 +149,8 @@ class ProfilePageState extends State<ProfilePage> {
     }).length;
 
     final yearWorkoutStats = results[5] as YearWorkoutStats;
+    final bodyWeightHistory =
+        List<BodyWeightEntry>.from(results[6] as List);
 
     return {
       'profile': profile,
@@ -151,6 +160,7 @@ class ProfilePageState extends State<ProfilePage> {
       'totalExercises': totalExercises,
       'videosUploaded': videosUploaded,
       'yearWorkoutStats': yearWorkoutStats,
+      'bodyWeightHistory': bodyWeightHistory,
     };
   }
 
@@ -212,6 +222,495 @@ class ProfilePageState extends State<ProfilePage> {
   }
 
   
+
+  String _formatWeightDate(DateTime date) {
+    const months = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
+    return '${months[date.month - 1]} ${date.day}, ${date.year}';
+  }
+
+  String _activityLabel(String? level) {
+    switch (level) {
+      case 'low':
+        return 'Low';
+      case 'medium':
+        return 'Medium';
+      case 'high':
+        return 'High';
+      default:
+        return 'Not recorded';
+    }
+  }
+
+  String _activityDescription(String level) {
+    switch (level) {
+      case 'low':
+        return 'Mostly sitting, driving, or resting.';
+      case 'medium':
+        return 'Regularly on your feet, walking, errands, or light physical work.';
+      case 'high':
+        return 'Physically demanding day with lots of walking, lifting, or manual work.';
+      default:
+        return '';
+    }
+  }
+
+  Future<void> _showWeightEntryDialog({
+    BodyWeightEntry? existing,
+  }) async {
+    final controller = TextEditingController(
+      text: existing?.weightLbs.toStringAsFixed(1) ?? '',
+    );
+    DateTime selectedDate = existing?.date ?? DateTime.now();
+    String? selectedActivity = existing?.activityLevel;
+
+    final shouldSave = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setLocalState) {
+          return AlertDialog(
+            title: Text(existing == null ? 'Log daily metrics' : 'Edit daily metrics'),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  TextField(
+                    controller: controller,
+                    autofocus: true,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    decoration: const InputDecoration(
+                      labelText: 'Weight (lbs)',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  const Text(
+                    'Daily activity excluding workouts',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Do not count your FitQuest workout here.',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  SegmentedButton<String>(
+                    segments: const [
+                      ButtonSegment<String>(
+                        value: 'low',
+                        label: Text('Low'),
+                      ),
+                      ButtonSegment<String>(
+                        value: 'medium',
+                        label: Text('Medium'),
+                      ),
+                      ButtonSegment<String>(
+                        value: 'high',
+                        label: Text('High'),
+                      ),
+                    ],
+                    selected: selectedActivity == null
+                        ? <String>{}
+                        : <String>{selectedActivity!},
+                    emptySelectionAllowed: true,
+                    onSelectionChanged: (selection) {
+                      setLocalState(() {
+                        selectedActivity = selection.isEmpty
+                            ? null
+                            : selection.first;
+                      });
+                    },
+                  ),
+                  if (selectedActivity != null) ...[
+                    const SizedBox(height: 8),
+                    Text(
+                      _activityDescription(selectedActivity!),
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 16),
+                  if (existing == null)
+                    OutlinedButton.icon(
+                      onPressed: () async {
+                        final picked = await showDatePicker(
+                          context: context,
+                          initialDate: selectedDate,
+                          firstDate: DateTime(2000),
+                          lastDate: DateTime.now(),
+                        );
+                        if (picked != null) {
+                          setLocalState(() => selectedDate = picked);
+                        }
+                      },
+                      icon: const Icon(Icons.calendar_today_outlined, size: 18),
+                      label: Text(_formatWeightDate(selectedDate)),
+                    )
+                  else
+                    Row(
+                      children: [
+                        const Icon(Icons.calendar_today_outlined, size: 18),
+                        const SizedBox(width: 8),
+                        Text(_formatWeightDate(selectedDate)),
+                      ],
+                    ),
+                  if (existing == null) ...[
+                    const SizedBox(height: 6),
+                    Text(
+                      'Choose an earlier date to add or correct a previous day.',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: const Text('Cancel'),
+              ),
+              ElevatedButton(
+                onPressed: () => Navigator.pop(dialogContext, true),
+                child: const Text('Save'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+
+    if (shouldSave != true) {
+      controller.dispose();
+      return;
+    }
+
+    final parsedWeight = double.tryParse(controller.text.trim());
+    controller.dispose();
+
+    if (parsedWeight == null || parsedWeight <= 20 || parsedWeight >= 2000) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Enter a valid weight in pounds.')),
+      );
+      return;
+    }
+
+    if (selectedActivity == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Choose Low, Medium, or High daily activity.'),
+        ),
+      );
+      return;
+    }
+
+    setState(() => _isSavingWeight = true);
+
+    try {
+      await _profileService.saveBodyWeight(
+        date: selectedDate,
+        weightLbs: parsedWeight,
+        activityLevel: selectedActivity!,
+      );
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            existing == null ? 'Daily metrics saved' : 'Daily metrics updated',
+          ),
+        ),
+      );
+      refresh();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Daily metrics save failed: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _isSavingWeight = false);
+    }
+  }
+
+  Future<void> _showWeightHistory(List<BodyWeightEntry> entries) async {
+    if (entries.isEmpty) return;
+
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (sheetContext) {
+        final newestFirst = entries.reversed.toList();
+
+        return SafeArea(
+          child: FractionallySizedBox(
+            heightFactor: 0.72,
+            child: Column(
+              children: [
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(20, 4, 20, 10),
+                  child: Row(
+                    children: [
+                      Icon(Icons.monitor_weight_outlined),
+                      SizedBox(width: 8),
+                      Text(
+                        'Weight & activity history',
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const Divider(height: 1),
+                Expanded(
+                  child: ListView.separated(
+                    itemCount: newestFirst.length,
+                    separatorBuilder: (_, __) => const Divider(height: 1),
+                    itemBuilder: (context, index) {
+                      final entry = newestFirst[index];
+                      return ListTile(
+                        title: Text('${entry.weightLbs.toStringAsFixed(1)} lbs'),
+                        subtitle: Text(
+                          '${_formatWeightDate(entry.date)} • '
+                          '${_activityLabel(entry.activityLevel)} activity',
+                        ),
+                        trailing: IconButton(
+                          tooltip: 'Edit',
+                          icon: const Icon(Icons.edit_outlined),
+                          onPressed: () {
+                            Navigator.pop(sheetContext);
+                            Future.microtask(
+                              () => _showWeightEntryDialog(existing: entry),
+                            );
+                          },
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _bodyWeightCard(List<BodyWeightEntry> entries) {
+    final chartEntries = entries.length > 30
+        ? entries.sublist(entries.length - 30)
+        : entries;
+    final latest = entries.isEmpty ? null : entries.last;
+    final previous = entries.length >= 2 ? entries[entries.length - 2] : null;
+    final delta = latest != null && previous != null
+        ? latest.weightLbs - previous.weightLbs
+        : null;
+
+    String deltaLabel = '';
+    if (delta != null) {
+      if (delta.abs() < 0.05) {
+        deltaLabel = 'No change from previous entry';
+      } else {
+        final prefix = delta > 0 ? '+' : '';
+        deltaLabel = '$prefix${delta.toStringAsFixed(1)} lbs from previous entry';
+      }
+    }
+
+    return Card(
+      elevation: 0,
+      color: Theme.of(context).colorScheme.surfaceContainerHighest,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.monitor_weight_outlined, size: 20),
+                const SizedBox(width: 8),
+                const Expanded(
+                  child: Text(
+                    'Body Weight & Daily Activity',
+                    style: TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+                if (_isSavingWeight)
+                  const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            if (latest == null) ...[
+              Text(
+                'No daily metrics recorded yet.',
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+              ),
+              const SizedBox(height: 12),
+            ] else ...[
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(
+                    latest.weightLbs.toStringAsFixed(1),
+                    style: const TextStyle(
+                      fontSize: 30,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  const Padding(
+                    padding: EdgeInsets.only(left: 5, bottom: 4),
+                    child: Text(
+                      'lbs',
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                  const Spacer(),
+                  Text(
+                    _formatWeightDate(latest.date),
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Row(
+                children: [
+                  const Icon(Icons.directions_walk_outlined, size: 16),
+                  const SizedBox(width: 5),
+                  Text(
+                    '${_activityLabel(latest.activityLevel)} activity',
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(width: 5),
+                  Text(
+                    '(excluding workouts)',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+              if (deltaLabel.isNotEmpty) ...[
+                const SizedBox(height: 2),
+                Text(
+                  deltaLabel,
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+              const SizedBox(height: 12),
+              SizedBox(
+                height: 118,
+                width: double.infinity,
+                child: CustomPaint(
+                  painter: _WeightChartPainter(
+                    entries: chartEntries,
+                    lineColor: Theme.of(context).colorScheme.primary,
+                    gridColor: Theme.of(context).dividerColor,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 4),
+              Row(
+                children: [
+                  Text(
+                    _formatWeightDate(chartEntries.first.date),
+                    style: TextStyle(
+                      fontSize: 10,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                  const Spacer(),
+                  Text(
+                    _formatWeightDate(chartEntries.last.date),
+                    style: TextStyle(
+                      fontSize: 10,
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+            ],
+            Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: _isSavingWeight
+                        ? null
+                        : () => _showWeightEntryDialog(),
+                    icon: const Icon(Icons.add),
+                    label: const Text('Log today'),
+                  ),
+                ),
+                if (entries.isNotEmpty) ...[
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: _isSavingWeight
+                          ? null
+                          : () => _showWeightHistory(entries),
+                      icon: const Icon(Icons.history),
+                      label: const Text('History'),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 
   Future<void> _resetStats(BuildContext context) async {
     final confirm = await showDialog<bool>(
@@ -490,6 +989,8 @@ class ProfilePageState extends State<ProfilePage> {
         final videosUploaded = snapshot.data!['videosUploaded'] as int;
         final yearWorkoutStats =
             snapshot.data!['yearWorkoutStats'] as YearWorkoutStats;
+        final bodyWeightHistory =
+            snapshot.data!['bodyWeightHistory'] as List<BodyWeightEntry>;
 
         final totalVol = _numToDouble(vol['total_volume']);
         final level = _computeLevel(totalVol);
@@ -536,6 +1037,11 @@ class ProfilePageState extends State<ProfilePage> {
                       "Total Volume: ${totalVol.toStringAsFixed(0)} lbs",
                       style: const TextStyle(color: Colors.grey),
                     ),
+
+                    const SizedBox(height: 16),
+
+                    // -------- Body Weight --------
+                    _bodyWeightCard(bodyWeightHistory),
 
                     const SizedBox(height: 16),
 
@@ -749,5 +1255,108 @@ class ProfilePageState extends State<ProfilePage> {
         );
       },
     );
+  }
+}
+
+class _WeightChartPainter extends CustomPainter {
+  final List<BodyWeightEntry> entries;
+  final Color lineColor;
+  final Color gridColor;
+
+  const _WeightChartPainter({
+    required this.entries,
+    required this.lineColor,
+    required this.gridColor,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (entries.isEmpty) return;
+
+    const leftPadding = 4.0;
+    const rightPadding = 4.0;
+    const topPadding = 8.0;
+    const bottomPadding = 8.0;
+
+    final chartWidth = size.width - leftPadding - rightPadding;
+    final chartHeight = size.height - topPadding - bottomPadding;
+
+    final weights = entries.map((entry) => entry.weightLbs).toList();
+    double minWeight = weights.reduce(min);
+    double maxWeight = weights.reduce(max);
+
+    if ((maxWeight - minWeight).abs() < 0.1) {
+      minWeight -= 1;
+      maxWeight += 1;
+    } else {
+      final padding = (maxWeight - minWeight) * 0.15;
+      minWeight -= padding;
+      maxWeight += padding;
+    }
+
+    final firstDate = entries.first.date;
+    final lastDate = entries.last.date;
+    final totalDays = max(1, lastDate.difference(firstDate).inDays);
+
+    final gridPaint = Paint()
+      ..color = gridColor.withOpacity(0.45)
+      ..strokeWidth = 1;
+
+    for (var i = 0; i <= 3; i++) {
+      final y = topPadding + (chartHeight * i / 3);
+      canvas.drawLine(
+        Offset(leftPadding, y),
+        Offset(size.width - rightPadding, y),
+        gridPaint,
+      );
+    }
+
+    Offset pointFor(BodyWeightEntry entry) {
+      final dayOffset = entry.date.difference(firstDate).inDays;
+      final x = leftPadding + (dayOffset / totalDays) * chartWidth;
+      final normalized =
+          (entry.weightLbs - minWeight) / (maxWeight - minWeight);
+      final y = topPadding + chartHeight - (normalized * chartHeight);
+      return Offset(x, y);
+    }
+
+    final linePaint = Paint()
+      ..color = lineColor
+      ..strokeWidth = 2.5
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+
+    final pointPaint = Paint()
+      ..color = lineColor
+      ..style = PaintingStyle.fill;
+
+    if (entries.length == 1) {
+      canvas.drawCircle(pointFor(entries.first), 4, pointPaint);
+      return;
+    }
+
+    final path = Path();
+    for (var i = 0; i < entries.length; i++) {
+      final point = pointFor(entries[i]);
+      if (i == 0) {
+        path.moveTo(point.dx, point.dy);
+      } else {
+        path.lineTo(point.dx, point.dy);
+      }
+    }
+
+    canvas.drawPath(path, linePaint);
+
+    for (final entry in entries) {
+      canvas.drawCircle(pointFor(entry), 3.2, pointPaint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _WeightChartPainter oldDelegate) {
+    return oldDelegate.entries != entries ||
+        oldDelegate.lineColor != lineColor ||
+        oldDelegate.gridColor != gridColor;
   }
 }
