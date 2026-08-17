@@ -32,6 +32,7 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
   List<FoodItem> _foodItems = [];
   List<SavedMeal> _meals = [];
   List<DailyMealSummary> _dailySummaries = [];
+  final Set<DateTime> _expandedLogDays = <DateTime>{};
 
   DateTime _dayOnly(DateTime value) {
     final local = value.toLocal();
@@ -109,6 +110,142 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
     }
   }
 
+
+  static const List<String> _servingUnits = [
+    'serving',
+    'g',
+    'oz',
+    'cup',
+    'tbsp',
+    'tsp',
+    'piece',
+    'slice',
+    'bottle',
+    'can',
+    'package',
+  ];
+
+  String _servingSizeLabel(FoodItem food) {
+    return '${_formatNumber(food.servingAmount)} ${food.servingUnit}';
+  }
+
+  Future<T?> _showSearchSelectDialog<T>({
+    required String title,
+    required List<T> items,
+    required String Function(T item) titleFor,
+    String Function(T item)? subtitleFor,
+  }) async {
+    final searchController = TextEditingController();
+    String query = '';
+
+    final result = await showDialog<T>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setLocal) {
+          final normalized = query.trim().toLowerCase();
+          final filtered = items.where((item) {
+            if (normalized.isEmpty) return true;
+            final title = titleFor(item).toLowerCase();
+            final subtitle = subtitleFor?.call(item).toLowerCase() ?? '';
+            return title.contains(normalized) || subtitle.contains(normalized);
+          }).toList();
+
+          return AlertDialog(
+            title: Text(title),
+            content: SizedBox(
+              width: double.maxFinite,
+              height: 460,
+              child: Column(
+                children: [
+                  TextField(
+                    controller: searchController,
+                    autofocus: true,
+                    onChanged: (value) => setLocal(() => query = value),
+                    decoration: const InputDecoration(
+                      prefixIcon: Icon(Icons.search),
+                      labelText: 'Search',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Expanded(
+                    child: filtered.isEmpty
+                        ? const Center(child: Text('No matches.'))
+                        : ListView.separated(
+                            itemCount: filtered.length,
+                            separatorBuilder: (_, __) =>
+                                const Divider(height: 1),
+                            itemBuilder: (context, index) {
+                              final item = filtered[index];
+                              final subtitle = subtitleFor?.call(item) ?? '';
+                              return ListTile(
+                                contentPadding: EdgeInsets.zero,
+                                title: Text(titleFor(item)),
+                                subtitle:
+                                    subtitle.isEmpty ? null : Text(subtitle),
+                                onTap: () =>
+                                    Navigator.of(dialogContext).pop(item),
+                              );
+                            },
+                          ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                child: const Text('Cancel'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+
+    searchController.dispose();
+    return result;
+  }
+
+  Widget _searchSelectionField({
+    required String label,
+    required String value,
+    required VoidCallback? onTap,
+    String? subtitle,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(4),
+      child: InputDecorator(
+        decoration: InputDecoration(
+          labelText: label,
+          border: const OutlineInputBorder(),
+          suffixIcon: const Icon(Icons.search),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              value,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
+            if (subtitle != null && subtitle.trim().isNotEmpty) ...[
+              const SizedBox(height: 2),
+              Text(
+                subtitle,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
   Future<void> _openAddFoodDialog() async {
     final name = TextEditingController();
     final brand = TextEditingController();
@@ -116,6 +253,8 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
     final fat = TextEditingController();
     final carbs = TextEditingController();
     final protein = TextEditingController();
+    final servingAmount = TextEditingController(text: '1');
+    String servingUnit = 'serving';
 
     bool saving = false;
 
@@ -128,6 +267,8 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
             final parsedFat = double.tryParse(fat.text.trim());
             final parsedCarbs = double.tryParse(carbs.text.trim());
             final parsedProtein = double.tryParse(protein.text.trim());
+            final parsedServingAmount =
+                double.tryParse(servingAmount.text.trim());
 
             if (name.text.trim().isEmpty ||
                 brand.text.trim().isEmpty ||
@@ -135,6 +276,8 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                 parsedFat == null ||
                 parsedCarbs == null ||
                 parsedProtein == null ||
+                parsedServingAmount == null ||
+                parsedServingAmount <= 0 ||
                 parsedCalories < 0 ||
                 parsedFat < 0 ||
                 parsedCarbs < 0 ||
@@ -142,7 +285,7 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
               ScaffoldMessenger.of(this.context).showSnackBar(
                 const SnackBar(
                   content: Text(
-                    'Enter a name, brand, and valid nutrition values.',
+                    'Enter a name, brand, serving size, and valid nutrition values.',
                   ),
                 ),
               );
@@ -159,6 +302,8 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                 fat: parsedFat,
                 carbs: parsedCarbs,
                 protein: parsedProtein,
+                servingAmount: parsedServingAmount,
+                servingUnit: servingUnit,
               );
 
               if (!mounted) return;
@@ -193,6 +338,50 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                       labelText: 'Brand',
                       border: OutlineInputBorder(),
                     ),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: servingAmount,
+                          keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true,
+                          ),
+                          decoration: const InputDecoration(
+                            labelText: 'Serving size',
+                            hintText: 'Example: 28',
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: DropdownButtonFormField<String>(
+                          value: servingUnit,
+                          isExpanded: true,
+                          decoration: const InputDecoration(
+                            labelText: 'Unit',
+                            border: OutlineInputBorder(),
+                          ),
+                          items: _servingUnits
+                              .map(
+                                (unit) => DropdownMenuItem(
+                                  value: unit,
+                                  child: Text(unit),
+                                ),
+                              )
+                              .toList(),
+                          onChanged: saving
+                              ? null
+                              : (value) {
+                                  if (value != null) {
+                                    setLocal(() => servingUnit = value);
+                                  }
+                                },
+                        ),
+                      ),
+                    ],
                   ),
                   const SizedBox(height: 12),
                   TextField(
@@ -266,6 +455,7 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
     fat.dispose();
     carbs.dispose();
     protein.dispose();
+    servingAmount.dispose();
   }
 
   Future<void> _openEditFoodDialog(FoodItem food) async {
@@ -275,6 +465,9 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
     final fat = TextEditingController(text: _formatNumber(food.fat));
     final carbs = TextEditingController(text: _formatNumber(food.carbs));
     final protein = TextEditingController(text: _formatNumber(food.protein));
+    final servingAmount =
+        TextEditingController(text: _formatNumber(food.servingAmount));
+    String servingUnit = food.servingUnit;
 
     bool saving = false;
 
@@ -287,6 +480,8 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
             final parsedFat = double.tryParse(fat.text.trim());
             final parsedCarbs = double.tryParse(carbs.text.trim());
             final parsedProtein = double.tryParse(protein.text.trim());
+            final parsedServingAmount =
+                double.tryParse(servingAmount.text.trim());
 
             if (name.text.trim().isEmpty ||
                 brand.text.trim().isEmpty ||
@@ -294,6 +489,8 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                 parsedFat == null ||
                 parsedCarbs == null ||
                 parsedProtein == null ||
+                parsedServingAmount == null ||
+                parsedServingAmount <= 0 ||
                 parsedCalories < 0 ||
                 parsedFat < 0 ||
                 parsedCarbs < 0 ||
@@ -301,7 +498,7 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
               ScaffoldMessenger.of(this.context).showSnackBar(
                 const SnackBar(
                   content: Text(
-                    'Enter a name, brand, and valid nutrition values.',
+                    'Enter a name, brand, serving size, and valid nutrition values.',
                   ),
                 ),
               );
@@ -319,6 +516,8 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                 fat: parsedFat,
                 carbs: parsedCarbs,
                 protein: parsedProtein,
+                servingAmount: parsedServingAmount,
+                servingUnit: servingUnit,
               );
 
               if (!mounted) return;
@@ -363,6 +562,51 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                       labelText: 'Brand',
                       border: OutlineInputBorder(),
                     ),
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: servingAmount,
+                          keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true,
+                          ),
+                          decoration: const InputDecoration(
+                            labelText: 'Serving size',
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: DropdownButtonFormField<String>(
+                          value: _servingUnits.contains(servingUnit)
+                              ? servingUnit
+                              : 'serving',
+                          isExpanded: true,
+                          decoration: const InputDecoration(
+                            labelText: 'Unit',
+                            border: OutlineInputBorder(),
+                          ),
+                          items: _servingUnits
+                              .map(
+                                (unit) => DropdownMenuItem(
+                                  value: unit,
+                                  child: Text(unit),
+                                ),
+                              )
+                              .toList(),
+                          onChanged: saving
+                              ? null
+                              : (value) {
+                                  if (value != null) {
+                                    setLocal(() => servingUnit = value);
+                                  }
+                                },
+                        ),
+                      ),
+                    ],
                   ),
                   const SizedBox(height: 12),
                   TextField(
@@ -436,6 +680,7 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
     fat.dispose();
     carbs.dispose();
     protein.dispose();
+    servingAmount.dispose();
   }
 
   Future<void> _openEditMealDialog(SavedMeal meal) async {
@@ -549,14 +794,16 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                     child: ListView.separated(
                       shrinkWrap: true,
                       itemCount: _foodItems.length,
-                      separatorBuilder: (_, __) => const Divider(height: 1),
+                      separatorBuilder: (_, __) => const Divider(height: 18),
                       itemBuilder: (context, index) {
                         final food = _foodItems[index];
                         final selected = selectedIds.contains(food.id);
 
-                        return Row(
-                          children: [
-                            Checkbox(
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 8),
+                          child: Row(
+                            children: [
+                              Checkbox(
                               value: selected,
                               onChanged: saving
                                   ? null
@@ -586,12 +833,16 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                                       style:
                                           Theme.of(context).textTheme.bodySmall,
                                     ),
+                                  Text(
+                                    'Serving: ${_servingSizeLabel(food)}',
+                                    style: Theme.of(context).textTheme.bodySmall,
+                                  ),
                                 ],
                               ),
                             ),
-                            const SizedBox(width: 8),
+                            const SizedBox(width: 18),
                             SizedBox(
-                              width: 72,
+                              width: 88,
                               child: TextField(
                                 controller: servingControllers[food.id],
                                 enabled: selected && !saving,
@@ -607,7 +858,8 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                                 ),
                               ),
                             ),
-                          ],
+                            ],
+                          ),
                         );
                       },
                     ),
@@ -652,119 +904,161 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
       return;
     }
 
+    final searchController = TextEditingController();
+    String query = '';
+
     await showDialog<void>(
       context: context,
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, setLocal) {
+          final normalized = query.trim().toLowerCase();
+          final filteredMeals = _meals.where((meal) {
+            if (normalized.isEmpty) return true;
+            final components = meal.components
+                .map((component) => _foodDisplayName(component.food))
+                .join(' ')
+                .toLowerCase();
+            return meal.name.toLowerCase().contains(normalized) ||
+                components.contains(normalized);
+          }).toList();
+
           return AlertDialog(
             title: const Text('Manage Meals'),
             content: SizedBox(
               width: double.maxFinite,
-              child: _meals.isEmpty
-                  ? const Text('No saved meals.')
-                  : ListView.separated(
-                      shrinkWrap: true,
-                      itemCount: _meals.length,
-                      separatorBuilder: (_, __) => const Divider(height: 1),
-                      itemBuilder: (context, index) {
-                        final meal = _meals[index];
-
-                        final componentText = meal.components
-                            .map(
-                              (component) =>
-                                  '${component.food.name} × ${_formatNumber(component.servings)}',
-                            )
-                            .join(' • ');
-
-                        return ListTile(
-                          contentPadding: EdgeInsets.zero,
-                          title: Text(
-                            meal.name,
-                            style: const TextStyle(fontWeight: FontWeight.w700),
-                          ),
-                          subtitle: Text(
-                            componentText,
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          trailing: Wrap(
-                            spacing: 0,
-                            children: [
-                              IconButton(
-                                tooltip: 'Edit meal',
-                                icon: const Icon(Icons.edit_outlined),
-                                onPressed: () async {
-                                  await _openEditMealDialog(meal);
-                                  if (mounted) setLocal(() {});
-                                },
-                              ),
-                              IconButton(
-                                tooltip: 'Delete meal',
-                                icon: const Icon(Icons.delete_outline),
-                                onPressed: () async {
-                                  final confirmed = await showDialog<bool>(
-                                    context: this.context,
-                                    builder: (confirmContext) => AlertDialog(
-                                      title: const Text('Delete meal?'),
-                                      content: Text(
-                                        'Delete ${meal.name} from your saved meals?\\n\\n'
-                                        'This only deletes the reusable meal template. '
-                                        'Food-log entries you already consumed will remain.',
-                                      ),
-                                      actions: [
-                                        TextButton(
-                                          onPressed: () =>
-                                              Navigator.of(confirmContext)
-                                                  .pop(false),
-                                          child: const Text('Cancel'),
-                                        ),
-                                        ElevatedButton(
-                                          onPressed: () =>
-                                              Navigator.of(confirmContext)
-                                                  .pop(true),
-                                          child: const Text('Delete'),
-                                        ),
-                                      ],
-                                    ),
-                                  );
-
-                                  if (confirmed != true) return;
-
-                                  try {
-                                    await _mealService.deleteMeal(meal.id);
-                                    await _loadData();
-
-                                    if (!mounted) return;
-                                    setLocal(() {});
-
-                                    ScaffoldMessenger.of(this.context)
-                                        .showSnackBar(
-                                      SnackBar(
-                                        content: Text('${meal.name} deleted.'),
-                                      ),
-                                    );
-
-                                    if (_meals.isEmpty &&
-                                        Navigator.of(dialogContext).canPop()) {
-                                      Navigator.of(dialogContext).pop();
-                                    }
-                                  } catch (e) {
-                                    if (!mounted) return;
-                                    ScaffoldMessenger.of(this.context)
-                                        .showSnackBar(
-                                      SnackBar(
-                                        content:
-                                            Text('Could not delete meal: $e'),
-                                      ),
-                                    );
-                                  }
-                                },
-                              ),
-                            ],
-                          ),
-                        );
-                      },
+              height: 520,
+              child: Column(
+                children: [
+                  TextField(
+                    controller: searchController,
+                    onChanged: (value) {
+                      setLocal(() => query = value);
+                    },
+                    decoration: const InputDecoration(
+                      prefixIcon: Icon(Icons.search),
+                      labelText: 'Search meals',
+                      border: OutlineInputBorder(),
                     ),
+                  ),
+                  const SizedBox(height: 12),
+                  Expanded(
+                    child: filteredMeals.isEmpty
+                        ? const Center(child: Text('No matching meals.'))
+                        : ListView.separated(
+                            itemCount: filteredMeals.length,
+                            separatorBuilder: (_, __) =>
+                                const Divider(height: 1),
+                            itemBuilder: (context, index) {
+                              final meal = filteredMeals[index];
+
+                              final componentText = meal.components
+                                  .map(
+                                    (component) =>
+                                        '${component.food.name} × ${_formatNumber(component.servings)}',
+                                  )
+                                  .join(' • ');
+
+                              return ListTile(
+                                contentPadding: EdgeInsets.zero,
+                                title: Text(
+                                  meal.name,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                                subtitle: Text(
+                                  componentText,
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                                trailing: Wrap(
+                                  spacing: 0,
+                                  children: [
+                                    IconButton(
+                                      tooltip: 'Edit meal',
+                                      icon: const Icon(Icons.edit_outlined),
+                                      onPressed: () async {
+                                        await _openEditMealDialog(meal);
+                                        if (mounted) setLocal(() {});
+                                      },
+                                    ),
+                                    IconButton(
+                                      tooltip: 'Delete meal',
+                                      icon: const Icon(Icons.delete_outline),
+                                      onPressed: () async {
+                                        final confirmed =
+                                            await showDialog<bool>(
+                                          context: this.context,
+                                          builder: (confirmContext) =>
+                                              AlertDialog(
+                                            title:
+                                                const Text('Delete meal?'),
+                                            content: Text(
+                                              'Delete ${meal.name} from your saved meals?\n\n'
+                                              'This only deletes the reusable meal template. '
+                                              'Food-log entries you already consumed will remain.',
+                                            ),
+                                            actions: [
+                                              TextButton(
+                                                onPressed: () =>
+                                                    Navigator.of(confirmContext)
+                                                        .pop(false),
+                                                child: const Text('Cancel'),
+                                              ),
+                                              ElevatedButton(
+                                                onPressed: () =>
+                                                    Navigator.of(confirmContext)
+                                                        .pop(true),
+                                                child: const Text('Delete'),
+                                              ),
+                                            ],
+                                          ),
+                                        );
+
+                                        if (confirmed != true) return;
+
+                                        try {
+                                          await _mealService
+                                              .deleteMeal(meal.id);
+                                          await _loadData();
+
+                                          if (!mounted) return;
+                                          setLocal(() {});
+
+                                          ScaffoldMessenger.of(this.context)
+                                              .showSnackBar(
+                                            SnackBar(
+                                              content:
+                                                  Text('${meal.name} deleted.'),
+                                            ),
+                                          );
+
+                                          if (_meals.isEmpty &&
+                                              Navigator.of(dialogContext)
+                                                  .canPop()) {
+                                            Navigator.of(dialogContext).pop();
+                                          }
+                                        } catch (e) {
+                                          if (!mounted) return;
+                                          ScaffoldMessenger.of(this.context)
+                                              .showSnackBar(
+                                            SnackBar(
+                                              content: Text(
+                                                'Could not delete meal: $e',
+                                              ),
+                                            ),
+                                          );
+                                        }
+                                      },
+                                    ),
+                                  ],
+                                ),
+                              );
+                            },
+                          ),
+                  ),
+                ],
+              ),
             ),
             actions: [
               TextButton(
@@ -776,6 +1070,8 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
         },
       ),
     );
+
+    searchController.dispose();
   }
 
   Future<void> _openManageFoodItemsDialog() async {
@@ -786,111 +1082,160 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
       return;
     }
 
+    final searchController = TextEditingController();
+    String query = '';
+
     await showDialog<void>(
       context: context,
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, setLocal) {
+          final normalized = query.trim().toLowerCase();
+          final filteredFoods = _foodItems.where((food) {
+            if (normalized.isEmpty) return true;
+            return food.name.toLowerCase().contains(normalized) ||
+                food.brand.toLowerCase().contains(normalized);
+          }).toList();
+
           return AlertDialog(
             title: const Text('Manage Food Items'),
             content: SizedBox(
               width: double.maxFinite,
-              child: _foodItems.isEmpty
-                  ? const Text('No saved food items.')
-                  : ListView.separated(
-                      shrinkWrap: true,
-                      itemCount: _foodItems.length,
-                      separatorBuilder: (_, __) => const Divider(height: 1),
-                      itemBuilder: (context, index) {
-                        final food = _foodItems[index];
+              height: 520,
+              child: Column(
+                children: [
+                  TextField(
+                    controller: searchController,
+                    onChanged: (value) {
+                      setLocal(() => query = value);
+                    },
+                    decoration: const InputDecoration(
+                      prefixIcon: Icon(Icons.search),
+                      labelText: 'Search foods',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Expanded(
+                    child: filteredFoods.isEmpty
+                        ? const Center(child: Text('No matching foods.'))
+                        : ListView.separated(
+                            itemCount: filteredFoods.length,
+                            separatorBuilder: (_, __) =>
+                                const Divider(height: 1),
+                            itemBuilder: (context, index) {
+                              final food = filteredFoods[index];
 
-                        return ListTile(
-                          contentPadding: EdgeInsets.zero,
-                          title: Text(
-                            food.name,
-                            style: const TextStyle(fontWeight: FontWeight.w700),
-                          ),
-                          subtitle: food.brand.trim().isEmpty
-                              ? null
-                              : Text(food.brand),
-                          trailing: Wrap(
-                            spacing: 0,
-                            children: [
-                              IconButton(
-                                tooltip: 'Edit food item',
-                                icon: const Icon(Icons.edit_outlined),
-                                onPressed: () async {
-                                  await _openEditFoodDialog(food);
-                                  if (mounted) setLocal(() {});
-                                },
-                              ),
-                              IconButton(
-                                tooltip: 'Delete food item',
-                                icon: const Icon(Icons.delete_outline),
-                                onPressed: () async {
-                              final displayName = _foodDisplayName(food);
+                              final details = <String>[
+                                if (food.brand.trim().isNotEmpty) food.brand,
+                                'Serving: ${_servingSizeLabel(food)}',
+                              ].join(' • ');
 
-                              final confirmed = await showDialog<bool>(
-                                context: this.context,
-                                builder: (confirmContext) => AlertDialog(
-                                  title: const Text('Delete food item?'),
-                                  content: Text(
-                                    'Delete $displayName from your saved foods?\n\n'
-                                    'If this food has already been used in a food log, '
-                                    'Fit Quest will keep it until those consumed entries '
-                                    'are removed first.',
+                              return ListTile(
+                                contentPadding: EdgeInsets.zero,
+                                title: Text(
+                                  food.name,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w700,
                                   ),
-                                  actions: [
-                                    TextButton(
-                                      onPressed: () =>
-                                          Navigator.of(confirmContext).pop(false),
-                                      child: const Text('Cancel'),
+                                ),
+                                subtitle: Text(details),
+                                trailing: Wrap(
+                                  spacing: 0,
+                                  children: [
+                                    IconButton(
+                                      tooltip: 'Edit food item',
+                                      icon: const Icon(Icons.edit_outlined),
+                                      onPressed: () async {
+                                        await _openEditFoodDialog(food);
+                                        if (mounted) setLocal(() {});
+                                      },
                                     ),
-                                    ElevatedButton(
-                                      onPressed: () =>
-                                          Navigator.of(confirmContext).pop(true),
-                                      child: const Text('Delete'),
+                                    IconButton(
+                                      tooltip: 'Delete food item',
+                                      icon: const Icon(Icons.delete_outline),
+                                      onPressed: () async {
+                                        final displayName =
+                                            _foodDisplayName(food);
+
+                                        final confirmed =
+                                            await showDialog<bool>(
+                                          context: this.context,
+                                          builder: (confirmContext) =>
+                                              AlertDialog(
+                                            title: const Text(
+                                              'Delete food item?',
+                                            ),
+                                            content: Text(
+                                              'Delete $displayName from your saved foods?\n\n'
+                                              'If this food has already been used in a food log, '
+                                              'Fit Quest will keep it until those consumed entries '
+                                              'are removed first.',
+                                            ),
+                                            actions: [
+                                              TextButton(
+                                                onPressed: () =>
+                                                    Navigator.of(confirmContext)
+                                                        .pop(false),
+                                                child: const Text('Cancel'),
+                                              ),
+                                              ElevatedButton(
+                                                onPressed: () =>
+                                                    Navigator.of(confirmContext)
+                                                        .pop(true),
+                                                child: const Text('Delete'),
+                                              ),
+                                            ],
+                                          ),
+                                        );
+
+                                        if (confirmed != true) return;
+
+                                        try {
+                                          await _mealService
+                                              .deleteFoodItem(food.id);
+                                          await _loadData();
+
+                                          if (!mounted) return;
+                                          setLocal(() {});
+
+                                          ScaffoldMessenger.of(this.context)
+                                              .showSnackBar(
+                                            SnackBar(
+                                              content:
+                                                  Text('$displayName deleted.'),
+                                            ),
+                                          );
+
+                                          if (_foodItems.isEmpty &&
+                                              Navigator.of(dialogContext)
+                                                  .canPop()) {
+                                            Navigator.of(dialogContext).pop();
+                                          }
+                                        } catch (e) {
+                                          if (!mounted) return;
+
+                                          final message = e
+                                              .toString()
+                                              .replaceFirst(
+                                                'Bad state: ',
+                                                '',
+                                              );
+
+                                          ScaffoldMessenger.of(this.context)
+                                              .showSnackBar(
+                                            SnackBar(content: Text(message)),
+                                          );
+                                        }
+                                      },
                                     ),
                                   ],
                                 ),
                               );
-
-                              if (confirmed != true) return;
-
-                              try {
-                                await _mealService.deleteFoodItem(food.id);
-                                await _loadData();
-
-                                if (!mounted) return;
-
-                                setLocal(() {});
-
-                                ScaffoldMessenger.of(this.context).showSnackBar(
-                                  SnackBar(
-                                    content: Text('$displayName deleted.'),
-                                  ),
-                                );
-
-                                if (_foodItems.isEmpty &&
-                                    Navigator.of(dialogContext).canPop()) {
-                                  Navigator.of(dialogContext).pop();
-                                }
-                              } catch (e) {
-                                if (!mounted) return;
-
-                                final message =
-                                    e.toString().replaceFirst('Bad state: ', '');
-
-                                ScaffoldMessenger.of(this.context).showSnackBar(
-                                  SnackBar(content: Text(message)),
-                                );
-                              }
-                                },
-                              ),
-                            ],
+                            },
                           ),
-                        );
-                      },
-                    ),
+                  ),
+                ],
+              ),
             ),
             actions: [
               TextButton(
@@ -902,6 +1247,8 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
         },
       ),
     );
+
+    searchController.dispose();
   }
 
   Future<void> _openAddMealDialog() async {
@@ -1007,14 +1354,16 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                     child: ListView.separated(
                       shrinkWrap: true,
                       itemCount: _foodItems.length,
-                      separatorBuilder: (_, __) => const Divider(height: 1),
+                      separatorBuilder: (_, __) => const Divider(height: 18),
                       itemBuilder: (context, index) {
                         final food = _foodItems[index];
                         final selected = selectedIds.contains(food.id);
 
-                        return Row(
-                          children: [
-                            Checkbox(
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 8),
+                          child: Row(
+                            children: [
+                              Checkbox(
                               value: selected,
                               onChanged: saving
                                   ? null
@@ -1044,12 +1393,16 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                                       style:
                                           Theme.of(context).textTheme.bodySmall,
                                     ),
+                                  Text(
+                                    'Serving: ${_servingSizeLabel(food)}',
+                                    style: Theme.of(context).textTheme.bodySmall,
+                                  ),
                                 ],
                               ),
                             ),
-                            const SizedBox(width: 8),
+                            const SizedBox(width: 18),
                             SizedBox(
-                              width: 72,
+                              width: 88,
                               child: TextField(
                                 controller: servingControllers[food.id],
                                 enabled: selected && !saving,
@@ -1065,7 +1418,8 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                                 ),
                               ),
                             ),
-                          ],
+                            ],
+                          ),
                         );
                       },
                     ),
@@ -1123,6 +1477,22 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
           final multiplier =
               double.tryParse(quantity.text.trim()) ?? 0;
 
+          Future<void> chooseMeal() async {
+            final picked = await _showSearchSelectDialog<SavedMeal>(
+              title: 'Select Meal',
+              items: _meals,
+              titleFor: (meal) => meal.name,
+              subtitleFor: (meal) =>
+                  '${_formatNumber(meal.calories)} cal • '
+                  '${meal.components.length} item'
+                  '${meal.components.length == 1 ? '' : 's'}',
+            );
+
+            if (picked != null) {
+              setLocal(() => selected = picked);
+            }
+          }
+
           Future<void> consume() async {
             final count = double.tryParse(quantity.text.trim());
 
@@ -1162,32 +1532,14 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  DropdownButtonFormField<SavedMeal>(
-                    value: selected,
-                    isExpanded: true,
-                    decoration: const InputDecoration(
-                      labelText: 'Meal',
-                      border: OutlineInputBorder(),
-                    ),
-                    items: _meals
-                        .map(
-                          (meal) => DropdownMenuItem(
-                            value: meal,
-                            child: Text(
-                              meal.name,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                        )
-                        .toList(),
-                    onChanged: saving
-                        ? null
-                        : (value) {
-                            if (value != null) {
-                              setLocal(() => selected = value);
-                            }
-                          },
+                  _searchSelectionField(
+                    label: 'Meal',
+                    value: selected.name,
+                    subtitle:
+                        '${_formatNumber(selected.calories)} cal • '
+                        '${selected.components.length} item'
+                        '${selected.components.length == 1 ? '' : 's'}',
+                    onTap: saving ? null : chooseMeal,
                   ),
                   const SizedBox(height: 12),
                   TextField(
@@ -1219,7 +1571,8 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                       padding: const EdgeInsets.only(bottom: 4),
                       child: Text(
                         '• ${_foodDisplayName(component.food)} × '
-                        '${_formatNumber(component.servings)}',
+                        '${_formatNumber(component.servings)} '
+                        '(${_servingSizeLabel(component.food)} each)',
                       ),
                     ),
                   ),
@@ -1286,6 +1639,26 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
         builder: (context, setLocal) {
           final preview = double.tryParse(servings.text.trim()) ?? 0;
 
+          Future<void> chooseFood() async {
+            final picked = await _showSearchSelectDialog<FoodItem>(
+              title: 'Select Food',
+              items: _foodItems,
+              titleFor: (food) => food.name,
+              subtitleFor: (food) {
+                final parts = <String>[
+                  if (food.brand.trim().isNotEmpty) food.brand,
+                  'Serving: ${_servingSizeLabel(food)}',
+                  '${_formatNumber(food.calories)} cal',
+                ];
+                return parts.join(' • ');
+              },
+            );
+
+            if (picked != null) {
+              setLocal(() => selected = picked);
+            }
+          }
+
           Future<void> consume() async {
             final count = double.tryParse(servings.text.trim());
             if (count == null || count <= 0) {
@@ -1324,98 +1697,14 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  DropdownButtonFormField<FoodItem>(
-                    value: selected,
-                    isExpanded: true,
-                    itemHeight: null,
-                    menuMaxHeight: 420,
-                    decoration: const InputDecoration(
-                      labelText: 'Food item',
-                      border: OutlineInputBorder(),
-                      contentPadding: EdgeInsets.fromLTRB(12, 18, 12, 18),
-                    ),
-                    items: _foodItems
-                        .map(
-                          (food) => DropdownMenuItem(
-                            value: food,
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(vertical: 6),
-                              child: Column(
-                                mainAxisSize: MainAxisSize.min,
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    food.name,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.w700,
-                                    ),
-                                  ),
-                                  if (food.brand.trim().isNotEmpty) ...[
-                                    const SizedBox(height: 2),
-                                    Text(
-                                      food.brand,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: Theme.of(context)
-                                          .textTheme
-                                          .bodySmall
-                                          ?.copyWith(
-                                            color: Theme.of(context)
-                                                .colorScheme
-                                                .onSurfaceVariant,
-                                          ),
-                                    ),
-                                  ],
-                                ],
-                              ),
-                            ),
-                          ),
-                        )
-                        .toList(),
-                    selectedItemBuilder: (context) {
-                      return _foodItems.map((food) {
-                        return SizedBox(
-                          height: 56,
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                food.name,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                              if (food.brand.trim().isNotEmpty)
-                                Text(
-                                  food.brand,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: Theme.of(context)
-                                      .textTheme
-                                      .bodySmall
-                                      ?.copyWith(
-                                        color: Theme.of(context)
-                                            .colorScheme
-                                            .onSurfaceVariant,
-                                      ),
-                                ),
-                            ],
-                          ),
-                        );
-                      }).toList();
-                    },
-                    onChanged: saving
-                        ? null
-                        : (value) {
-                            if (value != null) {
-                              setLocal(() => selected = value);
-                            }
-                          },
+                  _searchSelectionField(
+                    label: 'Food item',
+                    value: selected.name,
+                    subtitle: [
+                      if (selected.brand.trim().isNotEmpty) selected.brand,
+                      'Serving: ${_servingSizeLabel(selected)}',
+                    ].join(' • '),
+                    onTap: saving ? null : chooseFood,
                   ),
                   const SizedBox(height: 12),
                   TextField(
@@ -1423,15 +1712,17 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                     onChanged: (_) => setLocal(() {}),
                     keyboardType:
                         const TextInputType.numberWithOptions(decimal: true),
-                    decoration: const InputDecoration(
+                    decoration: InputDecoration(
                       labelText: 'Servings consumed',
                       hintText: 'Example: 1, 0.5, 1.5',
-                      border: OutlineInputBorder(),
+                      helperText:
+                          '1 serving = ${_servingSizeLabel(selected)}',
+                      border: const OutlineInputBorder(),
                     ),
                   ),
                   const SizedBox(height: 14),
                   Text(
-                    'Per serving',
+                    'Per serving (${_servingSizeLabel(selected)})',
                     style: Theme.of(context).textTheme.titleSmall,
                   ),
                   const SizedBox(height: 6),
@@ -1747,23 +2038,80 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
   }
 
   Widget _dailySummaryCard(DailyMealSummary summary) {
+    final expanded = _expandedLogDays.contains(summary.day);
+
     return Card(
       margin: const EdgeInsets.only(bottom: 14),
       clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: () => _shareFoodLogs([summary]),
-        child: Padding(
-          padding: const EdgeInsets.all(14),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          InkWell(
+            onTap: () {
+              setState(() {
+                if (expanded) {
+                  _expandedLogDays.remove(summary.day);
+                } else {
+                  _expandedLogDays.add(summary.day);
+                }
+              });
+            },
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          _formatDate(summary.day),
+                          style:
+                              Theme.of(context).textTheme.titleMedium?.copyWith(
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: 'Share this day',
+                        visualDensity: VisualDensity.compact,
+                        onPressed: () => _shareFoodLogs([summary]),
+                        icon: const Icon(Icons.share_outlined, size: 20),
+                      ),
+                      Icon(
+                        expanded ? Icons.expand_less : Icons.expand_more,
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 12,
+                    runSpacing: 6,
+                    children: [
+                      Text(
+                        '${_formatNumber(summary.calories)} cal',
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                      Text('P ${_formatNumber(summary.protein)}g'),
+                      Text('C ${_formatNumber(summary.carbs)}g'),
+                      Text('F ${_formatNumber(summary.fat)}g'),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+          if (expanded) ...[
+            const Divider(height: 1),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 12, 14, 6),
+              child: Row(
                 children: [
                   Expanded(
                     child: Text(
-                      _formatDate(summary.day),
-                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                            fontWeight: FontWeight.bold,
+                      'Foods',
+                      style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                            fontWeight: FontWeight.w700,
                           ),
                     ),
                   ),
@@ -1772,61 +2120,77 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                   _macroHeaderCell('F'),
                 ],
               ),
-              const SizedBox(height: 10),
-              ...summary.items.map(
-                (item) => Dismissible(
-                  key: ValueKey('consumed-${item.id}'),
-                  direction: DismissDirection.endToStart,
-                  confirmDismiss: (_) => _confirmDeleteConsumedFood(item),
-                  background: Container(
-                    margin: const EdgeInsets.only(bottom: 8),
-                    padding: const EdgeInsets.symmetric(horizontal: 18),
-                    alignment: Alignment.centerRight,
-                    decoration: BoxDecoration(
-                      color: Theme.of(context).colorScheme.errorContainer,
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: Icon(
-                      Icons.delete_outline,
-                      color: Theme.of(context).colorScheme.onErrorContainer,
-                    ),
-                  ),
-                  child: Padding(
-                    padding: const EdgeInsets.only(bottom: 8),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.center,
-                      children: [
-                        Expanded(
-                          child: Text(
-                            '${_foodDisplayName(item.food)} × '
-                            '${_formatNumber(item.servings)}'
-                            '  •  ${_formatNumber(item.calories)} cal',
-                            maxLines: 2,
-                            overflow: TextOverflow.ellipsis,
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 4, 14, 14),
+              child: Column(
+                children: summary.items
+                    .map(
+                      (item) => Dismissible(
+                        key: ValueKey('consumed-${item.id}'),
+                        direction: DismissDirection.endToStart,
+                        confirmDismiss: (_) =>
+                            _confirmDeleteConsumedFood(item),
+                        background: Container(
+                          margin: const EdgeInsets.only(bottom: 8),
+                          padding: const EdgeInsets.symmetric(horizontal: 18),
+                          alignment: Alignment.centerRight,
+                          decoration: BoxDecoration(
+                            color:
+                                Theme.of(context).colorScheme.errorContainer,
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Icon(
+                            Icons.delete_outline,
+                            color: Theme.of(context)
+                                .colorScheme
+                                .onErrorContainer,
                           ),
                         ),
-                        _macroValueCell(item.protein),
-                        _macroValueCell(item.carbs),
-                        _macroValueCell(item.fat),
-                      ],
-                    ),
-                  ),
-                ),
+                        child: Padding(
+                          padding: const EdgeInsets.only(bottom: 10),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      _foodDisplayName(item.food),
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      '${_formatNumber(item.servings)} serving'
+                                      '${item.servings == 1 ? '' : 's'} '
+                                      '(${_servingSizeLabel(item.food)} each)'
+                                      ' • ${_formatNumber(item.calories)} cal',
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                      style:
+                                          Theme.of(context).textTheme.bodySmall,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              _macroValueCell(item.protein),
+                              _macroValueCell(item.carbs),
+                              _macroValueCell(item.fat),
+                            ],
+                          ),
+                        ),
+                      ),
+                    )
+                    .toList(),
               ),
-              const Divider(),
-              Wrap(
-                spacing: 12,
-                runSpacing: 6,
-                children: [
-                  Text('${_formatNumber(summary.calories)} calories'),
-                  Text('${_formatNumber(summary.protein)}g protein'),
-                  Text('${_formatNumber(summary.carbs)}g carbs'),
-                  Text('${_formatNumber(summary.fat)}g fat'),
-                ],
-              ),
-            ],
-          ),
-        ),
+            ),
+          ],
+        ],
       ),
     );
   }

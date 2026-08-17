@@ -8,6 +8,8 @@ class FoodItem {
   final double fat;
   final double carbs;
   final double protein;
+  final double servingAmount;
+  final String servingUnit;
 
   const FoodItem({
     required this.id,
@@ -17,6 +19,8 @@ class FoodItem {
     required this.fat,
     required this.carbs,
     required this.protein,
+    required this.servingAmount,
+    required this.servingUnit,
   });
 
   factory FoodItem.fromMap(Map<String, dynamic> map) {
@@ -33,6 +37,10 @@ class FoodItem {
       fat: toDouble(map['fat']),
       carbs: toDouble(map['carbs']),
       protein: toDouble(map['protein']),
+      servingAmount: toDouble(map['serving_amount']) > 0
+          ? toDouble(map['serving_amount'])
+          : 1,
+      servingUnit: (map['serving_unit'] ?? 'serving').toString(),
     );
   }
 }
@@ -123,7 +131,7 @@ class MealService {
   Future<List<FoodItem>> getFoodItems() async {
     final rows = await supabase
         .from('food_items')
-        .select('id, name, brand, calories, fat, carbs, protein')
+        .select('id, name, brand, calories, fat, carbs, protein, serving_amount, serving_unit')
         .eq('user_id', _userId)
         .order('name', ascending: true);
 
@@ -148,6 +156,8 @@ class MealService {
     required double fat,
     required double carbs,
     required double protein,
+    required double servingAmount,
+    required String servingUnit,
   }) async {
     final row = await supabase
         .from('food_items')
@@ -159,8 +169,10 @@ class MealService {
           'fat': fat,
           'carbs': carbs,
           'protein': protein,
+          'serving_amount': servingAmount,
+          'serving_unit': servingUnit,
         })
-        .select('id, name, brand, calories, fat, carbs, protein')
+        .select('id, name, brand, calories, fat, carbs, protein, serving_amount, serving_unit')
         .single();
 
     return FoodItem.fromMap(Map<String, dynamic>.from(row));
@@ -174,6 +186,8 @@ class MealService {
     required double fat,
     required double carbs,
     required double protein,
+    required double servingAmount,
+    required String servingUnit,
   }) async {
     final row = await supabase
         .from('food_items')
@@ -184,10 +198,12 @@ class MealService {
           'fat': fat,
           'carbs': carbs,
           'protein': protein,
+          'serving_amount': servingAmount,
+          'serving_unit': servingUnit,
         })
         .eq('id', foodItemId)
         .eq('user_id', _userId)
-        .select('id, name, brand, calories, fat, carbs, protein')
+        .select('id, name, brand, calories, fat, carbs, protein, serving_amount, serving_unit')
         .single();
 
     return FoodItem.fromMap(Map<String, dynamic>.from(row));
@@ -224,7 +240,7 @@ class MealService {
     final rows = await supabase
         .from('meals')
         .select(
-          'id, name, meal_items(servings, food_item_id, food_items(id, name, brand, calories, fat, carbs, protein))',
+          'id, name, meal_items(servings, food_item_id, food_items(id, name, brand, calories, fat, carbs, protein, serving_amount, serving_unit))',
         )
         .eq('user_id', _userId)
         .order('name', ascending: true);
@@ -449,7 +465,7 @@ class MealService {
     final rows = await supabase
         .from('food_consumptions')
         .select(
-          'id, consumed_at, servings, food_items!inner(id, name, brand, calories, fat, carbs, protein)',
+          'id, consumed_at, servings, food_items!inner(id, name, brand, calories, fat, carbs, protein, serving_amount, serving_unit)',
         )
         .eq('user_id', _userId)
         .order('consumed_at', ascending: false)
