@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../services/meal_service.dart';
@@ -138,15 +139,42 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
     final searchController = TextEditingController();
     final searchFocusNode = FocusNode();
     String query = '';
+    bool keyboardRequested = false;
+
+    Future<void> focusSearchAndShowKeyboard() async {
+      if (!searchFocusNode.canRequestFocus) return;
+
+      searchFocusNode.requestFocus();
+
+      // `autofocus` can give a field focus without opening the software
+      // keyboard on some Flutter mobile/web builds. Explicitly asking the
+      // text-input channel to show makes the one-tap Consume flow immediate.
+      try {
+        await SystemChannels.textInput.invokeMethod<void>('TextInput.show');
+      } catch (_) {
+        // Safe fallback: the field remains focused even if the platform
+        // ignores an explicit software-keyboard request.
+      }
+
+      // A second request after the dialog animation begins helps platforms
+      // that ignore TextInput.show during the very first frame.
+      await Future<void>.delayed(const Duration(milliseconds: 120));
+      if (!searchFocusNode.hasFocus) return;
+      try {
+        await SystemChannels.textInput.invokeMethod<void>('TextInput.show');
+      } catch (_) {}
+    }
 
     final result = await showDialog<T>(
       context: context,
+      barrierDismissible: true,
       builder: (dialogContext) {
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (searchFocusNode.canRequestFocus) {
-            searchFocusNode.requestFocus();
-          }
-        });
+        if (!keyboardRequested) {
+          keyboardRequested = true;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            focusSearchAndShowKeyboard();
+          });
+        }
 
         return StatefulBuilder(
           builder: (context, setLocal) {
@@ -172,6 +200,14 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                       autofocus: true,
                       textInputAction: TextInputAction.search,
                       onChanged: (value) => setLocal(() => query = value),
+                      onTap: () {
+                        // Also explicitly show it when the user re-enters the
+                        // field after dismissing the keyboard.
+                        try {
+                          SystemChannels.textInput
+                              .invokeMethod<void>('TextInput.show');
+                        } catch (_) {}
+                      },
                       decoration: const InputDecoration(
                         prefixIcon: Icon(Icons.search),
                         labelText: 'Search',
@@ -183,6 +219,8 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                       child: filtered.isEmpty
                           ? const Center(child: Text('No matches.'))
                           : ListView.separated(
+                              keyboardDismissBehavior:
+                                  ScrollViewKeyboardDismissBehavior.onDrag,
                               itemCount: filtered.length,
                               separatorBuilder: (_, __) =>
                                   const Divider(height: 1),
@@ -348,6 +386,60 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
     );
   }
 
+  Widget _keyboardAwareTextField({
+    required TextEditingController controller,
+    required String labelText,
+    String? hintText,
+    TextInputType? keyboardType,
+    bool enabled = true,
+    TextCapitalization textCapitalization = TextCapitalization.none,
+    TextInputAction? textInputAction,
+    TextAlign textAlign = TextAlign.start,
+  }) {
+    return Builder(
+      builder: (fieldContext) {
+        void revealField() {
+          // Wait for the keyboard/viewInsets to update, then scroll the
+          // actual field into the visible portion of the dialog.
+          Future<void>.delayed(const Duration(milliseconds: 180), () {
+            if (!fieldContext.mounted) return;
+            Scrollable.ensureVisible(
+              fieldContext,
+              duration: const Duration(milliseconds: 220),
+              curve: Curves.easeOut,
+              alignment: 0.22,
+              alignmentPolicy:
+                  ScrollPositionAlignmentPolicy.explicit,
+            );
+          });
+        }
+
+        return TextField(
+          controller: controller,
+          enabled: enabled,
+          keyboardType: keyboardType,
+          textCapitalization: textCapitalization,
+          textInputAction: textInputAction,
+          textAlign: textAlign,
+          scrollPadding: EdgeInsets.only(
+            bottom: MediaQuery.viewInsetsOf(fieldContext).bottom + 140,
+          ),
+          onTap: revealField,
+          onChanged: (_) {
+            if (FocusScope.of(fieldContext).hasFocus) {
+              revealField();
+            }
+          },
+          decoration: InputDecoration(
+            labelText: labelText,
+            hintText: hintText,
+            border: const OutlineInputBorder(),
+          ),
+        );
+      },
+    );
+  }
+
   Future<void> _openAddFoodDialog() async {
     final name = TextEditingController();
     final brand = TextEditingController();
@@ -427,13 +519,11 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  TextField(
+                  _keyboardAwareTextField(
                     controller: name,
-                    scrollPadding: const EdgeInsets.only(bottom: 220),
-                    decoration: const InputDecoration(
-                      labelText: 'Food name',
-                      border: OutlineInputBorder(),
-                    ),
+                    labelText: 'Food name',
+                    textCapitalization: TextCapitalization.words,
+                    textInputAction: TextInputAction.next,
                   ),
                   const SizedBox(height: 12),
                   _brandAutocompleteField(
@@ -445,17 +535,13 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                   Row(
                     children: [
                       Expanded(
-                        child: TextField(
+                        child: _keyboardAwareTextField(
                           controller: servingAmount,
-                    scrollPadding: const EdgeInsets.only(bottom: 220),
-                          keyboardType: const TextInputType.numberWithOptions(
-                            decimal: true,
-                          ),
-                          decoration: const InputDecoration(
-                            labelText: 'Serving size',
-                            hintText: 'Example: 28',
-                            border: OutlineInputBorder(),
-                          ),
+                          labelText: 'Serving size',
+                          hintText: 'Example: 28',
+                          keyboardType:
+                              const TextInputType.numberWithOptions(decimal: true),
+                          textInputAction: TextInputAction.next,
                         ),
                       ),
                       const SizedBox(width: 12),
@@ -487,48 +573,36 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                     ],
                   ),
                   const SizedBox(height: 12),
-                  TextField(
+                  _keyboardAwareTextField(
                     controller: calories,
-                    scrollPadding: const EdgeInsets.only(bottom: 220),
+                    labelText: 'Calories per serving',
                     keyboardType:
                         const TextInputType.numberWithOptions(decimal: true),
-                    decoration: const InputDecoration(
-                      labelText: 'Calories per serving',
-                      border: OutlineInputBorder(),
-                    ),
+                    textInputAction: TextInputAction.next,
                   ),
                   const SizedBox(height: 12),
-                  TextField(
+                  _keyboardAwareTextField(
                     controller: fat,
-                    scrollPadding: const EdgeInsets.only(bottom: 220),
+                    labelText: 'Fat (g) per serving',
                     keyboardType:
                         const TextInputType.numberWithOptions(decimal: true),
-                    decoration: const InputDecoration(
-                      labelText: 'Fat (g) per serving',
-                      border: OutlineInputBorder(),
-                    ),
+                    textInputAction: TextInputAction.next,
                   ),
                   const SizedBox(height: 12),
-                  TextField(
+                  _keyboardAwareTextField(
                     controller: carbs,
-                    scrollPadding: const EdgeInsets.only(bottom: 220),
+                    labelText: 'Carbs (g) per serving',
                     keyboardType:
                         const TextInputType.numberWithOptions(decimal: true),
-                    decoration: const InputDecoration(
-                      labelText: 'Carbs (g) per serving',
-                      border: OutlineInputBorder(),
-                    ),
+                    textInputAction: TextInputAction.next,
                   ),
                   const SizedBox(height: 12),
-                  TextField(
+                  _keyboardAwareTextField(
                     controller: protein,
-                    scrollPadding: const EdgeInsets.only(bottom: 220),
+                    labelText: 'Protein (g) per serving',
                     keyboardType:
                         const TextInputType.numberWithOptions(decimal: true),
-                    decoration: const InputDecoration(
-                      labelText: 'Protein (g) per serving',
-                      border: OutlineInputBorder(),
-                    ),
+                    textInputAction: TextInputAction.done,
                   ),
                 ],
               ),
@@ -657,13 +731,11 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                     'entries that used this saved food item.',
                   ),
                   const SizedBox(height: 14),
-                  TextField(
+                  _keyboardAwareTextField(
                     controller: name,
-                    scrollPadding: const EdgeInsets.only(bottom: 220),
-                    decoration: const InputDecoration(
-                      labelText: 'Food name',
-                      border: OutlineInputBorder(),
-                    ),
+                    labelText: 'Food name',
+                    textCapitalization: TextCapitalization.words,
+                    textInputAction: TextInputAction.next,
                   ),
                   const SizedBox(height: 12),
                   _brandAutocompleteField(
@@ -675,16 +747,12 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                   Row(
                     children: [
                       Expanded(
-                        child: TextField(
+                        child: _keyboardAwareTextField(
                           controller: servingAmount,
-                    scrollPadding: const EdgeInsets.only(bottom: 220),
-                          keyboardType: const TextInputType.numberWithOptions(
-                            decimal: true,
-                          ),
-                          decoration: const InputDecoration(
-                            labelText: 'Serving size',
-                            border: OutlineInputBorder(),
-                          ),
+                          labelText: 'Serving size',
+                          keyboardType:
+                              const TextInputType.numberWithOptions(decimal: true),
+                          textInputAction: TextInputAction.next,
                         ),
                       ),
                       const SizedBox(width: 12),
@@ -718,48 +786,36 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                     ],
                   ),
                   const SizedBox(height: 12),
-                  TextField(
+                  _keyboardAwareTextField(
                     controller: calories,
-                    scrollPadding: const EdgeInsets.only(bottom: 220),
+                    labelText: 'Calories per serving',
                     keyboardType:
                         const TextInputType.numberWithOptions(decimal: true),
-                    decoration: const InputDecoration(
-                      labelText: 'Calories per serving',
-                      border: OutlineInputBorder(),
-                    ),
+                    textInputAction: TextInputAction.next,
                   ),
                   const SizedBox(height: 12),
-                  TextField(
+                  _keyboardAwareTextField(
                     controller: fat,
-                    scrollPadding: const EdgeInsets.only(bottom: 220),
+                    labelText: 'Fat (g) per serving',
                     keyboardType:
                         const TextInputType.numberWithOptions(decimal: true),
-                    decoration: const InputDecoration(
-                      labelText: 'Fat (g) per serving',
-                      border: OutlineInputBorder(),
-                    ),
+                    textInputAction: TextInputAction.next,
                   ),
                   const SizedBox(height: 12),
-                  TextField(
+                  _keyboardAwareTextField(
                     controller: carbs,
-                    scrollPadding: const EdgeInsets.only(bottom: 220),
+                    labelText: 'Carbs (g) per serving',
                     keyboardType:
                         const TextInputType.numberWithOptions(decimal: true),
-                    decoration: const InputDecoration(
-                      labelText: 'Carbs (g) per serving',
-                      border: OutlineInputBorder(),
-                    ),
+                    textInputAction: TextInputAction.next,
                   ),
                   const SizedBox(height: 12),
-                  TextField(
+                  _keyboardAwareTextField(
                     controller: protein,
-                    scrollPadding: const EdgeInsets.only(bottom: 220),
+                    labelText: 'Protein (g) per serving',
                     keyboardType:
                         const TextInputType.numberWithOptions(decimal: true),
-                    decoration: const InputDecoration(
-                      labelText: 'Protein (g) per serving',
-                      border: OutlineInputBorder(),
-                    ),
+                    textInputAction: TextInputAction.done,
                   ),
                 ],
               ),
@@ -957,19 +1013,16 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                             const SizedBox(width: 18),
                             SizedBox(
                               width: 88,
-                              child: TextField(
-                                controller: servingControllers[food.id],
+                              child: _keyboardAwareTextField(
+                                controller: servingControllers[food.id]!,
+                                labelText: 'Qty',
                                 enabled: selected && !saving,
                                 keyboardType:
                                     const TextInputType.numberWithOptions(
                                   decimal: true,
                                 ),
                                 textAlign: TextAlign.center,
-                                decoration: const InputDecoration(
-                                  labelText: 'Qty',
-                                  isDense: true,
-                                  border: OutlineInputBorder(),
-                                ),
+                                textInputAction: TextInputAction.done,
                               ),
                             ),
                             ],
@@ -1517,19 +1570,16 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                             const SizedBox(width: 18),
                             SizedBox(
                               width: 88,
-                              child: TextField(
-                                controller: servingControllers[food.id],
+                              child: _keyboardAwareTextField(
+                                controller: servingControllers[food.id]!,
+                                labelText: 'Qty',
                                 enabled: selected && !saving,
                                 keyboardType:
                                     const TextInputType.numberWithOptions(
                                   decimal: true,
                                 ),
                                 textAlign: TextAlign.center,
-                                decoration: const InputDecoration(
-                                  labelText: 'Qty',
-                                  isDense: true,
-                                  border: OutlineInputBorder(),
-                                ),
+                                textInputAction: TextInputAction.done,
                               ),
                             ),
                             ],
