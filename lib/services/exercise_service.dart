@@ -6,11 +6,15 @@ class ExerciseVideoData {
   final String? userVideoUrl;
   final String? importedVideoUrl;
   final String? sourceExerciseId;
+  final String? userFormNotes;
+  final String? importedFormNotes;
 
   const ExerciseVideoData({
     required this.userVideoUrl,
     required this.importedVideoUrl,
     required this.sourceExerciseId,
+    required this.userFormNotes,
+    required this.importedFormNotes,
   });
 
   bool get hasUserVideo =>
@@ -70,7 +74,7 @@ class ExerciseService {
 
     final rowsRaw = await supabase
         .from('exercise_sessions')
-        .select('id, weight, reps, created_at')
+        .select('id, weight, reps, metric_type, metric_value, created_at')
         .eq('user_id', user.id)
         .eq('exercise_id', exerciseId)
         .order('created_at', ascending: false)
@@ -115,9 +119,12 @@ class ExerciseService {
 
     final result = grouped.entries.map((entry) {
       final sets = entry.value
+          .where((row) => (row['metric_type'] ?? 'reps').toString() == 'reps')
           .map((row) => (
                 weight: _performanceDouble(row['weight']),
-                reps: _performanceInt(row['reps']),
+                reps: row['metric_value'] != null
+                    ? _performanceInt(row['metric_value'])
+                    : _performanceInt(row['reps']),
               ))
           .where((set) => set.weight > 0 && set.reps > 0)
           .toList();
@@ -331,31 +338,37 @@ class ExerciseService {
       passedExercise?['video_source_exercise_id'],
     );
 
-    // Always fetch when either field was not supplied by the page.
-    if (userVideoUrl == null || sourceExerciseId == null) {
-      final row = await supabase
-          .from('exercises')
-          .select('video_url, video_source_exercise_id')
-          .eq('id', exerciseId)
-          .maybeSingle();
+    String? userFormNotes = _cleanNullableString(
+      passedExercise?['form_notes'],
+    );
 
-      userVideoUrl ??= _cleanNullableString(row?['video_url']);
-      sourceExerciseId ??=
-          _cleanNullableString(row?['video_source_exercise_id']);
-    }
+    // Fetch the current exercise so video + notes stay in sync even if the
+    // page was opened with a partial/stale exercise map.
+    final row = await supabase
+        .from('exercises')
+        .select('video_url, video_source_exercise_id, form_notes')
+        .eq('id', exerciseId)
+        .maybeSingle();
+
+    userVideoUrl ??= _cleanNullableString(row?['video_url']);
+    sourceExerciseId ??=
+        _cleanNullableString(row?['video_source_exercise_id']);
+    userFormNotes ??= _cleanNullableString(row?['form_notes']);
 
     String? importedVideoUrl;
+    String? importedFormNotes;
 
     if (sourceExerciseId != null) {
-      importedVideoUrl = await resolveExerciseVideoUrl(
-        sourceExerciseId,
-      );
+      importedVideoUrl = await resolveExerciseVideoUrl(sourceExerciseId);
+      importedFormNotes = await resolveExerciseFormNotes(sourceExerciseId);
     }
 
     return ExerciseVideoData(
       userVideoUrl: userVideoUrl,
       importedVideoUrl: importedVideoUrl,
       sourceExerciseId: sourceExerciseId,
+      userFormNotes: userFormNotes,
+      importedFormNotes: importedFormNotes,
     );
   }
 
@@ -394,6 +407,34 @@ class ExerciseService {
     } catch (_) {
       return null;
     }
+  }
+
+  /// Resolves form notes from the trainer/friend source exercise.
+  /// If RLS does not permit reading the source row, this safely returns null.
+  Future<String?> resolveExerciseFormNotes(String sourceExerciseId) async {
+    try {
+      final row = await supabase
+          .from('exercises')
+          .select('form_notes')
+          .eq('id', sourceExerciseId)
+          .maybeSingle();
+
+      return _cleanNullableString(row?['form_notes']);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> updateExerciseFormNotes({
+    required String exerciseId,
+    required String? formNotes,
+  }) async {
+    final cleaned = _cleanNullableString(formNotes);
+
+    await supabase
+        .from('exercises')
+        .update({'form_notes': cleaned})
+        .eq('id', exerciseId);
   }
 
   /// Uploads only the user's personal form video.

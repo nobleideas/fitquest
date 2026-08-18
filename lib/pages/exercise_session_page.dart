@@ -20,9 +20,12 @@ class ExerciseSessionPage extends StatefulWidget {
 class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
   final weightController = TextEditingController();
   final repsController = TextEditingController();
+  final userFormNotesController = TextEditingController();
   final SessionService sessionService = SessionService();
   final ExerciseService exerciseService = ExerciseService();
   bool _isRemovingTrainerVideo = false;
+  bool _isSavingFormNotes = false;
+  String _selectedMetricType = 'reps';
 
   // --- Today's workout + four most recent prior workout days
   String? todayDayKey;
@@ -51,6 +54,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
   String? _importedVideoUrl;
   String? _userVideoUrl;
   String? _sourceExerciseId;
+  String? _trainerFormNotes;
 
   @override
   void initState() {
@@ -91,6 +95,30 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
     return int.tryParse(v.toString()) ?? 0;
   }
 
+  String _metricLabel(String metricType) {
+    switch (metricType) {
+      case 'seconds':
+        return 'Seconds';
+      case 'minutes':
+        return 'Minutes';
+      case 'miles':
+        return 'Miles';
+      default:
+        return 'Reps';
+    }
+  }
+
+  double _sessionMetricValue(Map<String, dynamic> session) {
+    final stored = session['metric_value'];
+    if (stored != null) return _numToDouble(stored);
+    return _numToDouble(session['reps']);
+  }
+
+  String _formatMetricValue(double value) {
+    return value == value.roundToDouble()
+        ? value.toInt().toString()
+        : value.toStringAsFixed(2).replaceFirst(RegExp(r'0+$'), '').replaceFirst(RegExp(r'\.$'), '');
+  }
 
   // ---------- Sessions ----------
   Future<void> _loadTodayAndLast4Days() async {
@@ -153,9 +181,12 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
 
       double totalVolume = 0;
       for (final session in sessions) {
-        totalVolume +=
-            _numToDouble(session['weight']) *
-            _numToInt(session['reps']);
+        final metricType = (session['metric_type'] ?? 'reps').toString();
+        if (metricType == 'reps') {
+          totalVolume +=
+              _numToDouble(session['weight']) *
+              _sessionMetricValue(session);
+        }
       }
 
       volMap[key] = totalVolume;
@@ -176,6 +207,132 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
   Future<void> _deleteSession(String sessionId) async {
     await sessionService.deleteSession(sessionId);
     await _loadTodayAndLast4Days();
+  }
+
+  Future<void> _editSession(Map<String, dynamic> session) async {
+    final weightEditController = TextEditingController(
+      text: _numToDouble(session['weight']).toString().replaceFirst(RegExp(r'\.0$'), ''),
+    );
+    final metricEditController = TextEditingController(
+      text: _formatMetricValue(_sessionMetricValue(session)),
+    );
+    var metricType = (session['metric_type'] ?? 'reps').toString();
+
+    final save = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Edit set'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: weightEditController,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  decoration: const InputDecoration(
+                    labelText: 'Weight / Bodyweight / Level',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: metricEditController,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  decoration: InputDecoration(
+                    labelText: _metricLabel(metricType),
+                    border: const OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 4,
+                  runSpacing: 0,
+                  children: ['reps', 'seconds', 'minutes', 'miles'].map((type) {
+                    return SizedBox(
+                      width: 112,
+                      child: CheckboxListTile(
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        controlAffinity: ListTileControlAffinity.leading,
+                        title: Text(_metricLabel(type), style: const TextStyle(fontSize: 13)),
+                        value: metricType == type,
+                        onChanged: (checked) {
+                          if (checked == true) {
+                            setDialogState(() => metricType = type);
+                          }
+                        },
+                      ),
+                    );
+                  }).toList(),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('Save'),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (save != true) return;
+
+    final weight = double.tryParse(weightEditController.text.trim());
+    final metricValue = double.tryParse(metricEditController.text.trim());
+    if (weight == null || metricValue == null) return;
+    if (metricType == 'reps' && metricValue != metricValue.roundToDouble()) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Reps must be a whole number.')),
+      );
+      return;
+    }
+
+    await Supabase.instance.client
+        .from('exercise_sessions')
+        .update({
+          'weight': weight,
+          'reps': metricType == 'reps' ? metricValue.toInt() : 0,
+          'metric_type': metricType,
+          'metric_value': metricValue,
+        })
+        .eq('id', session['id']);
+
+    await _loadTodayAndLast4Days();
+  }
+
+  Future<void> _saveUserFormNotes() async {
+    final exerciseId = (widget.exercise['id'] ?? '').toString().trim();
+    if (exerciseId.isEmpty) return;
+
+    setState(() => _isSavingFormNotes = true);
+    try {
+      final notes = userFormNotesController.text.trim();
+      await Supabase.instance.client
+          .from('exercises')
+          .update({'user_form_notes': notes.isEmpty ? null : notes})
+          .eq('id', exerciseId);
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Form tips saved.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not save form tips: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _isSavingFormNotes = false);
+    }
   }
 
   Future<void> _removeTrainerVideo() async {
@@ -344,9 +501,11 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
                 ),
               ]
             : sessions.map((session) {
-                final setVolume =
-                    _numToDouble(session['weight']) *
-                    _numToInt(session['reps']);
+                final metricType = (session['metric_type'] ?? 'reps').toString();
+                final metricValue = _sessionMetricValue(session);
+                final setVolume = metricType == 'reps'
+                    ? _numToDouble(session['weight']) * metricValue
+                    : null;
 
                 return Dismissible(
                   key: Key(session['id'].toString()),
@@ -364,11 +523,24 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
                       _deleteSession(session['id'].toString()),
                   child: ListTile(
                     leading: const Icon(Icons.fitness_center),
-                    title: Text('Weight: ${session['weight']}'),
-                    subtitle: Text('Reps: ${session['reps']}'),
-                    trailing: Text(
-                      'Vol: ${setVolume.toStringAsFixed(0)}',
-                      style: Theme.of(context).textTheme.bodySmall,
+                    title: Text('Weight / Level: ${session['weight']}'),
+                    subtitle: Text(
+                      '${_metricLabel(metricType)}: ${_formatMetricValue(metricValue)}',
+                    ),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (setVolume != null)
+                          Text(
+                            'Vol: ${setVolume.toStringAsFixed(0)}',
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        IconButton(
+                          tooltip: 'Edit set',
+                          icon: const Icon(Icons.edit_outlined),
+                          onPressed: () => _editSession(session),
+                        ),
+                      ],
                     ),
                   ),
                 );
@@ -440,6 +612,15 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
         _importedVideoUrl = videos.importedVideoUrl;
         _userVideoUrl = videos.userVideoUrl;
         _sourceExerciseId = videos.sourceExerciseId;
+        _trainerFormNotes = (
+          widget.exercise['trainer_form_notes'] ??
+          widget.exercise['form_text'] ??
+          widget.exercise['form_notes'] ??
+          widget.exercise['instructions'] ??
+          ''
+        ).toString().trim();
+        userFormNotesController.text =
+            (widget.exercise['user_form_notes'] ?? '').toString();
         _importedVideoController = importedController;
         _userVideoController = userController;
       });
@@ -632,6 +813,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
     required VideoPlayerController? controller,
     required String? videoUrl,
     String? subtitle,
+    String? formNotes,
   }) {
     final hasUrl = (videoUrl ?? '').trim().isNotEmpty;
     final isReady = controller != null && controller.value.isInitialized;
@@ -692,6 +874,21 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
                 hasUrl ? 'Loading video...' : emptyMessage,
                 style: Theme.of(context).textTheme.bodySmall,
               ),
+            if ((formNotes ?? '').trim().isNotEmpty) ...[
+              const SizedBox(height: 10),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  border: Border.all(color: Theme.of(context).dividerColor),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  formNotes!.trim(),
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
+            ],
           ],
         ),
       ),
@@ -702,6 +899,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
   void dispose() {
     weightController.dispose();
     repsController.dispose();
+    userFormNotesController.dispose();
     _importedVideoController?.dispose();
     _userVideoController?.dispose();
     super.dispose();
@@ -729,7 +927,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
               controller: weightController,
               keyboardType: TextInputType.number,
               decoration: const InputDecoration(
-                labelText: "Weight / Bodyweight",
+                labelText: "Weight / Bodyweight / Level",
                 border: OutlineInputBorder(),
               ),
             ),
@@ -737,13 +935,35 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
 
             TextField(
               controller: repsController,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(
-                labelText: "Reps / Seconds / Minutes / Miles",
-                border: OutlineInputBorder(),
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: InputDecoration(
+                labelText: _metricLabel(_selectedMetricType),
+                border: const OutlineInputBorder(),
               ),
             ),
-            const SizedBox(height: 12),
+            const SizedBox(height: 4),
+            Wrap(
+              spacing: 4,
+              runSpacing: 0,
+              children: ['reps', 'seconds', 'minutes', 'miles'].map((type) {
+                return SizedBox(
+                  width: 112,
+                  child: CheckboxListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    controlAffinity: ListTileControlAffinity.leading,
+                    title: Text(_metricLabel(type), style: const TextStyle(fontSize: 13)),
+                    value: _selectedMetricType == type,
+                    onChanged: (checked) {
+                      if (checked == true) {
+                        setState(() => _selectedMetricType = type);
+                      }
+                    },
+                  ),
+                );
+              }).toList(),
+            ),
+            const SizedBox(height: 8),
 
             SizedBox(
               width: double.infinity,
@@ -751,17 +971,33 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
                 icon: const Icon(Icons.save),
                 label: const Text("Save Set"),
                 onPressed: () async {
-                  final weight = double.tryParse(weightController.text);
-                  final reps = int.tryParse(repsController.text);
-                  if (weight == null || reps == null) return;
+                  final weight = double.tryParse(weightController.text.trim());
+                  final metricValue = double.tryParse(repsController.text.trim());
+                  if (weight == null || metricValue == null) return;
+
+                  if (_selectedMetricType == 'reps' &&
+                      metricValue != metricValue.roundToDouble()) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Reps must be a whole number.')),
+                    );
+                    return;
+                  }
 
                   final res = await sessionService.insertSession(
                     exerciseId: exercise['id'],
                     weight: weight,
-                    reps: reps,
+                    reps: _selectedMetricType == 'reps' ? metricValue.toInt() : 0,
                   );
 
                   final sessionID = res['id'];
+
+                  await Supabase.instance.client
+                      .from('exercise_sessions')
+                      .update({
+                        'metric_type': _selectedMetricType,
+                        'metric_value': metricValue,
+                      })
+                      .eq('id', sessionID);
 
                   await Supabase.instance.client.rpc(
                     'add_session_xp',
@@ -928,14 +1164,15 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
               const Center(child: CircularProgressIndicator())
             else ...[
               _buildVideoPlayerCard(
-  title: "Trainer Form Video",
-  subtitle: _sourceExerciseId == null
-      ? null
-      : "Imported with this exercise",
-  emptyMessage: "No imported trainer video is available.",
-  controller: _importedVideoController,
-  videoUrl: _importedVideoUrl,
-),
+                title: "Trainer Form Video",
+                subtitle: _sourceExerciseId == null
+                    ? null
+                    : "Imported with this exercise",
+                emptyMessage: "No imported trainer video is available.",
+                controller: _importedVideoController,
+                videoUrl: _importedVideoUrl,
+                formNotes: _trainerFormNotes,
+              ),
 
 if ((_importedVideoUrl ?? '').trim().isNotEmpty &&
     (_sourceExerciseId ?? '').trim().isNotEmpty) ...[
@@ -975,6 +1212,34 @@ if ((_importedVideoUrl ?? '').trim().isNotEmpty &&
                 videoUrl: _pickedVideo != null
                     ? _pickedVideo!.path
                     : _userVideoUrl,
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: userFormNotesController,
+                minLines: 2,
+                maxLines: 4,
+                decoration: const InputDecoration(
+                  labelText: 'My form tips / isolation notes',
+                  hintText: 'Example: Keep elbows tucked and pause at peak contraction...',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerRight,
+                child: OutlinedButton.icon(
+                  icon: _isSavingFormNotes
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.notes),
+                  label: Text(
+                    _isSavingFormNotes ? 'Saving...' : 'Save Form Tips',
+                  ),
+                  onPressed: _isSavingFormNotes ? null : _saveUserFormNotes,
+                ),
               ),
             ],
 
