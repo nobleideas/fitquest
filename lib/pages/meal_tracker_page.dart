@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../services/meal_service.dart';
@@ -137,45 +136,14 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
     String Function(T item)? subtitleFor,
   }) async {
     final searchController = TextEditingController();
-    final searchFocusNode = FocusNode();
     String query = '';
-    bool keyboardRequested = false;
 
-    Future<void> focusSearchAndShowKeyboard() async {
-      if (!searchFocusNode.canRequestFocus) return;
-
-      searchFocusNode.requestFocus();
-
-      // `autofocus` can give a field focus without opening the software
-      // keyboard on some Flutter mobile/web builds. Explicitly asking the
-      // text-input channel to show makes the one-tap Consume flow immediate.
-      try {
-        await SystemChannels.textInput.invokeMethod<void>('TextInput.show');
-      } catch (_) {
-        // Safe fallback: the field remains focused even if the platform
-        // ignores an explicit software-keyboard request.
-      }
-
-      // A second request after the dialog animation begins helps platforms
-      // that ignore TextInput.show during the very first frame.
-      await Future<void>.delayed(const Duration(milliseconds: 120));
-      if (!searchFocusNode.hasFocus) return;
-      try {
-        await SystemChannels.textInput.invokeMethod<void>('TextInput.show');
-      } catch (_) {}
-    }
-
-    final result = await showDialog<T>(
+    final result = await showModalBottomSheet<T>(
       context: context,
-      barrierDismissible: true,
-      builder: (dialogContext) {
-        if (!keyboardRequested) {
-          keyboardRequested = true;
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            focusSearchAndShowKeyboard();
-          });
-        }
-
+      isScrollControlled: true,
+      useSafeArea: true,
+      requestFocus: true,
+      builder: (sheetContext) {
         return StatefulBuilder(
           builder: (context, setLocal) {
             final normalized = query.trim().toLowerCase();
@@ -187,75 +155,90 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                   subtitle.contains(normalized);
             }).toList();
 
-            return AlertDialog(
-              title: Text(title),
-              content: SizedBox(
-                width: double.maxFinite,
-                height: 460,
-                child: Column(
-                  children: [
-                    TextField(
-                      controller: searchController,
-                      focusNode: searchFocusNode,
-                      autofocus: true,
-                      textInputAction: TextInputAction.search,
-                      onChanged: (value) => setLocal(() => query = value),
-                      onTap: () {
-                        // Also explicitly show it when the user re-enters the
-                        // field after dismissing the keyboard.
-                        try {
-                          SystemChannels.textInput
-                              .invokeMethod<void>('TextInput.show');
-                        } catch (_) {}
-                      },
-                      decoration: const InputDecoration(
-                        prefixIcon: Icon(Icons.search),
-                        labelText: 'Search',
-                        border: OutlineInputBorder(),
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    Expanded(
-                      child: filtered.isEmpty
-                          ? const Center(child: Text('No matches.'))
-                          : ListView.separated(
-                              keyboardDismissBehavior:
-                                  ScrollViewKeyboardDismissBehavior.onDrag,
-                              itemCount: filtered.length,
-                              separatorBuilder: (_, __) =>
-                                  const Divider(height: 1),
-                              itemBuilder: (context, index) {
-                                final item = filtered[index];
-                                final subtitle =
-                                    subtitleFor?.call(item) ?? '';
-                                return ListTile(
-                                  contentPadding: EdgeInsets.zero,
-                                  title: Text(titleFor(item)),
-                                  subtitle: subtitle.isEmpty
-                                      ? null
-                                      : Text(subtitle),
-                                  onTap: () =>
-                                      Navigator.of(dialogContext).pop(item),
-                                );
-                              },
+            final keyboardBottom = MediaQuery.viewInsetsOf(context).bottom;
+            final maxHeight = MediaQuery.sizeOf(context).height * 0.88;
+
+            return AnimatedPadding(
+              duration: const Duration(milliseconds: 120),
+              curve: Curves.easeOut,
+              padding: EdgeInsets.only(bottom: keyboardBottom),
+              child: Material(
+                color: Theme.of(context).colorScheme.surface,
+                borderRadius: const BorderRadius.vertical(
+                  top: Radius.circular(20),
+                ),
+                clipBehavior: Clip.antiAlias,
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(maxHeight: maxHeight),
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                title,
+                                style: Theme.of(context).textTheme.titleLarge,
+                              ),
                             ),
+                            IconButton(
+                              tooltip: 'Close',
+                              onPressed: () => Navigator.of(sheetContext).pop(),
+                              icon: const Icon(Icons.close),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        TextField(
+                          controller: searchController,
+                          autofocus: true,
+                          keyboardType: TextInputType.text,
+                          textInputAction: TextInputAction.search,
+                          onChanged: (value) => setLocal(() => query = value),
+                          decoration: const InputDecoration(
+                            prefixIcon: Icon(Icons.search),
+                            labelText: 'Search',
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        Flexible(
+                          child: filtered.isEmpty
+                              ? const Center(child: Text('No matches.'))
+                              : ListView.separated(
+                                  keyboardDismissBehavior:
+                                      ScrollViewKeyboardDismissBehavior.manual,
+                                  itemCount: filtered.length,
+                                  separatorBuilder: (_, __) =>
+                                      const Divider(height: 1),
+                                  itemBuilder: (context, index) {
+                                    final item = filtered[index];
+                                    final subtitle = subtitleFor?.call(item) ?? '';
+                                    return ListTile(
+                                      contentPadding: EdgeInsets.zero,
+                                      title: Text(titleFor(item)),
+                                      subtitle: subtitle.isEmpty
+                                          ? null
+                                          : Text(subtitle),
+                                      onTap: () =>
+                                          Navigator.of(sheetContext).pop(item),
+                                    );
+                                  },
+                                ),
+                        ),
+                      ],
                     ),
-                  ],
+                  ),
                 ),
               ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(dialogContext).pop(),
-                  child: const Text('Cancel'),
-                ),
-              ],
             );
           },
         );
       },
     );
 
-    searchFocusNode.dispose();
     searchController.dispose();
     return result;
   }
@@ -398,20 +381,37 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
   }) {
     return Builder(
       builder: (fieldContext) {
-        void revealField() {
-          // Wait for the keyboard/viewInsets to update, then scroll the
-          // actual field into the visible portion of the dialog.
-          Future<void>.delayed(const Duration(milliseconds: 180), () {
+        Future<void> revealField() async {
+          // On the first keyboard opening, viewInsets is still 0 when the tap
+          // callback fires. Wait until Flutter reports the keyboard inset (or
+          // until a short fallback timeout) before scrolling the field.
+          for (var attempt = 0; attempt < 10; attempt++) {
             if (!fieldContext.mounted) return;
-            Scrollable.ensureVisible(
-              fieldContext,
-              duration: const Duration(milliseconds: 220),
-              curve: Curves.easeOut,
-              alignment: 0.22,
-              alignmentPolicy:
-                  ScrollPositionAlignmentPolicy.explicit,
-            );
-          });
+            final keyboardOpen =
+                MediaQuery.viewInsetsOf(fieldContext).bottom > 0;
+            if (keyboardOpen) break;
+            await Future<void>.delayed(const Duration(milliseconds: 60));
+          }
+
+          if (!fieldContext.mounted) return;
+          await Scrollable.ensureVisible(
+            fieldContext,
+            duration: const Duration(milliseconds: 220),
+            curve: Curves.easeOut,
+            alignment: 0.16,
+            alignmentPolicy: ScrollPositionAlignmentPolicy.explicit,
+          );
+
+          // One extra pass catches the final keyboard animation/layout frame.
+          await Future<void>.delayed(const Duration(milliseconds: 120));
+          if (!fieldContext.mounted) return;
+          await Scrollable.ensureVisible(
+            fieldContext,
+            duration: const Duration(milliseconds: 160),
+            curve: Curves.easeOut,
+            alignment: 0.16,
+            alignmentPolicy: ScrollPositionAlignmentPolicy.explicit,
+          );
         }
 
         return TextField(
