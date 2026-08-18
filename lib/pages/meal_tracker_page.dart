@@ -27,6 +27,10 @@ class MealTrackerPage extends StatefulWidget {
 
 class _MealTrackerPageState extends State<MealTrackerPage> {
   final MealService _mealService = MealService();
+  final TextEditingController _consumeFoodSearchController = TextEditingController();
+  final TextEditingController _consumeMealSearchController = TextEditingController();
+  final FocusNode _consumeFoodSearchFocus = FocusNode();
+  final FocusNode _consumeMealSearchFocus = FocusNode();
 
   bool _isLoading = true;
   List<FoodItem> _foodItems = [];
@@ -434,6 +438,152 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
             labelText: labelText,
             hintText: hintText,
             border: const OutlineInputBorder(),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _consumeFoodSearchField() {
+    return RawAutocomplete<FoodItem>(
+      textEditingController: _consumeFoodSearchController,
+      focusNode: _consumeFoodSearchFocus,
+      displayStringForOption: (food) => food.name,
+      optionsBuilder: (textValue) {
+        final query = textValue.text.trim().toLowerCase();
+        if (query.isEmpty) return const Iterable<FoodItem>.empty();
+        return _foodItems.where((food) {
+          return food.name.toLowerCase().contains(query) ||
+              food.brand.toLowerCase().contains(query);
+        }).take(10);
+      },
+      onSelected: (food) async {
+        _consumeFoodSearchController.clear();
+        _consumeFoodSearchFocus.unfocus();
+        await _consumeSelectedFood(food);
+      },
+      fieldViewBuilder: (
+        context,
+        controller,
+        focusNode,
+        onFieldSubmitted,
+      ) {
+        return TextField(
+          controller: controller,
+          focusNode: focusNode,
+          enabled: _foodItems.isNotEmpty,
+          textInputAction: TextInputAction.search,
+          decoration: InputDecoration(
+            prefixIcon: const Icon(Icons.restaurant),
+            hintText: _foodItems.isEmpty ? 'Add food first' : 'Consume Food',
+            border: const OutlineInputBorder(),
+            isDense: true,
+          ),
+        );
+      },
+      optionsViewBuilder: (context, onSelected, options) {
+        final list = options.toList();
+        return Align(
+          alignment: Alignment.topLeft,
+          child: Material(
+            elevation: 6,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 300, maxWidth: 420),
+              child: ListView.separated(
+                padding: EdgeInsets.zero,
+                shrinkWrap: true,
+                itemCount: list.length,
+                separatorBuilder: (_, __) => const Divider(height: 1),
+                itemBuilder: (context, index) {
+                  final food = list[index];
+                  return ListTile(
+                    dense: true,
+                    title: Text(food.name),
+                    subtitle: Text([
+                      if (food.brand.trim().isNotEmpty) food.brand,
+                      'Serving: ${_servingSizeLabel(food)}',
+                      '${_formatNumber(food.calories)} cal',
+                    ].join(' • ')),
+                    onTap: () => onSelected(food),
+                  );
+                },
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _consumeMealSearchField() {
+    return RawAutocomplete<SavedMeal>(
+      textEditingController: _consumeMealSearchController,
+      focusNode: _consumeMealSearchFocus,
+      displayStringForOption: (meal) => meal.name,
+      optionsBuilder: (textValue) {
+        final query = textValue.text.trim().toLowerCase();
+        if (query.isEmpty) return const Iterable<SavedMeal>.empty();
+        return _meals.where((meal) {
+          final componentText = meal.components
+              .map((component) => _foodDisplayName(component.food))
+              .join(' ')
+              .toLowerCase();
+          return meal.name.toLowerCase().contains(query) ||
+              componentText.contains(query);
+        }).take(10);
+      },
+      onSelected: (meal) async {
+        _consumeMealSearchController.clear();
+        _consumeMealSearchFocus.unfocus();
+        await _consumeSelectedMeal(meal);
+      },
+      fieldViewBuilder: (
+        context,
+        controller,
+        focusNode,
+        onFieldSubmitted,
+      ) {
+        return TextField(
+          controller: controller,
+          focusNode: focusNode,
+          enabled: _meals.isNotEmpty,
+          textInputAction: TextInputAction.search,
+          decoration: InputDecoration(
+            prefixIcon: const Icon(Icons.restaurant_menu),
+            hintText: _meals.isEmpty ? 'Add meal first' : 'Consume Meal',
+            border: const OutlineInputBorder(),
+            isDense: true,
+          ),
+        );
+      },
+      optionsViewBuilder: (context, onSelected, options) {
+        final list = options.toList();
+        return Align(
+          alignment: Alignment.topLeft,
+          child: Material(
+            elevation: 6,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 300, maxWidth: 420),
+              child: ListView.separated(
+                padding: EdgeInsets.zero,
+                shrinkWrap: true,
+                itemCount: list.length,
+                separatorBuilder: (_, __) => const Divider(height: 1),
+                itemBuilder: (context, index) {
+                  final meal = list[index];
+                  return ListTile(
+                    dense: true,
+                    title: Text(meal.name),
+                    subtitle: Text(
+                      '${_formatNumber(meal.calories)} cal • '
+                      '${meal.components.length} item'
+                      '${meal.components.length == 1 ? '' : 's'}',
+                    ),
+                    onTap: () => onSelected(meal),
+                  );
+                },
+              ),
+            ),
           ),
         );
       },
@@ -1620,31 +1770,7 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
     }
   }
 
-  Future<void> _openConsumeMealDialog() async {
-    if (_meals.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Add a meal before trying to consume one.'),
-        ),
-      );
-      return;
-    }
-
-    // Go straight to search so one tap on "Consume Meal" is enough.
-    // _showSearchSelectDialog autofocuses the search field and requests focus
-    // after the dialog is mounted, which also brings up the keyboard.
-    final selected = await _showSearchSelectDialog<SavedMeal>(
-      title: 'Select Meal',
-      items: _meals,
-      titleFor: (meal) => meal.name,
-      subtitleFor: (meal) =>
-          '${_formatNumber(meal.calories)} cal • '
-          '${meal.components.length} item'
-          '${meal.components.length == 1 ? '' : 's'}',
-    );
-
-    if (selected == null || !mounted) return;
-
+  Future<void> _consumeSelectedMeal(SavedMeal selected) async {
     final quantity = TextEditingController(text: '1');
     bool saving = false;
 
@@ -1771,33 +1897,7 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
     quantity.dispose();
   }
 
-  Future<void> _openConsumeFoodDialog() async {
-    if (_foodItems.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Add a food item before logging consumption.'),
-        ),
-      );
-      return;
-    }
-
-    // Go straight to search so one tap on "Consume Food" is enough.
-    final selected = await _showSearchSelectDialog<FoodItem>(
-      title: 'Select Food',
-      items: _foodItems,
-      titleFor: (food) => food.name,
-      subtitleFor: (food) {
-        final parts = <String>[
-          if (food.brand.trim().isNotEmpty) food.brand,
-          'Serving: ${_servingSizeLabel(food)}',
-          '${_formatNumber(food.calories)} cal',
-        ];
-        return parts.join(' • ');
-      },
-    );
-
-    if (selected == null || !mounted) return;
-
+  Future<void> _consumeSelectedFood(FoodItem selected) async {
     final servings = TextEditingController(text: '1');
     bool saving = false;
 
@@ -2342,6 +2442,15 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
   }
 
   @override
+  void dispose() {
+    _consumeFoodSearchController.dispose();
+    _consumeMealSearchController.dispose();
+    _consumeFoodSearchFocus.dispose();
+    _consumeMealSearchFocus.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final today = _todaySummary;
 
@@ -2387,11 +2496,7 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                   Row(
                     children: [
                       Expanded(
-                        child: ElevatedButton.icon(
-                          onPressed: _openConsumeFoodDialog,
-                          icon: const Icon(Icons.restaurant),
-                          label: const Text('Consume Food'),
-                        ),
+                        child: _consumeFoodSearchField(),
                       ),
                       const SizedBox(width: 10),
                       Expanded(
@@ -2407,12 +2512,7 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                   Row(
                     children: [
                       Expanded(
-                        child: ElevatedButton.icon(
-                          onPressed:
-                              _meals.isEmpty ? null : _openConsumeMealDialog,
-                          icon: const Icon(Icons.restaurant_menu),
-                          label: const Text('Consume Meal'),
-                        ),
+                        child: _consumeMealSearchField(),
                       ),
                       const SizedBox(width: 10),
                       Expanded(
