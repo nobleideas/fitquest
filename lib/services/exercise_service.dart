@@ -74,7 +74,7 @@ class ExerciseService {
 
     final rowsRaw = await supabase
         .from('exercise_sessions')
-        .select('id, weight, reps, metric_type, metric_value, created_at')
+        .select('id, weight, reps, load_type, metric_type, metric_value, created_at')
         .eq('user_id', user.id)
         .eq('exercise_id', exerciseId)
         .order('created_at', ascending: false)
@@ -119,7 +119,9 @@ class ExerciseService {
 
     final result = grouped.entries.map((entry) {
       final sets = entry.value
-          .where((row) => (row['metric_type'] ?? 'reps').toString() == 'reps')
+          .where((row) =>
+              (row['load_type'] ?? 'weight').toString() == 'weight' &&
+              (row['metric_type'] ?? 'reps').toString() == 'reps')
           .map((row) => (
                 weight: _performanceDouble(row['weight']),
                 reps: row['metric_value'] != null

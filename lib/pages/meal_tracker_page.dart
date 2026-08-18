@@ -136,73 +136,88 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
     String Function(T item)? subtitleFor,
   }) async {
     final searchController = TextEditingController();
+    final searchFocusNode = FocusNode();
     String query = '';
 
     final result = await showDialog<T>(
       context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (context, setLocal) {
-          final normalized = query.trim().toLowerCase();
-          final filtered = items.where((item) {
-            if (normalized.isEmpty) return true;
-            final title = titleFor(item).toLowerCase();
-            final subtitle = subtitleFor?.call(item).toLowerCase() ?? '';
-            return title.contains(normalized) || subtitle.contains(normalized);
-          }).toList();
+      builder: (dialogContext) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (searchFocusNode.canRequestFocus) {
+            searchFocusNode.requestFocus();
+          }
+        });
 
-          return AlertDialog(
-            title: Text(title),
-            content: SizedBox(
-              width: double.maxFinite,
-              height: 460,
-              child: Column(
-                children: [
-                  TextField(
-                    controller: searchController,
-                    autofocus: true,
-                    onChanged: (value) => setLocal(() => query = value),
-                    decoration: const InputDecoration(
-                      prefixIcon: Icon(Icons.search),
-                      labelText: 'Search',
-                      border: OutlineInputBorder(),
+        return StatefulBuilder(
+          builder: (context, setLocal) {
+            final normalized = query.trim().toLowerCase();
+            final filtered = items.where((item) {
+              if (normalized.isEmpty) return true;
+              final itemTitle = titleFor(item).toLowerCase();
+              final subtitle = subtitleFor?.call(item).toLowerCase() ?? '';
+              return itemTitle.contains(normalized) ||
+                  subtitle.contains(normalized);
+            }).toList();
+
+            return AlertDialog(
+              title: Text(title),
+              content: SizedBox(
+                width: double.maxFinite,
+                height: 460,
+                child: Column(
+                  children: [
+                    TextField(
+                      controller: searchController,
+                      focusNode: searchFocusNode,
+                      autofocus: true,
+                      textInputAction: TextInputAction.search,
+                      onChanged: (value) => setLocal(() => query = value),
+                      decoration: const InputDecoration(
+                        prefixIcon: Icon(Icons.search),
+                        labelText: 'Search',
+                        border: OutlineInputBorder(),
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 12),
-                  Expanded(
-                    child: filtered.isEmpty
-                        ? const Center(child: Text('No matches.'))
-                        : ListView.separated(
-                            itemCount: filtered.length,
-                            separatorBuilder: (_, __) =>
-                                const Divider(height: 1),
-                            itemBuilder: (context, index) {
-                              final item = filtered[index];
-                              final subtitle = subtitleFor?.call(item) ?? '';
-                              return ListTile(
-                                contentPadding: EdgeInsets.zero,
-                                title: Text(titleFor(item)),
-                                subtitle:
-                                    subtitle.isEmpty ? null : Text(subtitle),
-                                onTap: () =>
-                                    Navigator.of(dialogContext).pop(item),
-                              );
-                            },
-                          ),
-                  ),
-                ],
+                    const SizedBox(height: 12),
+                    Expanded(
+                      child: filtered.isEmpty
+                          ? const Center(child: Text('No matches.'))
+                          : ListView.separated(
+                              itemCount: filtered.length,
+                              separatorBuilder: (_, __) =>
+                                  const Divider(height: 1),
+                              itemBuilder: (context, index) {
+                                final item = filtered[index];
+                                final subtitle =
+                                    subtitleFor?.call(item) ?? '';
+                                return ListTile(
+                                  contentPadding: EdgeInsets.zero,
+                                  title: Text(titleFor(item)),
+                                  subtitle: subtitle.isEmpty
+                                      ? null
+                                      : Text(subtitle),
+                                  onTap: () =>
+                                      Navigator.of(dialogContext).pop(item),
+                                );
+                              },
+                            ),
+                    ),
+                  ],
+                ),
               ),
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(dialogContext).pop(),
-                child: const Text('Cancel'),
-              ),
-            ],
-          );
-        },
-      ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(),
+                  child: const Text('Cancel'),
+                ),
+              ],
+            );
+          },
+        );
+      },
     );
 
+    searchFocusNode.dispose();
     searchController.dispose();
     return result;
   }
@@ -246,9 +261,97 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
     );
   }
 
+  List<String> get _knownBrands {
+    final byLowerCase = <String, String>{};
+
+    for (final food in _foodItems) {
+      final brand = food.brand.trim();
+      if (brand.isEmpty) continue;
+      byLowerCase.putIfAbsent(brand.toLowerCase(), () => brand);
+    }
+
+    final brands = byLowerCase.values.toList()
+      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    return brands;
+  }
+
+  Widget _brandAutocompleteField({
+    required TextEditingController controller,
+    required FocusNode focusNode,
+    bool enabled = true,
+  }) {
+    return RawAutocomplete<String>(
+      textEditingController: controller,
+      focusNode: focusNode,
+      displayStringForOption: (option) => option,
+      optionsBuilder: (textValue) {
+        final query = textValue.text.trim().toLowerCase();
+        if (query.isEmpty) return const Iterable<String>.empty();
+
+        return _knownBrands.where((brand) {
+          return brand.toLowerCase().contains(query);
+        }).take(8);
+      },
+      onSelected: (brand) {
+        controller.value = TextEditingValue(
+          text: brand,
+          selection: TextSelection.collapsed(offset: brand.length),
+        );
+      },
+      fieldViewBuilder: (
+        context,
+        textController,
+        fieldFocusNode,
+        onFieldSubmitted,
+      ) {
+        return TextField(
+          controller: textController,
+          focusNode: fieldFocusNode,
+          enabled: enabled,
+          textCapitalization: TextCapitalization.words,
+          scrollPadding: const EdgeInsets.only(bottom: 220),
+          decoration: const InputDecoration(
+            labelText: 'Brand',
+            hintText: 'Start typing a brand',
+            border: OutlineInputBorder(),
+          ),
+        );
+      },
+      optionsViewBuilder: (context, onSelected, options) {
+        final optionList = options.toList();
+        return Align(
+          alignment: Alignment.topLeft,
+          child: Material(
+            elevation: 4,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(
+                maxHeight: 220,
+                maxWidth: 360,
+              ),
+              child: ListView.builder(
+                padding: EdgeInsets.zero,
+                shrinkWrap: true,
+                itemCount: optionList.length,
+                itemBuilder: (context, index) {
+                  final option = optionList[index];
+                  return ListTile(
+                    dense: true,
+                    title: Text(option),
+                    onTap: () => onSelected(option),
+                  );
+                },
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   Future<void> _openAddFoodDialog() async {
     final name = TextEditingController();
     final brand = TextEditingController();
+    final brandFocusNode = FocusNode();
     final calories = TextEditingController();
     final fat = TextEditingController();
     final carbs = TextEditingController();
@@ -326,18 +429,17 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                 children: [
                   TextField(
                     controller: name,
+                    scrollPadding: const EdgeInsets.only(bottom: 220),
                     decoration: const InputDecoration(
                       labelText: 'Food name',
                       border: OutlineInputBorder(),
                     ),
                   ),
                   const SizedBox(height: 12),
-                  TextField(
+                  _brandAutocompleteField(
                     controller: brand,
-                    decoration: const InputDecoration(
-                      labelText: 'Brand',
-                      border: OutlineInputBorder(),
-                    ),
+                    focusNode: brandFocusNode,
+                    enabled: !saving,
                   ),
                   const SizedBox(height: 12),
                   Row(
@@ -345,6 +447,7 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                       Expanded(
                         child: TextField(
                           controller: servingAmount,
+                    scrollPadding: const EdgeInsets.only(bottom: 220),
                           keyboardType: const TextInputType.numberWithOptions(
                             decimal: true,
                           ),
@@ -386,6 +489,7 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                   const SizedBox(height: 12),
                   TextField(
                     controller: calories,
+                    scrollPadding: const EdgeInsets.only(bottom: 220),
                     keyboardType:
                         const TextInputType.numberWithOptions(decimal: true),
                     decoration: const InputDecoration(
@@ -396,6 +500,7 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                   const SizedBox(height: 12),
                   TextField(
                     controller: fat,
+                    scrollPadding: const EdgeInsets.only(bottom: 220),
                     keyboardType:
                         const TextInputType.numberWithOptions(decimal: true),
                     decoration: const InputDecoration(
@@ -406,6 +511,7 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                   const SizedBox(height: 12),
                   TextField(
                     controller: carbs,
+                    scrollPadding: const EdgeInsets.only(bottom: 220),
                     keyboardType:
                         const TextInputType.numberWithOptions(decimal: true),
                     decoration: const InputDecoration(
@@ -416,6 +522,7 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                   const SizedBox(height: 12),
                   TextField(
                     controller: protein,
+                    scrollPadding: const EdgeInsets.only(bottom: 220),
                     keyboardType:
                         const TextInputType.numberWithOptions(decimal: true),
                     decoration: const InputDecoration(
@@ -450,6 +557,7 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
     );
 
     name.dispose();
+    brandFocusNode.dispose();
     brand.dispose();
     calories.dispose();
     fat.dispose();
@@ -461,6 +569,7 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
   Future<void> _openEditFoodDialog(FoodItem food) async {
     final name = TextEditingController(text: food.name);
     final brand = TextEditingController(text: food.brand);
+    final brandFocusNode = FocusNode();
     final calories = TextEditingController(text: _formatNumber(food.calories));
     final fat = TextEditingController(text: _formatNumber(food.fat));
     final carbs = TextEditingController(text: _formatNumber(food.carbs));
@@ -550,18 +659,17 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                   const SizedBox(height: 14),
                   TextField(
                     controller: name,
+                    scrollPadding: const EdgeInsets.only(bottom: 220),
                     decoration: const InputDecoration(
                       labelText: 'Food name',
                       border: OutlineInputBorder(),
                     ),
                   ),
                   const SizedBox(height: 12),
-                  TextField(
+                  _brandAutocompleteField(
                     controller: brand,
-                    decoration: const InputDecoration(
-                      labelText: 'Brand',
-                      border: OutlineInputBorder(),
-                    ),
+                    focusNode: brandFocusNode,
+                    enabled: !saving,
                   ),
                   const SizedBox(height: 12),
                   Row(
@@ -569,6 +677,7 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                       Expanded(
                         child: TextField(
                           controller: servingAmount,
+                    scrollPadding: const EdgeInsets.only(bottom: 220),
                           keyboardType: const TextInputType.numberWithOptions(
                             decimal: true,
                           ),
@@ -611,6 +720,7 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                   const SizedBox(height: 12),
                   TextField(
                     controller: calories,
+                    scrollPadding: const EdgeInsets.only(bottom: 220),
                     keyboardType:
                         const TextInputType.numberWithOptions(decimal: true),
                     decoration: const InputDecoration(
@@ -621,6 +731,7 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                   const SizedBox(height: 12),
                   TextField(
                     controller: fat,
+                    scrollPadding: const EdgeInsets.only(bottom: 220),
                     keyboardType:
                         const TextInputType.numberWithOptions(decimal: true),
                     decoration: const InputDecoration(
@@ -631,6 +742,7 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                   const SizedBox(height: 12),
                   TextField(
                     controller: carbs,
+                    scrollPadding: const EdgeInsets.only(bottom: 220),
                     keyboardType:
                         const TextInputType.numberWithOptions(decimal: true),
                     decoration: const InputDecoration(
@@ -641,6 +753,7 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                   const SizedBox(height: 12),
                   TextField(
                     controller: protein,
+                    scrollPadding: const EdgeInsets.only(bottom: 220),
                     keyboardType:
                         const TextInputType.numberWithOptions(decimal: true),
                     decoration: const InputDecoration(
@@ -675,6 +788,7 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
     );
 
     name.dispose();
+    brandFocusNode.dispose();
     brand.dispose();
     calories.dispose();
     fat.dispose();
@@ -1466,7 +1580,21 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
       return;
     }
 
-    SavedMeal selected = _meals.first;
+    // Go straight to search so one tap on "Consume Meal" is enough.
+    // _showSearchSelectDialog autofocuses the search field and requests focus
+    // after the dialog is mounted, which also brings up the keyboard.
+    final selected = await _showSearchSelectDialog<SavedMeal>(
+      title: 'Select Meal',
+      items: _meals,
+      titleFor: (meal) => meal.name,
+      subtitleFor: (meal) =>
+          '${_formatNumber(meal.calories)} cal • '
+          '${meal.components.length} item'
+          '${meal.components.length == 1 ? '' : 's'}',
+    );
+
+    if (selected == null || !mounted) return;
+
     final quantity = TextEditingController(text: '1');
     bool saving = false;
 
@@ -1474,24 +1602,7 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
       context: context,
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, setLocal) {
-          final multiplier =
-              double.tryParse(quantity.text.trim()) ?? 0;
-
-          Future<void> chooseMeal() async {
-            final picked = await _showSearchSelectDialog<SavedMeal>(
-              title: 'Select Meal',
-              items: _meals,
-              titleFor: (meal) => meal.name,
-              subtitleFor: (meal) =>
-                  '${_formatNumber(meal.calories)} cal • '
-                  '${meal.components.length} item'
-                  '${meal.components.length == 1 ? '' : 's'}',
-            );
-
-            if (picked != null) {
-              setLocal(() => selected = picked);
-            }
-          }
+          final multiplier = double.tryParse(quantity.text.trim()) ?? 0;
 
           Future<void> consume() async {
             final count = double.tryParse(quantity.text.trim());
@@ -1526,24 +1637,15 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
           }
 
           return AlertDialog(
-            title: const Text('Consume Meal'),
+            title: Text('Consume ${selected.name}'),
             content: SingleChildScrollView(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _searchSelectionField(
-                    label: 'Meal',
-                    value: selected.name,
-                    subtitle:
-                        '${_formatNumber(selected.calories)} cal • '
-                        '${selected.components.length} item'
-                        '${selected.components.length == 1 ? '' : 's'}',
-                    onTap: saving ? null : chooseMeal,
-                  ),
-                  const SizedBox(height: 12),
                   TextField(
                     controller: quantity,
+                    autofocus: true,
                     onChanged: (_) => setLocal(() {}),
                     keyboardType:
                         const TextInputType.numberWithOptions(decimal: true),
@@ -1629,7 +1731,23 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
       return;
     }
 
-    FoodItem selected = _foodItems.first;
+    // Go straight to search so one tap on "Consume Food" is enough.
+    final selected = await _showSearchSelectDialog<FoodItem>(
+      title: 'Select Food',
+      items: _foodItems,
+      titleFor: (food) => food.name,
+      subtitleFor: (food) {
+        final parts = <String>[
+          if (food.brand.trim().isNotEmpty) food.brand,
+          'Serving: ${_servingSizeLabel(food)}',
+          '${_formatNumber(food.calories)} cal',
+        ];
+        return parts.join(' • ');
+      },
+    );
+
+    if (selected == null || !mounted) return;
+
     final servings = TextEditingController(text: '1');
     bool saving = false;
 
@@ -1638,26 +1756,6 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, setLocal) {
           final preview = double.tryParse(servings.text.trim()) ?? 0;
-
-          Future<void> chooseFood() async {
-            final picked = await _showSearchSelectDialog<FoodItem>(
-              title: 'Select Food',
-              items: _foodItems,
-              titleFor: (food) => food.name,
-              subtitleFor: (food) {
-                final parts = <String>[
-                  if (food.brand.trim().isNotEmpty) food.brand,
-                  'Serving: ${_servingSizeLabel(food)}',
-                  '${_formatNumber(food.calories)} cal',
-                ];
-                return parts.join(' • ');
-              },
-            );
-
-            if (picked != null) {
-              setLocal(() => selected = picked);
-            }
-          }
 
           Future<void> consume() async {
             final count = double.tryParse(servings.text.trim());
@@ -1691,24 +1789,22 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
           }
 
           return AlertDialog(
-            title: const Text('Consume Food'),
+            title: Text('Consume ${selected.name}'),
             content: SingleChildScrollView(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  _searchSelectionField(
-                    label: 'Food item',
-                    value: selected.name,
-                    subtitle: [
-                      if (selected.brand.trim().isNotEmpty) selected.brand,
-                      'Serving: ${_servingSizeLabel(selected)}',
-                    ].join(' • '),
-                    onTap: saving ? null : chooseFood,
-                  ),
-                  const SizedBox(height: 12),
+                  if (selected.brand.trim().isNotEmpty) ...[
+                    Text(
+                      selected.brand,
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                    const SizedBox(height: 8),
+                  ],
                   TextField(
                     controller: servings,
+                    autofocus: true,
                     onChanged: (_) => setLocal(() {}),
                     keyboardType:
                         const TextInputType.numberWithOptions(decimal: true),

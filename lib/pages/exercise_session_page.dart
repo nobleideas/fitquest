@@ -26,6 +26,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
   bool _isRemovingTrainerVideo = false;
   bool _isSavingFormNotes = false;
   String _selectedMetricType = 'reps';
+  String _selectedLoadType = 'weight';
 
   // --- Today's workout + four most recent prior workout days
   String? todayDayKey;
@@ -93,6 +94,10 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
     if (v is int) return v;
     if (v is num) return v.toInt();
     return int.tryParse(v.toString()) ?? 0;
+  }
+
+  String _loadLabel(String loadType) {
+    return loadType == 'level' ? 'Level' : 'Weight';
   }
 
   String _metricLabel(String metricType) {
@@ -182,7 +187,8 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
       double totalVolume = 0;
       for (final session in sessions) {
         final metricType = (session['metric_type'] ?? 'reps').toString();
-        if (metricType == 'reps') {
+        final loadType = (session['load_type'] ?? 'weight').toString();
+        if (metricType == 'reps' && loadType == 'weight') {
           totalVolume +=
               _numToDouble(session['weight']) *
               _sessionMetricValue(session);
@@ -217,6 +223,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
       text: _formatMetricValue(_sessionMetricValue(session)),
     );
     var metricType = (session['metric_type'] ?? 'reps').toString();
+    var loadType = (session['load_type'] ?? 'weight').toString();
 
     final save = await showDialog<bool>(
       context: context,
@@ -230,10 +237,32 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
                 TextField(
                   controller: weightEditController,
                   keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                  decoration: const InputDecoration(
-                    labelText: 'Weight / Bodyweight / Level',
+                  decoration: InputDecoration(
+                    labelText: _loadLabel(loadType),
                     border: OutlineInputBorder(),
                   ),
+                ),
+                const SizedBox(height: 4),
+                Wrap(
+                  spacing: 4,
+                  runSpacing: 0,
+                  children: ['weight', 'level'].map((type) {
+                    return SizedBox(
+                      width: 112,
+                      child: CheckboxListTile(
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        controlAffinity: ListTileControlAffinity.leading,
+                        title: Text(_loadLabel(type), style: const TextStyle(fontSize: 13)),
+                        value: loadType == type,
+                        onChanged: (checked) {
+                          if (checked == true) {
+                            setDialogState(() => loadType = type);
+                          }
+                        },
+                      ),
+                    );
+                  }).toList(),
                 ),
                 const SizedBox(height: 12),
                 TextField(
@@ -301,6 +330,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
       weight: weight,
       metricType: metricType,
       metricValue: metricValue,
+      loadType: loadType,
     );
 
     await _loadTodayAndLast4Days();
@@ -499,8 +529,9 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
               ]
             : sessions.map((session) {
                 final metricType = (session['metric_type'] ?? 'reps').toString();
+                final loadType = (session['load_type'] ?? 'weight').toString();
                 final metricValue = _sessionMetricValue(session);
-                final setVolume = metricType == 'reps'
+                final setVolume = metricType == 'reps' && loadType == 'weight'
                     ? _numToDouble(session['weight']) * metricValue
                     : null;
 
@@ -520,7 +551,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
                       _deleteSession(session['id'].toString()),
                   child: ListTile(
                     leading: const Icon(Icons.fitness_center),
-                    title: Text('Weight / Level: ${session['weight']}'),
+                    title: Text('${_loadLabel(loadType)}: ${session['weight']}'),
                     subtitle: Text(
                       '${_metricLabel(metricType)}: ${_formatMetricValue(metricValue)}',
                     ),
@@ -916,10 +947,32 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
             TextField(
               controller: weightController,
               keyboardType: TextInputType.number,
-              decoration: const InputDecoration(
-                labelText: "Weight / Bodyweight / Level",
+              decoration: InputDecoration(
+                labelText: _loadLabel(_selectedLoadType),
                 border: OutlineInputBorder(),
               ),
+            ),
+            const SizedBox(height: 4),
+            Wrap(
+              spacing: 4,
+              runSpacing: 0,
+              children: ['weight', 'level'].map((type) {
+                return SizedBox(
+                  width: 112,
+                  child: CheckboxListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    controlAffinity: ListTileControlAffinity.leading,
+                    title: Text(_loadLabel(type), style: const TextStyle(fontSize: 13)),
+                    value: _selectedLoadType == type,
+                    onChanged: (checked) {
+                      if (checked == true) {
+                        setState(() => _selectedLoadType = type);
+                      }
+                    },
+                  ),
+                );
+              }).toList(),
             ),
             const SizedBox(height: 12),
 
@@ -978,6 +1031,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
                     weight: weight,
                     metricType: _selectedMetricType,
                     metricValue: metricValue,
+                    loadType: _selectedLoadType,
                   );
 
                   final sessionID = res['id'];
