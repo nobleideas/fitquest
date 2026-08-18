@@ -296,15 +296,12 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
       return;
     }
 
-    await Supabase.instance.client
-        .from('exercise_sessions')
-        .update({
-          'weight': weight,
-          'reps': metricType == 'reps' ? metricValue.toInt() : 0,
-          'metric_type': metricType,
-          'metric_value': metricValue,
-        })
-        .eq('id', session['id']);
+    await sessionService.updateSession(
+      sessionId: session['id'].toString(),
+      weight: weight,
+      metricType: metricType,
+      metricValue: metricValue,
+    );
 
     await _loadTodayAndLast4Days();
   }
@@ -318,7 +315,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
       final notes = userFormNotesController.text.trim();
       await Supabase.instance.client
           .from('exercises')
-          .update({'user_form_notes': notes.isEmpty ? null : notes})
+          .update({'form_notes': notes.isEmpty ? null : notes})
           .eq('id', exerciseId);
 
       if (!mounted) return;
@@ -612,15 +609,8 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
         _importedVideoUrl = videos.importedVideoUrl;
         _userVideoUrl = videos.userVideoUrl;
         _sourceExerciseId = videos.sourceExerciseId;
-        _trainerFormNotes = (
-          widget.exercise['trainer_form_notes'] ??
-          widget.exercise['form_text'] ??
-          widget.exercise['form_notes'] ??
-          widget.exercise['instructions'] ??
-          ''
-        ).toString().trim();
-        userFormNotesController.text =
-            (widget.exercise['user_form_notes'] ?? '').toString();
+        _trainerFormNotes = videos.importedFormNotes;
+        userFormNotesController.text = videos.userFormNotes ?? '';
         _importedVideoController = importedController;
         _userVideoController = userController;
       });
@@ -984,20 +974,13 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
                   }
 
                   final res = await sessionService.insertSession(
-                    exerciseId: exercise['id'],
+                    exerciseId: exercise['id'].toString(),
                     weight: weight,
-                    reps: _selectedMetricType == 'reps' ? metricValue.toInt() : 0,
+                    metricType: _selectedMetricType,
+                    metricValue: metricValue,
                   );
 
                   final sessionID = res['id'];
-
-                  await Supabase.instance.client
-                      .from('exercise_sessions')
-                      .update({
-                        'metric_type': _selectedMetricType,
-                        'metric_value': metricValue,
-                      })
-                      .eq('id', sessionID);
 
                   await Supabase.instance.client.rpc(
                     'add_session_xp',
