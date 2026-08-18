@@ -8,12 +8,14 @@ class SessionService {
     required double weight,
     required double metricValue,
     required String metricType,
+    required String loadType,
   }) async {
     final user = supabase.auth.currentUser;
 
     if (user == null) throw Exception('User not logged in');
 
     _validateMetric(metricType, metricValue);
+    _validateLoadType(loadType);
 
     final res = await supabase
         .from('exercise_sessions')
@@ -21,6 +23,7 @@ class SessionService {
           'user_id': user.id,
           'exercise_id': exerciseId,
           'weight': weight,
+          'load_type': loadType,
           // Keep reps populated for backwards compatibility with older code.
           // Non-rep metrics intentionally store 0 reps.
           'reps': metricType == 'reps' ? metricValue.toInt() : 0,
@@ -38,16 +41,19 @@ class SessionService {
     required double weight,
     required double metricValue,
     required String metricType,
+    required String loadType,
   }) async {
     final user = supabase.auth.currentUser;
     if (user == null) throw Exception('User not logged in');
 
     _validateMetric(metricType, metricValue);
+    _validateLoadType(loadType);
 
     await supabase
         .from('exercise_sessions')
         .update({
           'weight': weight,
+          'load_type': loadType,
           'reps': metricType == 'reps' ? metricValue.toInt() : 0,
           'metric_type': metricType,
           'metric_value': metricValue,
@@ -69,6 +75,14 @@ class SessionService {
 
     if (metricType == 'reps' && metricValue != metricValue.roundToDouble()) {
       throw ArgumentError('Reps must be a whole number.');
+    }
+  }
+
+
+  void _validateLoadType(String loadType) {
+    const allowed = {'weight', 'level'};
+    if (!allowed.contains(loadType)) {
+      throw ArgumentError('Unsupported load type: $loadType');
     }
   }
 
