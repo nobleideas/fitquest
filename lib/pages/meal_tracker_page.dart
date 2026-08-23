@@ -1772,13 +1772,46 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
 
   Future<void> _consumeSelectedMeal(SavedMeal selected) async {
     final quantity = TextEditingController(text: '1');
+    DateTime selectedDate = _dayOnly(DateTime.now());
     bool saving = false;
+
+    DateTime consumptionTimestamp() {
+      final now = DateTime.now();
+      return DateTime(
+        selectedDate.year,
+        selectedDate.month,
+        selectedDate.day,
+        now.hour,
+        now.minute,
+        now.second,
+        now.millisecond,
+        now.microsecond,
+      );
+    }
 
     await showDialog<void>(
       context: context,
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, setLocal) {
           final multiplier = double.tryParse(quantity.text.trim()) ?? 0;
+          final today = _dayOnly(DateTime.now());
+          final dateLabel = selectedDate == today
+              ? 'Today · ${_formatDate(selectedDate)}'
+              : _formatDate(selectedDate);
+
+          Future<void> chooseDate() async {
+            final picked = await showDatePicker(
+              context: dialogContext,
+              initialDate: selectedDate,
+              firstDate: DateTime(2000),
+              lastDate: today,
+              helpText: 'Select log date',
+            );
+
+            if (picked != null) {
+              setLocal(() => selectedDate = _dayOnly(picked));
+            }
+          }
 
           Future<void> consume() async {
             final count = double.tryParse(quantity.text.trim());
@@ -1798,6 +1831,7 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
               await _mealService.consumeMeal(
                 meal: selected,
                 mealQuantity: count,
+                consumedAt: consumptionTimestamp(),
               );
 
               if (!mounted) return;
@@ -1829,6 +1863,22 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                       labelText: 'Meal quantity',
                       hintText: 'Example: 1, 0.5, 2',
                       border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  InkWell(
+                    onTap: saving ? null : chooseDate,
+                    borderRadius: BorderRadius.circular(4),
+                    child: InputDecorator(
+                      decoration: const InputDecoration(
+                        labelText: 'Log date',
+                        border: OutlineInputBorder(),
+                        suffixIcon: Icon(Icons.calendar_today_outlined),
+                      ),
+                      child: Text(
+                        dateLabel,
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
                     ),
                   ),
                   const SizedBox(height: 14),
@@ -1899,13 +1949,46 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
 
   Future<void> _consumeSelectedFood(FoodItem selected) async {
     final servings = TextEditingController(text: '1');
+    DateTime selectedDate = _dayOnly(DateTime.now());
     bool saving = false;
+
+    DateTime consumptionTimestamp() {
+      final now = DateTime.now();
+      return DateTime(
+        selectedDate.year,
+        selectedDate.month,
+        selectedDate.day,
+        now.hour,
+        now.minute,
+        now.second,
+        now.millisecond,
+        now.microsecond,
+      );
+    }
 
     await showDialog<void>(
       context: context,
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, setLocal) {
           final preview = double.tryParse(servings.text.trim()) ?? 0;
+          final today = _dayOnly(DateTime.now());
+          final dateLabel = selectedDate == today
+              ? 'Today · ${_formatDate(selectedDate)}'
+              : _formatDate(selectedDate);
+
+          Future<void> chooseDate() async {
+            final picked = await showDatePicker(
+              context: dialogContext,
+              initialDate: selectedDate,
+              firstDate: DateTime(2000),
+              lastDate: today,
+              helpText: 'Select log date',
+            );
+
+            if (picked != null) {
+              setLocal(() => selectedDate = _dayOnly(picked));
+            }
+          }
 
           Future<void> consume() async {
             final count = double.tryParse(servings.text.trim());
@@ -1924,6 +2007,7 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
               await _mealService.consumeFood(
                 foodItemId: selected.id,
                 servings: count,
+                consumedAt: consumptionTimestamp(),
               );
 
               if (!mounted) return;
@@ -1964,6 +2048,22 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                       helperText:
                           '1 serving = ${_servingSizeLabel(selected)}',
                       border: const OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  InkWell(
+                    onTap: saving ? null : chooseDate,
+                    borderRadius: BorderRadius.circular(4),
+                    child: InputDecorator(
+                      decoration: const InputDecoration(
+                        labelText: 'Log date',
+                        border: OutlineInputBorder(),
+                        suffixIcon: Icon(Icons.calendar_today_outlined),
+                      ),
+                      child: Text(
+                        dateLabel,
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
                     ),
                   ),
                   const SizedBox(height: 14),
