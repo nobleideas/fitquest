@@ -8,6 +8,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../services/suggestion_service.dart';
 import '../services/friend_profile_service.dart';
 import 'exercise_session_page.dart';
+import 'friend_profile_page.dart';
 import 'meal_tracker_page.dart';
 
 class HomePage extends StatefulWidget {
@@ -842,6 +843,20 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
 
     return summaries;
+  }
+
+  Future<void> _openFriendProfile(DayWorkoutSummary summary) async {
+    if (summary.isCurrentUser || summary.userId.trim().isEmpty) return;
+
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => FriendProfilePage(
+          friendUserId: summary.userId,
+          friendUsername: summary.username,
+        ),
+      ),
+    );
   }
 
   Future<void> _openMealTracker() async {
@@ -1682,12 +1697,40 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
                           ),
                           Padding(
                             padding: const EdgeInsets.only(right: 8),
-                            child: Text(
-                              s.displayOwner,
-                              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                    fontWeight: FontWeight.w700,
+                            child: s.isCurrentUser
+                                ? Text(
+                                    s.displayOwner,
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .bodySmall
+                                        ?.copyWith(
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                  )
+                                : InkWell(
+                                    onTap: () => _openFriendProfile(s),
+                                    borderRadius: BorderRadius.circular(6),
+                                    child: Padding(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 4,
+                                        vertical: 4,
+                                      ),
+                                      child: Text(
+                                        s.displayOwner,
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .bodySmall
+                                            ?.copyWith(
+                                              fontWeight: FontWeight.w700,
+                                              color: Theme.of(context)
+                                                  .colorScheme
+                                                  .primary,
+                                              decoration:
+                                                  TextDecoration.underline,
+                                            ),
+                                      ),
+                                    ),
                                   ),
-                            ),
                           ),
                           Container(
                             padding: const EdgeInsets.symmetric(
