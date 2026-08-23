@@ -731,41 +731,65 @@ class _CopyableContainerTabState extends State<_CopyableContainerTab> {
     });
   }
 
-  String? _friendContainerGymId(Map<String, dynamic> c) {
+  List<String> _friendContainerGymIds(Map<String, dynamic> c) {
+    final raw = c['gym_ids'];
+
+    if (raw is List) {
+      return raw
+          .map((value) => value.toString().trim())
+          .where((value) => value.isNotEmpty)
+          .toList();
+    }
+
+    // Backward compatibility with older single-gym RPC responses.
     final direct = (c['gym_id'] ?? '').toString().trim();
-    if (direct.isNotEmpty) return direct;
+    if (direct.isNotEmpty) return [direct];
 
     final gym = c['gym'];
     if (gym is Map) {
       final nested = (gym['id'] ?? '').toString().trim();
-      if (nested.isNotEmpty) return nested;
+      if (nested.isNotEmpty) return [nested];
     }
 
-    return null;
+    return const [];
   }
 
-  String _friendContainerGymName(Map<String, dynamic> c) {
+  List<String> _friendContainerGymNames(Map<String, dynamic> c) {
+    final raw = c['gym_names'];
+
+    if (raw is List) {
+      return raw
+          .map((value) => value.toString().trim())
+          .where((value) => value.isNotEmpty)
+          .toList();
+    }
+
+    // Backward compatibility with older single-gym RPC responses.
     final direct = (c['gym_name'] ?? '').toString().trim();
-    if (direct.isNotEmpty) return direct;
+    if (direct.isNotEmpty) return [direct];
 
     final gym = c['gym'];
     if (gym is Map) {
       final nested = (gym['name'] ?? '').toString().trim();
-      if (nested.isNotEmpty) return nested;
+      if (nested.isNotEmpty) return [nested];
     }
 
-    return 'Gym';
+    return const [];
   }
 
   List<Map<String, String>> get _friendGyms {
     final byId = <String, String>{};
 
     for (final c in widget.friendContainers) {
-      final gymId = _friendContainerGymId(c);
-      if (gymId == null) continue;
+      final ids = _friendContainerGymIds(c);
+      final names = _friendContainerGymNames(c);
 
-      final gymName = _friendContainerGymName(c);
-      byId.putIfAbsent(gymId, () => gymName);
+      for (var i = 0; i < ids.length; i++) {
+        final id = ids[i];
+        final name =
+            i < names.length && names[i].isNotEmpty ? names[i] : 'Gym';
+        byId.putIfAbsent(id, () => name);
+      }
     }
 
     final gyms = byId.entries
@@ -791,7 +815,7 @@ class _CopyableContainerTabState extends State<_CopyableContainerTab> {
       final c = widget.friendContainers[i];
 
       if (_selectedGymId != null &&
-          _friendContainerGymId(c) != _selectedGymId) {
+          !_friendContainerGymIds(c).contains(_selectedGymId)) {
         continue;
       }
 
