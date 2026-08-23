@@ -647,6 +647,7 @@ class _CopyableContainerTabState extends State<_CopyableContainerTab> {
   ];
 
   String _selectedMuscle = 'All';
+  String? _selectedGymId;
 
   /// containerId -> set of muscle keys
   final Map<String, Set<String>> _containerMuscleGroups = {};
@@ -695,7 +696,7 @@ class _CopyableContainerTabState extends State<_CopyableContainerTab> {
   String _selectedMuscleKey() => _normalizeMuscle(_selectedMuscle);
 
   String? _friendContainerId(Map<String, dynamic> c) {
-    final s = (c['id'] ?? '').toString().trim();
+    final s = (c['id'] ?? c['equipment_id'] ?? '').toString().trim();
     return s.isEmpty ? null : s;
   }
 
@@ -730,23 +731,81 @@ class _CopyableContainerTabState extends State<_CopyableContainerTab> {
     });
   }
 
-  List<int> get _visibleIndexes {
-    if (_selectedMuscle == 'All') {
-      return List.generate(widget.friendContainers.length, (i) => i);
+  String? _friendContainerGymId(Map<String, dynamic> c) {
+    final direct = (c['gym_id'] ?? '').toString().trim();
+    if (direct.isNotEmpty) return direct;
+
+    final gym = c['gym'];
+    if (gym is Map) {
+      final nested = (gym['id'] ?? '').toString().trim();
+      if (nested.isNotEmpty) return nested;
     }
 
+    return null;
+  }
+
+  String _friendContainerGymName(Map<String, dynamic> c) {
+    final direct = (c['gym_name'] ?? '').toString().trim();
+    if (direct.isNotEmpty) return direct;
+
+    final gym = c['gym'];
+    if (gym is Map) {
+      final nested = (gym['name'] ?? '').toString().trim();
+      if (nested.isNotEmpty) return nested;
+    }
+
+    return 'Gym';
+  }
+
+  List<Map<String, String>> get _friendGyms {
+    final byId = <String, String>{};
+
+    for (final c in widget.friendContainers) {
+      final gymId = _friendContainerGymId(c);
+      if (gymId == null) continue;
+
+      final gymName = _friendContainerGymName(c);
+      byId.putIfAbsent(gymId, () => gymName);
+    }
+
+    final gyms = byId.entries
+        .map((entry) => <String, String>{
+              'id': entry.key,
+              'name': entry.value,
+            })
+        .toList()
+      ..sort(
+        (a, b) => (a['name'] ?? '')
+            .toLowerCase()
+            .compareTo((b['name'] ?? '').toLowerCase()),
+      );
+
+    return gyms;
+  }
+
+  List<int> get _visibleIndexes {
     final key = _selectedMuscleKey();
     final visible = <int>[];
 
     for (int i = 0; i < widget.friendContainers.length; i++) {
       final c = widget.friendContainers[i];
-      final id = _friendContainerId(c);
-      if (id == null) continue;
 
-      final groups = _containerMuscleGroups[id];
-      if (groups != null && groups.contains(key)) {
-        visible.add(i);
+      if (_selectedGymId != null &&
+          _friendContainerGymId(c) != _selectedGymId) {
+        continue;
       }
+
+      if (_selectedMuscle != 'All') {
+        final id = _friendContainerId(c);
+        if (id == null) continue;
+
+        final groups = _containerMuscleGroups[id];
+        if (groups == null || !groups.contains(key)) {
+          continue;
+        }
+      }
+
+      visible.add(i);
     }
 
     return visible;
@@ -871,6 +930,53 @@ class _CopyableContainerTabState extends State<_CopyableContainerTab> {
     }
   }
 
+  Widget _buildGymFilter() {
+    final gyms = _friendGyms;
+
+    if (widget.insertKind != 'equipment' || gyms.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    final selectedValue = _selectedGymId ?? '__all__';
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
+      child: DropdownButtonFormField<String>(
+        value: selectedValue,
+        isExpanded: true,
+        decoration: const InputDecoration(
+          labelText: 'Gym',
+          prefixIcon: Icon(Icons.location_on_outlined),
+          border: OutlineInputBorder(),
+        ),
+        items: [
+          const DropdownMenuItem<String>(
+            value: '__all__',
+            child: Text('All Gyms'),
+          ),
+          ...gyms.map(
+            (gym) => DropdownMenuItem<String>(
+              value: gym['id'],
+              child: Text(gym['name'] ?? 'Gym'),
+            ),
+          ),
+        ],
+        onChanged: (value) {
+          setState(() {
+            _selectedGymId =
+                value == null || value == '__all__' ? null : value;
+
+            if (_selectMode) {
+              final visible = _visibleIndexes.toSet();
+              _selectedIndexes.removeWhere((i) => !visible.contains(i));
+              if (_selectedIndexes.isEmpty) _selectMode = false;
+            }
+          });
+        },
+      ),
+    );
+  }
+
   Widget _buildMuscleFilterBar() {
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
@@ -941,12 +1047,19 @@ class _CopyableContainerTabState extends State<_CopyableContainerTab> {
       children: [
         ListView.separated(
           padding: const EdgeInsets.fromLTRB(12, 12, 12, 90),
-          itemCount: visibleIndexes.length + 2,
+          itemCount:
+              visibleIndexes.length + (widget.insertKind == 'equipment' ? 3 : 2),
           separatorBuilder: (_, __) => const Divider(height: 1),
           itemBuilder: (context, i) {
-            if (i == 0) return _buildMuscleFilterBar();
+            final hasGymFilter = widget.insertKind == 'equipment';
 
-            if (i == 1) {
+            if (hasGymFilter && i == 0) return _buildGymFilter();
+
+            final contentIndex = hasGymFilter ? i - 1 : i;
+
+            if (contentIndex == 0) return _buildMuscleFilterBar();
+
+            if (contentIndex == 1) {
               return Card(
                 elevation: 0,
                 color: Theme.of(context).colorScheme.surfaceContainerHighest,
@@ -968,9 +1081,10 @@ class _CopyableContainerTabState extends State<_CopyableContainerTab> {
               );
             }
 
-            final visibleIndex = visibleIndexes[i - 2];
+            final visibleIndex = visibleIndexes[contentIndex - 2];
             final c = list[visibleIndex];
-            final name = (c['name'] ?? '').toString();
+            final name =
+                (c['name'] ?? c['equipment_name'] ?? '').toString();
             final isSelected = _selectedIndexes.contains(visibleIndex);
 
             return ListTile(
