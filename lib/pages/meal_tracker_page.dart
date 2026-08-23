@@ -1777,15 +1777,25 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
 
     DateTime consumptionTimestamp() {
       final now = DateTime.now();
+      final today = _dayOnly(now);
+
+      // Normal logging keeps the real current time.
+      if (selectedDate == today) {
+        return now;
+      }
+
+      // A backfilled entry should appear after everything that was already
+      // logged on that prior day. Put it at the very end of the selected day
+      // rather than transplanting today's clock time onto the old date.
       return DateTime(
         selectedDate.year,
         selectedDate.month,
         selectedDate.day,
-        now.hour,
-        now.minute,
-        now.second,
-        now.millisecond,
-        now.microsecond,
+        23,
+        59,
+        59,
+        999,
+        999,
       );
     }
 
@@ -1954,15 +1964,25 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
 
     DateTime consumptionTimestamp() {
       final now = DateTime.now();
+      final today = _dayOnly(now);
+
+      // Normal logging keeps the real current time.
+      if (selectedDate == today) {
+        return now;
+      }
+
+      // A backfilled entry should appear after everything that was already
+      // logged on that prior day. Put it at the very end of the selected day
+      // rather than transplanting today's clock time onto the old date.
       return DateTime(
         selectedDate.year,
         selectedDate.month,
         selectedDate.day,
-        now.hour,
-        now.minute,
-        now.second,
-        now.millisecond,
-        now.microsecond,
+        23,
+        59,
+        59,
+        999,
+        999,
       );
     }
 
