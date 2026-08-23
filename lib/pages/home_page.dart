@@ -397,6 +397,47 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
   bool _isLegsGroup(String group) => group.trim().toLowerCase() == 'legs';
   bool _isCoreGroup(String group) => group.trim().toLowerCase() == 'core';
 
+  String? _workoutCategory({
+    required String muscleGroup,
+    required String type,
+  }) {
+    if (_isLegsGroup(muscleGroup)) return 'Legs';
+    if (_isCoreGroup(muscleGroup)) return 'Core';
+
+    switch (type.trim().toLowerCase()) {
+      case 'push':
+        return 'Push';
+      case 'pull':
+        return 'Pull';
+      default:
+        return null;
+    }
+  }
+
+  String _dominantWorkoutType({
+    required Map<String, int> exerciseCounts,
+    required Map<String, double> volumeByType,
+  }) {
+    const categories = ['Push', 'Pull', 'Legs', 'Core'];
+
+    var best = 'Push';
+    var bestCount = -1;
+    var bestVolume = -1.0;
+
+    for (final category in categories) {
+      final count = exerciseCounts[category] ?? 0;
+      final volume = volumeByType[category] ?? 0.0;
+
+      if (count > bestCount || (count == bestCount && volume > bestVolume)) {
+        best = category;
+        bestCount = count;
+        bestVolume = volume;
+      }
+    }
+
+    return best;
+  }
+
 
   String _filterLabel(WorkoutFilter filter) {
     switch (filter) {
@@ -691,8 +732,12 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
       final firstTimeByName = <String, DateTime>{};
       final firstRowByName = <String, Map<String, dynamic>>{};
 
-      double legsVolume = 0;
-      double coreVolume = 0;
+      final volumeByType = <String, double>{
+        'Push': 0,
+        'Pull': 0,
+        'Legs': 0,
+        'Core': 0,
+      };
 
       for (final row in rows) {
         final local = _friendRowCreatedAtLocal(row);
@@ -718,10 +763,16 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
         }
 
         final mg = _friendRowMuscleGroup(row);
+        final type = _friendRowType(row);
         final volume = _numToDouble(row['weight']) * _numToInt(row['reps']);
+        final category = _workoutCategory(
+          muscleGroup: mg,
+          type: type,
+        );
 
-        if (_isLegsGroup(mg)) legsVolume += volume;
-        if (_isCoreGroup(mg)) coreVolume += volume;
+        if (category != null) {
+          volumeByType[category] = (volumeByType[category] ?? 0) + volume;
+        }
       }
 
       final names = setsByName.keys.toList()
@@ -736,10 +787,12 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
         });
 
       final muscleCounts = <String, int>{};
-      int push = 0;
-      int pull = 0;
-      int legs = 0;
-      int core = 0;
+      final exerciseCountsByType = <String, int>{
+        'Push': 0,
+        'Pull': 0,
+        'Legs': 0,
+        'Core': 0,
+      };
 
       for (final name in names) {
         final row = firstRowByName[name];
@@ -750,28 +803,21 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
           muscleCounts[mg] = (muscleCounts[mg] ?? 0) + 1;
         }
 
-        if (_isLegsGroup(mg)) legs++;
-        if (_isCoreGroup(mg)) core++;
+        final category = _workoutCategory(
+          muscleGroup: mg,
+          type: _friendRowType(row),
+        );
 
-        final type = _friendRowType(row).trim().toLowerCase();
-        if (type == 'push') push++;
-        if (type == 'pull') pull++;
-      }
-
-      String label;
-      if (legs > 0 || core > 0) {
-        if (legs > core) {
-          label = 'Legs';
-        } else if (core > legs) {
-          label = 'Core';
-        } else {
-          label = legsVolume >= coreVolume ? 'Legs' : 'Core';
+        if (category != null) {
+          exerciseCountsByType[category] =
+              (exerciseCountsByType[category] ?? 0) + 1;
         }
-      } else if (pull > push) {
-        label = 'Pull';
-      } else {
-        label = 'Push';
       }
+
+      final label = _dominantWorkoutType(
+        exerciseCounts: exerciseCountsByType,
+        volumeByType: volumeByType,
+      );
 
       var durationMinutes = 0;
       if (first != null && last != null) {
@@ -858,8 +904,7 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
       final Map<DateTime, Map<String, DateTime>> firstSessionByExerciseByDay = {};
       final Map<DateTime, DateTime> firstSessionLocalByDay = {};
       final Map<DateTime, DateTime> lastSessionLocalByDay = {};
-      final Map<DateTime, double> legsVolumeByDay = {};
-      final Map<DateTime, double> coreVolumeByDay = {};
+      final Map<DateTime, Map<String, double>> volumeByDayByType = {};
 
       for (final row in sessions) {
         final local = DateTime.parse(row['created_at']).toLocal();
@@ -891,8 +936,15 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
         uniqueExercisesByDay.putIfAbsent(day, () => {});
         setCountsByDayByName.putIfAbsent(day, () => {});
         firstSessionByExerciseByDay.putIfAbsent(day, () => {});
-        legsVolumeByDay.putIfAbsent(day, () => 0.0);
-        coreVolumeByDay.putIfAbsent(day, () => 0.0);
+        volumeByDayByType.putIfAbsent(
+          day,
+          () => <String, double>{
+            'Push': 0,
+            'Pull': 0,
+            'Legs': 0,
+            'Core': 0,
+          },
+        );
 
         final exerciseId = ex['id'].toString();
         uniqueExercisesByDay[day]![exerciseId] = ex;
@@ -911,11 +963,15 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
         }
 
         final mg = (ex['primary_muscle_group'] ?? '').toString();
-        if (_isLegsGroup(mg)) {
-          legsVolumeByDay[day] = (legsVolumeByDay[day] ?? 0.0) + sessionVolume;
-        }
-        if (_isCoreGroup(mg)) {
-          coreVolumeByDay[day] = (coreVolumeByDay[day] ?? 0.0) + sessionVolume;
+        final type = (ex['type'] ?? '').toString();
+        final category = _workoutCategory(
+          muscleGroup: mg,
+          type: type,
+        );
+
+        if (category != null) {
+          volumeByDayByType[day]![category] =
+              (volumeByDayByType[day]![category] ?? 0) + sessionVolume;
         }
       }
 
@@ -946,36 +1002,34 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
             .toList();
 
         final Map<String, int> muscleCounts = {};
-        int push = 0, pull = 0, legs = 0, core = 0;
+        final exerciseCountsByType = <String, int>{
+          'Push': 0,
+          'Pull': 0,
+          'Legs': 0,
+          'Core': 0,
+        };
 
         for (final e in uniqueExercises) {
           final mg = (e['primary_muscle_group'] ?? '').toString();
-          if (mg.isNotEmpty) muscleCounts[mg] = (muscleCounts[mg] ?? 0) + 1;
-
-          if (_isLegsGroup(mg)) legs++;
-          if (_isCoreGroup(mg)) core++;
-
-          final type = (e['type'] ?? '').toString().toLowerCase();
-          if (type == 'push') push++;
-          if (type == 'pull') pull++;
-        }
-
-        String label;
-        if (legs > 0 || core > 0) {
-          if (legs > core) {
-            label = 'Legs';
-          } else if (core > legs) {
-            label = 'Core';
-          } else {
-            final legsVol = legsVolumeByDay[day] ?? 0.0;
-            final coreVol = coreVolumeByDay[day] ?? 0.0;
-            label = (legsVol >= coreVol) ? 'Legs' : 'Core';
+          if (mg.isNotEmpty) {
+            muscleCounts[mg] = (muscleCounts[mg] ?? 0) + 1;
           }
-        } else if (pull > push) {
-          label = 'Pull';
-        } else {
-          label = 'Push';
+
+          final category = _workoutCategory(
+            muscleGroup: mg,
+            type: (e['type'] ?? '').toString(),
+          );
+
+          if (category != null) {
+            exerciseCountsByType[category] =
+                (exerciseCountsByType[category] ?? 0) + 1;
+          }
         }
+
+        final label = _dominantWorkoutType(
+          exerciseCounts: exerciseCountsByType,
+          volumeByType: volumeByDayByType[day] ?? const {},
+        );
 
         int durationMin = 0;
         final first = firstSessionLocalByDay[day];
