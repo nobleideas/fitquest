@@ -898,41 +898,112 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                             style: Theme.of(context).textTheme.bodySmall,
                           ),
                           const SizedBox(height: 6),
-                          TextField(
-                            controller: quickNutrition,
-                            focusNode: quickNutritionFocusNode,
-                            enabled: !saving && !scanningNutrition,
-                            keyboardType:
-                                const TextInputType.numberWithOptions(
-                              decimal: true,
-                            ),
-                            textInputAction: TextInputAction.done,
-                            onChanged: (value) {
-                              // In Quick Fill, a trailing period acts as the
-                              // fastest possible "next" key on numeric mobile
-                              // keyboards: 230. -> submit 230 and advance.
-                              if (value.endsWith('.') && value.length > 1) {
-                                final submitted =
-                                    value.substring(0, value.length - 1).trim();
-                                if (submitted.isNotEmpty) {
-                                  submitQuickNutritionValue(
-                                    rawValue: submitted,
+                          Builder(
+                            builder: (quickFieldContext) {
+                              Future<void> revealQuickField() async {
+                                for (var attempt = 0; attempt < 10; attempt++) {
+                                  if (!quickFieldContext.mounted) return;
+                                  final keyboardOpen =
+                                      MediaQuery.viewInsetsOf(quickFieldContext)
+                                              .bottom >
+                                          0;
+                                  if (keyboardOpen) break;
+                                  await Future<void>.delayed(
+                                    const Duration(milliseconds: 60),
                                   );
                                 }
+
+                                if (!quickFieldContext.mounted) return;
+                                await Scrollable.ensureVisible(
+                                  quickFieldContext,
+                                  duration:
+                                      const Duration(milliseconds: 180),
+                                  curve: Curves.easeOut,
+                                  alignment: 0.12,
+                                  alignmentPolicy:
+                                      ScrollPositionAlignmentPolicy.explicit,
+                                );
+
+                                await Future<void>.delayed(
+                                  const Duration(milliseconds: 100),
+                                );
+                                if (!quickFieldContext.mounted) return;
+                                await Scrollable.ensureVisible(
+                                  quickFieldContext,
+                                  duration:
+                                      const Duration(milliseconds: 140),
+                                  curve: Curves.easeOut,
+                                  alignment: 0.12,
+                                  alignmentPolicy:
+                                      ScrollPositionAlignmentPolicy.explicit,
+                                );
                               }
+
+                              Future<void> submitFromArrow() async {
+                                // Keep ownership of the text input on the field
+                                // instead of letting the icon button collapse
+                                // the mobile-web keyboard.
+                                if (quickNutritionFocusNode.canRequestFocus) {
+                                  quickNutritionFocusNode.requestFocus();
+                                }
+
+                                await submitQuickNutritionValue();
+
+                                if (missingNutritionFields().isNotEmpty) {
+                                  await focusQuickNutritionAndShowKeyboard();
+                                  await revealQuickField();
+                                }
+                              }
+
+                              return TextField(
+                                controller: quickNutrition,
+                                focusNode: quickNutritionFocusNode,
+                                enabled: !saving && !scanningNutrition,
+                                keyboardType:
+                                    const TextInputType.numberWithOptions(
+                                  decimal: true,
+                                ),
+                                textInputAction: TextInputAction.done,
+                                scrollPadding: EdgeInsets.only(
+                                  bottom: MediaQuery.viewInsetsOf(
+                                        quickFieldContext,
+                                      ).bottom +
+                                      140,
+                                ),
+                                onTap: () {
+                                  revealQuickField();
+                                },
+                                onChanged: (value) {
+                                  // In Quick Fill, a trailing period acts as the
+                                  // fastest possible "next" key on numeric mobile
+                                  // keyboards: 230. -> submit 230 and advance.
+                                  if (value.endsWith('.') && value.length > 1) {
+                                    final submitted = value
+                                        .substring(0, value.length - 1)
+                                        .trim();
+                                    if (submitted.isNotEmpty) {
+                                      submitQuickNutritionValue(
+                                        rawValue: submitted,
+                                      );
+                                    }
+                                  }
+                                },
+                                onSubmitted: (_) =>
+                                    submitQuickNutritionValue(),
+                                decoration: InputDecoration(
+                                  labelText: 'Enter $nextLabel',
+                                  border: const OutlineInputBorder(),
+                                  suffixIcon: IconButton(
+                                    tooltip: 'Apply and continue',
+                                    onPressed:
+                                        saving || scanningNutrition
+                                            ? null
+                                            : submitFromArrow,
+                                    icon: const Icon(Icons.arrow_forward),
+                                  ),
+                                ),
+                              );
                             },
-                            onSubmitted: (_) => submitQuickNutritionValue(),
-                            decoration: InputDecoration(
-                              labelText: 'Enter $nextLabel',
-                              border: const OutlineInputBorder(),
-                              suffixIcon: IconButton(
-                                tooltip: 'Apply and continue',
-                                onPressed: saving || scanningNutrition
-                                    ? null
-                                    : () => submitQuickNutritionValue(),
-                                icon: const Icon(Icons.arrow_forward),
-                              ),
-                            ),
                           ),
                         ],
                       );
