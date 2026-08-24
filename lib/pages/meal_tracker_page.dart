@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../services/meal_service.dart';
@@ -553,6 +552,7 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
     return RawAutocomplete<SavedMeal>(
       textEditingController: _consumeMealSearchController,
       focusNode: _consumeMealSearchFocus,
+      optionsViewOpenDirection: OptionsViewOpenDirection.up,
       displayStringForOption: (meal) => meal.name,
       optionsBuilder: (textValue) {
         final query = textValue.text.trim().toLowerCase();
@@ -592,37 +592,54 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
       },
       optionsViewBuilder: (context, onSelected, options) {
         final list = options.toList();
-        const rowHeight = 62.0;
-        final popupHeight =
-            (list.length * rowHeight).clamp(rowHeight, 320.0).toDouble();
 
         return Align(
-          alignment: Alignment.topLeft,
+          alignment: Alignment.bottomLeft,
           child: Material(
-            elevation: 6,
-            child: SizedBox(
-              width: 420,
-              height: popupHeight,
+            elevation: 8,
+            borderRadius: BorderRadius.circular(10),
+            clipBehavior: Clip.antiAlias,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(
+                maxWidth: 420,
+                maxHeight: 320,
+              ),
               child: ListView.separated(
                 padding: EdgeInsets.zero,
-                physics: list.length * rowHeight > 320
-                    ? const ClampingScrollPhysics()
-                    : const NeverScrollableScrollPhysics(),
+                shrinkWrap: true,
+                keyboardDismissBehavior:
+                    ScrollViewKeyboardDismissBehavior.manual,
                 itemCount: list.length,
                 separatorBuilder: (_, __) => const Divider(height: 1),
                 itemBuilder: (context, index) {
                   final meal = list[index];
-                  return SizedBox(
-                    height: rowHeight,
-                    child: ListTile(
-                      dense: true,
-                      title: Text(meal.name),
-                      subtitle: Text(
-                        '${_formatNumber(meal.calories)} cal • '
-                        '${meal.components.length} item'
-                        '${meal.components.length == 1 ? '' : 's'}',
+
+                  return InkWell(
+                    onTap: () => onSelected(meal),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 10,
                       ),
-                      onTap: () => onSelected(meal),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            meal.name,
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          const SizedBox(height: 3),
+                          Text(
+                            '${_formatNumber(meal.calories)} cal • '
+                            '${meal.components.length} item'
+                            '${meal.components.length == 1 ? '' : 's'}',
+                            softWrap: true,
+                          ),
+                        ],
+                      ),
                     ),
                   );
                 },
@@ -643,8 +660,6 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
     final carbs = TextEditingController();
     final protein = TextEditingController();
     final servingAmount = TextEditingController(text: '1');
-    final quickNutrition = TextEditingController();
-    final quickNutritionFocusNode = FocusNode();
     String servingUnit = 'serving';
 
     bool saving = false;
@@ -654,74 +669,6 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
       context: context,
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, setLocal) {
-          List<MapEntry<String, TextEditingController>> missingNutritionFields() {
-            return [
-              MapEntry('Calories', calories),
-              MapEntry('Fat', fat),
-              MapEntry('Carbs', carbs),
-              MapEntry('Protein', protein),
-            ].where((entry) => entry.value.text.trim().isEmpty).toList();
-          }
-
-          Future<void> focusQuickNutritionAndShowKeyboard() async {
-            await Future<void>.delayed(const Duration(milliseconds: 40));
-            if (!quickNutritionFocusNode.canRequestFocus) return;
-
-            quickNutritionFocusNode.requestFocus();
-
-            try {
-              await SystemChannels.textInput.invokeMethod<void>(
-                'TextInput.show',
-              );
-            } catch (_) {}
-
-            // Mobile web can ignore the first request during the dialog
-            // rebuild. A second request after the next layout frame makes the
-            // keyboard stay open much more reliably.
-            await Future<void>.delayed(const Duration(milliseconds: 120));
-            if (!quickNutritionFocusNode.hasFocus) {
-              quickNutritionFocusNode.requestFocus();
-            }
-
-            try {
-              await SystemChannels.textInput.invokeMethod<void>(
-                'TextInput.show',
-              );
-            } catch (_) {}
-          }
-
-          Future<void> submitQuickNutritionValue({
-            String? rawValue,
-          }) async {
-            final missing = missingNutritionFields();
-            if (missing.isEmpty) return;
-
-            final raw = (rawValue ?? quickNutrition.text).trim();
-            final value = double.tryParse(raw);
-
-            if (value == null || value < 0) {
-              ScaffoldMessenger.of(this.context).showSnackBar(
-                const SnackBar(
-                  content: Text('Enter a valid nutrition value.'),
-                ),
-              );
-              return;
-            }
-
-            missing.first.value.text = _formatNumber(value);
-            quickNutrition.clear();
-            setLocal(() {});
-
-            final stillMissing = missingNutritionFields();
-            if (stillMissing.isNotEmpty) {
-              WidgetsBinding.instance.addPostFrameCallback((_) {
-                focusQuickNutritionAndShowKeyboard();
-              });
-            } else {
-              quickNutritionFocusNode.unfocus();
-            }
-          }
-
           Future<void> scanNutritionLabel() async {
             if (!nutritionLabelScannerSupported || scanningNutrition || saving) {
               return;
@@ -879,137 +826,6 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                     enabled: !saving,
                   ),
                   const SizedBox(height: 12),
-                  Builder(
-                    builder: (context) {
-                      final missing = missingNutritionFields();
-                      if (missing.isEmpty) {
-                        return const SizedBox.shrink();
-                      }
-
-                      final nextLabel = missing.first.key;
-                      final remainingLabels =
-                          missing.map((entry) => entry.key).join(' • ');
-
-                      return Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          Text(
-                            'Quick fill missing: $remainingLabels',
-                            style: Theme.of(context).textTheme.bodySmall,
-                          ),
-                          const SizedBox(height: 6),
-                          Builder(
-                            builder: (quickFieldContext) {
-                              Future<void> revealQuickField() async {
-                                for (var attempt = 0; attempt < 10; attempt++) {
-                                  if (!quickFieldContext.mounted) return;
-                                  final keyboardOpen =
-                                      MediaQuery.viewInsetsOf(quickFieldContext)
-                                              .bottom >
-                                          0;
-                                  if (keyboardOpen) break;
-                                  await Future<void>.delayed(
-                                    const Duration(milliseconds: 60),
-                                  );
-                                }
-
-                                if (!quickFieldContext.mounted) return;
-                                await Scrollable.ensureVisible(
-                                  quickFieldContext,
-                                  duration:
-                                      const Duration(milliseconds: 180),
-                                  curve: Curves.easeOut,
-                                  alignment: 0.12,
-                                  alignmentPolicy:
-                                      ScrollPositionAlignmentPolicy.explicit,
-                                );
-
-                                await Future<void>.delayed(
-                                  const Duration(milliseconds: 100),
-                                );
-                                if (!quickFieldContext.mounted) return;
-                                await Scrollable.ensureVisible(
-                                  quickFieldContext,
-                                  duration:
-                                      const Duration(milliseconds: 140),
-                                  curve: Curves.easeOut,
-                                  alignment: 0.12,
-                                  alignmentPolicy:
-                                      ScrollPositionAlignmentPolicy.explicit,
-                                );
-                              }
-
-                              Future<void> submitFromArrow() async {
-                                // Keep ownership of the text input on the field
-                                // instead of letting the icon button collapse
-                                // the mobile-web keyboard.
-                                if (quickNutritionFocusNode.canRequestFocus) {
-                                  quickNutritionFocusNode.requestFocus();
-                                }
-
-                                await submitQuickNutritionValue();
-
-                                if (missingNutritionFields().isNotEmpty) {
-                                  await focusQuickNutritionAndShowKeyboard();
-                                  await revealQuickField();
-                                }
-                              }
-
-                              return TextField(
-                                controller: quickNutrition,
-                                focusNode: quickNutritionFocusNode,
-                                enabled: !saving && !scanningNutrition,
-                                keyboardType:
-                                    const TextInputType.numberWithOptions(
-                                  decimal: true,
-                                ),
-                                textInputAction: TextInputAction.done,
-                                scrollPadding: EdgeInsets.only(
-                                  bottom: MediaQuery.viewInsetsOf(
-                                        quickFieldContext,
-                                      ).bottom +
-                                      140,
-                                ),
-                                onTap: () {
-                                  revealQuickField();
-                                },
-                                onChanged: (value) {
-                                  // In Quick Fill, a trailing period acts as the
-                                  // fastest possible "next" key on numeric mobile
-                                  // keyboards: 230. -> submit 230 and advance.
-                                  if (value.endsWith('.') && value.length > 1) {
-                                    final submitted = value
-                                        .substring(0, value.length - 1)
-                                        .trim();
-                                    if (submitted.isNotEmpty) {
-                                      submitQuickNutritionValue(
-                                        rawValue: submitted,
-                                      );
-                                    }
-                                  }
-                                },
-                                onSubmitted: (_) =>
-                                    submitQuickNutritionValue(),
-                                decoration: InputDecoration(
-                                  labelText: 'Enter $nextLabel',
-                                  border: const OutlineInputBorder(),
-                                  suffixIcon: IconButton(
-                                    tooltip: 'Apply and continue',
-                                    onPressed:
-                                        saving || scanningNutrition
-                                            ? null
-                                            : submitFromArrow,
-                                    icon: const Icon(Icons.arrow_forward),
-                                  ),
-                                ),
-                              );
-                            },
-                          ),
-                        ],
-                      );
-                    },
-                  ),
-                  const SizedBox(height: 12),
                   Row(
                     children: [
                       Expanded(
@@ -1116,8 +932,6 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
     carbs.dispose();
     protein.dispose();
     servingAmount.dispose();
-    quickNutrition.dispose();
-    quickNutritionFocusNode.dispose();
   }
 
   Future<void> _openEditFoodDialog(FoodItem food) async {
