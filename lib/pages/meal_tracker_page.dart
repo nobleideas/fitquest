@@ -450,6 +450,7 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
     return RawAutocomplete<FoodItem>(
       textEditingController: _consumeFoodSearchController,
       focusNode: _consumeFoodSearchFocus,
+      optionsViewOpenDirection: OptionsViewOpenDirection.up,
       displayStringForOption: (food) => food.name,
       optionsBuilder: (textValue) {
         final query = textValue.text.trim().toLowerCase();
@@ -485,37 +486,58 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
       },
       optionsViewBuilder: (context, onSelected, options) {
         final list = options.toList();
-        const rowHeight = 68.0;
-        final popupHeight =
-            (list.length * rowHeight).clamp(rowHeight, 340.0).toDouble();
 
         return Align(
-          alignment: Alignment.topLeft,
+          alignment: Alignment.bottomLeft,
           child: Material(
-            elevation: 6,
-            child: SizedBox(
-              width: 420,
-              height: popupHeight,
+            elevation: 8,
+            borderRadius: BorderRadius.circular(10),
+            clipBehavior: Clip.antiAlias,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(
+                maxWidth: 420,
+                maxHeight: 360,
+              ),
               child: ListView.separated(
                 padding: EdgeInsets.zero,
-                physics: list.length * rowHeight > 340
-                    ? const ClampingScrollPhysics()
-                    : const NeverScrollableScrollPhysics(),
+                shrinkWrap: true,
+                keyboardDismissBehavior:
+                    ScrollViewKeyboardDismissBehavior.manual,
                 itemCount: list.length,
                 separatorBuilder: (_, __) => const Divider(height: 1),
                 itemBuilder: (context, index) {
                   final food = list[index];
-                  return SizedBox(
-                    height: rowHeight,
-                    child: ListTile(
-                      dense: true,
-                      title: Text(food.name),
-                      subtitle: Text([
-                        if (food.brand.trim().isNotEmpty) food.brand,
-                        'Serving: ${_servingSizeLabel(food)}',
-                        '${_formatNumber(food.calories)} cal',
-                      ].join(' • ')),
-                      onTap: () => onSelected(food),
+
+                  final details = <String>[
+                    if (food.brand.trim().isNotEmpty) food.brand,
+                    'Serving: ${_servingSizeLabel(food)}',
+                    '${_formatNumber(food.calories)} cal',
+                  ];
+
+                  return InkWell(
+                    onTap: () => onSelected(food),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 10,
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            food.name,
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          const SizedBox(height: 3),
+                          Text(
+                            details.join(' • '),
+                            softWrap: true,
+                          ),
+                        ],
+                      ),
                     ),
                   );
                 },
@@ -876,41 +898,112 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                             style: Theme.of(context).textTheme.bodySmall,
                           ),
                           const SizedBox(height: 6),
-                          TextField(
-                            controller: quickNutrition,
-                            focusNode: quickNutritionFocusNode,
-                            enabled: !saving && !scanningNutrition,
-                            keyboardType:
-                                const TextInputType.numberWithOptions(
-                              decimal: true,
-                            ),
-                            textInputAction: TextInputAction.done,
-                            onChanged: (value) {
-                              // In Quick Fill, a trailing period acts as the
-                              // fastest possible "next" key on numeric mobile
-                              // keyboards: 230. -> submit 230 and advance.
-                              if (value.endsWith('.') && value.length > 1) {
-                                final submitted =
-                                    value.substring(0, value.length - 1).trim();
-                                if (submitted.isNotEmpty) {
-                                  submitQuickNutritionValue(
-                                    rawValue: submitted,
+                          Builder(
+                            builder: (quickFieldContext) {
+                              Future<void> revealQuickField() async {
+                                for (var attempt = 0; attempt < 10; attempt++) {
+                                  if (!quickFieldContext.mounted) return;
+                                  final keyboardOpen =
+                                      MediaQuery.viewInsetsOf(quickFieldContext)
+                                              .bottom >
+                                          0;
+                                  if (keyboardOpen) break;
+                                  await Future<void>.delayed(
+                                    const Duration(milliseconds: 60),
                                   );
                                 }
+
+                                if (!quickFieldContext.mounted) return;
+                                await Scrollable.ensureVisible(
+                                  quickFieldContext,
+                                  duration:
+                                      const Duration(milliseconds: 180),
+                                  curve: Curves.easeOut,
+                                  alignment: 0.12,
+                                  alignmentPolicy:
+                                      ScrollPositionAlignmentPolicy.explicit,
+                                );
+
+                                await Future<void>.delayed(
+                                  const Duration(milliseconds: 100),
+                                );
+                                if (!quickFieldContext.mounted) return;
+                                await Scrollable.ensureVisible(
+                                  quickFieldContext,
+                                  duration:
+                                      const Duration(milliseconds: 140),
+                                  curve: Curves.easeOut,
+                                  alignment: 0.12,
+                                  alignmentPolicy:
+                                      ScrollPositionAlignmentPolicy.explicit,
+                                );
                               }
+
+                              Future<void> submitFromArrow() async {
+                                // Keep ownership of the text input on the field
+                                // instead of letting the icon button collapse
+                                // the mobile-web keyboard.
+                                if (quickNutritionFocusNode.canRequestFocus) {
+                                  quickNutritionFocusNode.requestFocus();
+                                }
+
+                                await submitQuickNutritionValue();
+
+                                if (missingNutritionFields().isNotEmpty) {
+                                  await focusQuickNutritionAndShowKeyboard();
+                                  await revealQuickField();
+                                }
+                              }
+
+                              return TextField(
+                                controller: quickNutrition,
+                                focusNode: quickNutritionFocusNode,
+                                enabled: !saving && !scanningNutrition,
+                                keyboardType:
+                                    const TextInputType.numberWithOptions(
+                                  decimal: true,
+                                ),
+                                textInputAction: TextInputAction.done,
+                                scrollPadding: EdgeInsets.only(
+                                  bottom: MediaQuery.viewInsetsOf(
+                                        quickFieldContext,
+                                      ).bottom +
+                                      140,
+                                ),
+                                onTap: () {
+                                  revealQuickField();
+                                },
+                                onChanged: (value) {
+                                  // In Quick Fill, a trailing period acts as the
+                                  // fastest possible "next" key on numeric mobile
+                                  // keyboards: 230. -> submit 230 and advance.
+                                  if (value.endsWith('.') && value.length > 1) {
+                                    final submitted = value
+                                        .substring(0, value.length - 1)
+                                        .trim();
+                                    if (submitted.isNotEmpty) {
+                                      submitQuickNutritionValue(
+                                        rawValue: submitted,
+                                      );
+                                    }
+                                  }
+                                },
+                                onSubmitted: (_) =>
+                                    submitQuickNutritionValue(),
+                                decoration: InputDecoration(
+                                  labelText: 'Enter $nextLabel',
+                                  border: const OutlineInputBorder(),
+                                  suffixIcon: IconButton(
+                                    tooltip: 'Apply and continue',
+                                    onPressed:
+                                        saving || scanningNutrition
+                                            ? null
+                                            : submitFromArrow,
+                                    icon: const Icon(Icons.arrow_forward),
+                                  ),
+                                ),
+                              );
                             },
-                            onSubmitted: (_) => submitQuickNutritionValue(),
-                            decoration: InputDecoration(
-                              labelText: 'Enter $nextLabel',
-                              border: const OutlineInputBorder(),
-                              suffixIcon: IconButton(
-                                tooltip: 'Apply and continue',
-                                onPressed: saving || scanningNutrition
-                                    ? null
-                                    : () => submitQuickNutritionValue(),
-                                icon: const Icon(Icons.arrow_forward),
-                              ),
-                            ),
                           ),
                         ],
                       );
