@@ -600,6 +600,8 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
     final carbs = TextEditingController();
     final protein = TextEditingController();
     final servingAmount = TextEditingController(text: '1');
+    final quickNutrition = TextEditingController();
+    final quickNutritionFocusNode = FocusNode();
     String servingUnit = 'serving';
 
     bool saving = false;
@@ -609,6 +611,39 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
       context: context,
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, setLocal) {
+          List<MapEntry<String, TextEditingController>> missingNutritionFields() {
+            return [
+              MapEntry('Calories', calories),
+              MapEntry('Fat', fat),
+              MapEntry('Carbs', carbs),
+              MapEntry('Protein', protein),
+            ].where((entry) => entry.value.text.trim().isEmpty).toList();
+          }
+
+          void submitQuickNutritionValue() {
+            final missing = missingNutritionFields();
+            if (missing.isEmpty) return;
+
+            final value = double.tryParse(quickNutrition.text.trim());
+            if (value == null || value < 0) {
+              ScaffoldMessenger.of(this.context).showSnackBar(
+                const SnackBar(
+                  content: Text('Enter a valid nutrition value.'),
+                ),
+              );
+              return;
+            }
+
+            missing.first.value.text = _formatNumber(value);
+            quickNutrition.clear();
+            setLocal(() {});
+
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (!quickNutritionFocusNode.canRequestFocus) return;
+              quickNutritionFocusNode.requestFocus();
+            });
+          }
+
           Future<void> scanNutritionLabel() async {
             if (!nutritionLabelScannerSupported || scanningNutrition || saving) {
               return;
@@ -766,6 +801,52 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                     enabled: !saving,
                   ),
                   const SizedBox(height: 12),
+                  Builder(
+                    builder: (context) {
+                      final missing = missingNutritionFields();
+                      if (missing.isEmpty) {
+                        return const SizedBox.shrink();
+                      }
+
+                      final nextLabel = missing.first.key;
+                      final remainingLabels =
+                          missing.map((entry) => entry.key).join(' • ');
+
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Text(
+                            'Quick fill missing: $remainingLabels',
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                          const SizedBox(height: 6),
+                          TextField(
+                            controller: quickNutrition,
+                            focusNode: quickNutritionFocusNode,
+                            enabled: !saving && !scanningNutrition,
+                            keyboardType:
+                                const TextInputType.numberWithOptions(
+                              decimal: true,
+                            ),
+                            textInputAction: TextInputAction.done,
+                            onSubmitted: (_) => submitQuickNutritionValue(),
+                            decoration: InputDecoration(
+                              labelText: 'Enter $nextLabel',
+                              border: const OutlineInputBorder(),
+                              suffixIcon: IconButton(
+                                tooltip: 'Apply and continue',
+                                onPressed: saving || scanningNutrition
+                                    ? null
+                                    : submitQuickNutritionValue,
+                                icon: const Icon(Icons.arrow_forward),
+                              ),
+                            ),
+                          ),
+                        ],
+                      );
+                    },
+                  ),
+                  const SizedBox(height: 12),
                   Row(
                     children: [
                       Expanded(
@@ -872,6 +953,8 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
     carbs.dispose();
     protein.dispose();
     servingAmount.dispose();
+    quickNutrition.dispose();
+    quickNutritionFocusNode.dispose();
   }
 
   Future<void> _openEditFoodDialog(FoodItem food) async {
