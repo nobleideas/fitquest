@@ -27,7 +27,7 @@ const RESOURCES = {"assets/AssetManifest.bin": "e85e201a7fb87ea2b478ceff6a238d24
 "firebase-messaging-sw.js": "adb4d2f04a1c9137bf78691cbab89ec1",
 "fitquest_nutrition_scanner.js": "a57ba450d135aac6a8317f2dc97e9fd5",
 "flutter.js": "888483df48293866f9f41d3d9274a779",
-"flutter_bootstrap.js": "dc806ec7cbcf3cc1966054d347700311",
+"flutter_bootstrap.js": "bfa071099ffc1fcce77202d646663206",
 "icons/Icon-192.png": "838751a4ebd9fc528ba7cd39f4bafb74",
 "icons/Icon-512.png": "73dacb6b55c94fc54aa8d656ea9251e4",
 "icons/Icon-maskable-192.png": "838751a4ebd9fc528ba7cd39f4bafb74",
