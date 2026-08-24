@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../services/meal_service.dart';
@@ -640,11 +641,42 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
             ].where((entry) => entry.value.text.trim().isEmpty).toList();
           }
 
-          void submitQuickNutritionValue() {
+          Future<void> focusQuickNutritionAndShowKeyboard() async {
+            await Future<void>.delayed(const Duration(milliseconds: 40));
+            if (!quickNutritionFocusNode.canRequestFocus) return;
+
+            quickNutritionFocusNode.requestFocus();
+
+            try {
+              await SystemChannels.textInput.invokeMethod<void>(
+                'TextInput.show',
+              );
+            } catch (_) {}
+
+            // Mobile web can ignore the first request during the dialog
+            // rebuild. A second request after the next layout frame makes the
+            // keyboard stay open much more reliably.
+            await Future<void>.delayed(const Duration(milliseconds: 120));
+            if (!quickNutritionFocusNode.hasFocus) {
+              quickNutritionFocusNode.requestFocus();
+            }
+
+            try {
+              await SystemChannels.textInput.invokeMethod<void>(
+                'TextInput.show',
+              );
+            } catch (_) {}
+          }
+
+          Future<void> submitQuickNutritionValue({
+            String? rawValue,
+          }) async {
             final missing = missingNutritionFields();
             if (missing.isEmpty) return;
 
-            final value = double.tryParse(quickNutrition.text.trim());
+            final raw = (rawValue ?? quickNutrition.text).trim();
+            final value = double.tryParse(raw);
+
             if (value == null || value < 0) {
               ScaffoldMessenger.of(this.context).showSnackBar(
                 const SnackBar(
@@ -658,10 +690,14 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
             quickNutrition.clear();
             setLocal(() {});
 
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (!quickNutritionFocusNode.canRequestFocus) return;
-              quickNutritionFocusNode.requestFocus();
-            });
+            final stillMissing = missingNutritionFields();
+            if (stillMissing.isNotEmpty) {
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                focusQuickNutritionAndShowKeyboard();
+              });
+            } else {
+              quickNutritionFocusNode.unfocus();
+            }
           }
 
           Future<void> scanNutritionLabel() async {
@@ -849,6 +885,20 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                               decimal: true,
                             ),
                             textInputAction: TextInputAction.done,
+                            onChanged: (value) {
+                              // In Quick Fill, a trailing period acts as the
+                              // fastest possible "next" key on numeric mobile
+                              // keyboards: 230. -> submit 230 and advance.
+                              if (value.endsWith('.') && value.length > 1) {
+                                final submitted =
+                                    value.substring(0, value.length - 1).trim();
+                                if (submitted.isNotEmpty) {
+                                  submitQuickNutritionValue(
+                                    rawValue: submitted,
+                                  );
+                                }
+                              }
+                            },
                             onSubmitted: (_) => submitQuickNutritionValue(),
                             decoration: InputDecoration(
                               labelText: 'Enter $nextLabel',
@@ -857,7 +907,7 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                                 tooltip: 'Apply and continue',
                                 onPressed: saving || scanningNutrition
                                     ? null
-                                    : submitQuickNutritionValue,
+                                    : () => submitQuickNutritionValue(),
                                 icon: const Icon(Icons.arrow_forward),
                               ),
                             ),
