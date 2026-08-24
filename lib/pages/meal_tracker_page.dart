@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:share_plus/share_plus.dart';
 
 import '../services/meal_service.dart';
+import 'nutrition_label_scanner.dart';
 
 class DailyMealSummary {
   final DateTime day;
@@ -602,11 +603,76 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
     String servingUnit = 'serving';
 
     bool saving = false;
+    bool scanningNutrition = false;
 
     await showDialog<void>(
       context: context,
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, setLocal) {
+          Future<void> scanNutritionLabel() async {
+            if (!nutritionLabelScannerSupported || scanningNutrition || saving) {
+              return;
+            }
+
+            setLocal(() => scanningNutrition = true);
+
+            try {
+              final result = await scanNutritionFactsLabel();
+              if (result == null || result.cancelled) return;
+
+              if (result.calories != null) {
+                calories.text = _formatNumber(result.calories!);
+              }
+              if (result.fat != null) {
+                fat.text = _formatNumber(result.fat!);
+              }
+              if (result.carbs != null) {
+                carbs.text = _formatNumber(result.carbs!);
+              }
+              if (result.protein != null) {
+                protein.text = _formatNumber(result.protein!);
+              }
+              if (result.servingAmount != null) {
+                servingAmount.text = _formatNumber(result.servingAmount!);
+              }
+
+              final scannedUnit = result.servingUnit?.trim().toLowerCase();
+              if (scannedUnit != null && _servingUnits.contains(scannedUnit)) {
+                servingUnit = scannedUnit;
+              }
+
+              setLocal(() {});
+
+              final foundCount = [
+                result.calories,
+                result.fat,
+                result.carbs,
+                result.protein,
+                result.servingAmount,
+              ].where((value) => value != null).length;
+
+              if (!mounted) return;
+              ScaffoldMessenger.of(this.context).showSnackBar(
+                SnackBar(
+                  content: Text(
+                    foundCount >= 5
+                        ? 'Nutrition label scanned. Review the values, then save.'
+                        : 'Label scanned, but some values were unclear. Review the fields.',
+                  ),
+                ),
+              );
+            } catch (e) {
+              if (!mounted) return;
+              ScaffoldMessenger.of(this.context).showSnackBar(
+                SnackBar(content: Text('Could not scan nutrition label: $e')),
+              );
+            } finally {
+              if (mounted) {
+                setLocal(() => scanningNutrition = false);
+              }
+            }
+          }
+
           Future<void> save() async {
             final parsedCalories = double.tryParse(calories.text.trim());
             final parsedFat = double.tryParse(fat.text.trim());
@@ -664,7 +730,25 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
           }
 
           return AlertDialog(
-            title: const Text('Add Food Item'),
+            title: Row(
+              children: [
+                const Expanded(child: Text('Add Food Item')),
+                if (nutritionLabelScannerSupported)
+                  IconButton(
+                    tooltip: 'Scan nutrition label',
+                    onPressed: saving || scanningNutrition
+                        ? null
+                        : scanNutritionLabel,
+                    icon: scanningNutrition
+                        ? const SizedBox(
+                            width: 22,
+                            height: 22,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.camera_alt_outlined),
+                  ),
+              ],
+            ),
             content: SingleChildScrollView(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
