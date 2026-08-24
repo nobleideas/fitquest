@@ -484,28 +484,38 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
       },
       optionsViewBuilder: (context, onSelected, options) {
         final list = options.toList();
+        const rowHeight = 68.0;
+        final popupHeight =
+            (list.length * rowHeight).clamp(rowHeight, 340.0).toDouble();
+
         return Align(
           alignment: Alignment.topLeft,
           child: Material(
             elevation: 6,
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxHeight: 300, maxWidth: 420),
+            child: SizedBox(
+              width: 420,
+              height: popupHeight,
               child: ListView.separated(
                 padding: EdgeInsets.zero,
-                shrinkWrap: true,
+                physics: list.length * rowHeight > 340
+                    ? const ClampingScrollPhysics()
+                    : const NeverScrollableScrollPhysics(),
                 itemCount: list.length,
                 separatorBuilder: (_, __) => const Divider(height: 1),
                 itemBuilder: (context, index) {
                   final food = list[index];
-                  return ListTile(
-                    dense: true,
-                    title: Text(food.name),
-                    subtitle: Text([
-                      if (food.brand.trim().isNotEmpty) food.brand,
-                      'Serving: ${_servingSizeLabel(food)}',
-                      '${_formatNumber(food.calories)} cal',
-                    ].join(' • ')),
-                    onTap: () => onSelected(food),
+                  return SizedBox(
+                    height: rowHeight,
+                    child: ListTile(
+                      dense: true,
+                      title: Text(food.name),
+                      subtitle: Text([
+                        if (food.brand.trim().isNotEmpty) food.brand,
+                        'Serving: ${_servingSizeLabel(food)}',
+                        '${_formatNumber(food.calories)} cal',
+                      ].join(' • ')),
+                      onTap: () => onSelected(food),
+                    ),
                   );
                 },
               ),
@@ -559,28 +569,38 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
       },
       optionsViewBuilder: (context, onSelected, options) {
         final list = options.toList();
+        const rowHeight = 62.0;
+        final popupHeight =
+            (list.length * rowHeight).clamp(rowHeight, 320.0).toDouble();
+
         return Align(
           alignment: Alignment.topLeft,
           child: Material(
             elevation: 6,
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxHeight: 300, maxWidth: 420),
+            child: SizedBox(
+              width: 420,
+              height: popupHeight,
               child: ListView.separated(
                 padding: EdgeInsets.zero,
-                shrinkWrap: true,
+                physics: list.length * rowHeight > 320
+                    ? const ClampingScrollPhysics()
+                    : const NeverScrollableScrollPhysics(),
                 itemCount: list.length,
                 separatorBuilder: (_, __) => const Divider(height: 1),
                 itemBuilder: (context, index) {
                   final meal = list[index];
-                  return ListTile(
-                    dense: true,
-                    title: Text(meal.name),
-                    subtitle: Text(
-                      '${_formatNumber(meal.calories)} cal • '
-                      '${meal.components.length} item'
-                      '${meal.components.length == 1 ? '' : 's'}',
+                  return SizedBox(
+                    height: rowHeight,
+                    child: ListTile(
+                      dense: true,
+                      title: Text(meal.name),
+                      subtitle: Text(
+                        '${_formatNumber(meal.calories)} cal • '
+                        '${meal.components.length} item'
+                        '${meal.components.length == 1 ? '' : 's'}',
+                      ),
+                      onTap: () => onSelected(meal),
                     ),
-                    onTap: () => onSelected(meal),
                   );
                 },
               ),
