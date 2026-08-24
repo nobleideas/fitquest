@@ -450,6 +450,7 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
     return RawAutocomplete<FoodItem>(
       textEditingController: _consumeFoodSearchController,
       focusNode: _consumeFoodSearchFocus,
+      optionsViewOpenDirection: OptionsViewOpenDirection.up,
       displayStringForOption: (food) => food.name,
       optionsBuilder: (textValue) {
         final query = textValue.text.trim().toLowerCase();
@@ -485,37 +486,58 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
       },
       optionsViewBuilder: (context, onSelected, options) {
         final list = options.toList();
-        const rowHeight = 68.0;
-        final popupHeight =
-            (list.length * rowHeight).clamp(rowHeight, 340.0).toDouble();
 
         return Align(
-          alignment: Alignment.topLeft,
+          alignment: Alignment.bottomLeft,
           child: Material(
-            elevation: 6,
-            child: SizedBox(
-              width: 420,
-              height: popupHeight,
+            elevation: 8,
+            borderRadius: BorderRadius.circular(10),
+            clipBehavior: Clip.antiAlias,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(
+                maxWidth: 420,
+                maxHeight: 360,
+              ),
               child: ListView.separated(
                 padding: EdgeInsets.zero,
-                physics: list.length * rowHeight > 340
-                    ? const ClampingScrollPhysics()
-                    : const NeverScrollableScrollPhysics(),
+                shrinkWrap: true,
+                keyboardDismissBehavior:
+                    ScrollViewKeyboardDismissBehavior.manual,
                 itemCount: list.length,
                 separatorBuilder: (_, __) => const Divider(height: 1),
                 itemBuilder: (context, index) {
                   final food = list[index];
-                  return SizedBox(
-                    height: rowHeight,
-                    child: ListTile(
-                      dense: true,
-                      title: Text(food.name),
-                      subtitle: Text([
-                        if (food.brand.trim().isNotEmpty) food.brand,
-                        'Serving: ${_servingSizeLabel(food)}',
-                        '${_formatNumber(food.calories)} cal',
-                      ].join(' • ')),
-                      onTap: () => onSelected(food),
+
+                  final details = <String>[
+                    if (food.brand.trim().isNotEmpty) food.brand,
+                    'Serving: ${_servingSizeLabel(food)}',
+                    '${_formatNumber(food.calories)} cal',
+                  ];
+
+                  return InkWell(
+                    onTap: () => onSelected(food),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 10,
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            food.name,
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          const SizedBox(height: 3),
+                          Text(
+                            details.join(' • '),
+                            softWrap: true,
+                          ),
+                        ],
+                      ),
                     ),
                   );
                 },
