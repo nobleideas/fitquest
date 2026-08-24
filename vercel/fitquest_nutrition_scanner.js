@@ -144,7 +144,29 @@
 
   function fractionToNumber(raw) {
     if (!raw) return null;
+
+    const unicodeFractions = {
+      '¼': 0.25,
+      '½': 0.5,
+      '¾': 0.75,
+      '⅓': 1 / 3,
+      '⅔': 2 / 3,
+      '⅛': 0.125,
+      '⅜': 0.375,
+      '⅝': 0.625,
+      '⅞': 0.875,
+    };
+
     const value = raw.trim();
+
+    if (unicodeFractions[value] != null) {
+      return unicodeFractions[value];
+    }
+
+    const mixedUnicode = value.match(/^(\d+)\s*([¼½¾⅓⅔⅛⅜⅝⅞])$/);
+    if (mixedUnicode) {
+      return Number(mixedUnicode[1]) + unicodeFractions[mixedUnicode[2]];
+    }
 
     if (/^\d+(?:\.\d+)?$/.test(value)) return Number(value);
 
@@ -195,61 +217,106 @@
       packages: 'package',
       serving: 'serving',
       servings: 'serving',
+      bar: 'piece',
+      bars: 'piece',
+      cookie: 'piece',
+      cookies: 'piece',
+      pouch: 'piece',
+      pouches: 'piece',
+      packet: 'piece',
+      packets: 'piece',
     };
 
     return units[unit] || null;
   }
 
   function parseServingSize(text) {
-    const lines = text
-      .split(/\r?\n/)
-      .map((line) => line.replace(/\s+/g, ' ').trim())
-      .filter(Boolean);
+    const normalized = text
+      .replace(/[|]/g, 'I')
+      .replace(/[ \t]+/g, ' ')
+      .replace(/\r?\n/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
 
-    const line =
-      lines.find((value) => /serving\s*size/i.test(value)) ||
-      lines.find((value) => /\bserving\b/i.test(value));
+    const servingMatch = normalized.match(
+      /serving\s*s[i1l]ze\s*:?\s*(.{0,100})/i,
+    );
 
-    if (!line) return { amount: null, unit: null };
+    if (!servingMatch) {
+      return { amount: null, unit: null };
+    }
 
-    const cleaned = line
-      .replace(/^.*?serving\s*size\s*:?\s*/i, '')
-      .replace(/^.*?serving\s*:?\s*/i, '');
+    const servingText = servingMatch[1];
 
-    const unitPattern =
+    // Mirror the serving units supported by FitQuest.
+    // Prefer the label's actual serving unit whenever it is one the app knows.
+    const supportedUnitPattern =
       '(g|grams?|oz|ounces?|cups?|tbsp|tablespoons?|tsp|teaspoons?|pieces?|slices?|bottles?|cans?|packages?|servings?)';
 
-    // Prefer the consumer-facing serving, e.g. "2/3 cup" in
-    // "Serving size 2/3 cup (55g)".
-    const beforeParen = cleaned.split('(')[0];
-    let match = beforeParen.match(
+    const amountPattern =
+      '(\\d+\\s+\\d+\\/\\d+|\\d+\\/\\d+|\\d+\\s*[¼½¾⅓⅔⅛⅜⅝⅞]|[¼½¾⅓⅔⅛⅜⅝⅞]|\\d+(?:[.,]\\d+)?)';
+
+    // First try the primary serving description before any parenthetical weight.
+    // Examples:
+    //   "2 tbsp (32g)"     -> 2 tbsp
+    //   "2/3 cup (55g)"   -> 0.667 cup
+    //   "1 cup (240mL)"   -> 1 cup
+    //   "28 g"            -> 28 g
+    const primaryText = servingText.split('(')[0].trim();
+
+    const supportedMatch = primaryText.match(
+      new RegExp(amountPattern + '\\s*' + supportedUnitPattern + '\\b', 'i'),
+    );
+
+    if (supportedMatch) {
+      const amount = fractionToNumber(supportedMatch[1].replace(',', '.'));
+      const unit = normalizeUnit(supportedMatch[2]);
+
+      if (amount != null && unit != null) {
+        return { amount, unit };
+      }
+    }
+
+    // If the serving is a count of an unsupported food noun such as
+    // "1 bar", "2 cookies", or "15 chips", represent that count using
+    // FitQuest's generic "piece" unit rather than hardcoding food names.
+    const genericCountMatch = primaryText.match(
       new RegExp(
-        '(\\d+\\s+\\d+\\/\\d+|\\d+\\/\\d+|\\d+(?:\\.\\d+)?)\\s*' +
-          unitPattern +
-          '\\b',
+        '^\\s*' + amountPattern + '\\s+([A-Za-z][A-Za-z\\-]*)\\b',
         'i',
       ),
     );
 
-    // If the first description is something unsupported like "15 chips",
-    // use the standardized parenthetical weight, usually "(28g)".
-    if (!match) {
-      match = cleaned.match(
-        new RegExp(
-          '(\\d+\\s+\\d+\\/\\d+|\\d+\\/\\d+|\\d+(?:\\.\\d+)?)\\s*' +
-            unitPattern +
-            '\\b',
-          'i',
-        ),
-      );
+    if (genericCountMatch) {
+      const amount = fractionToNumber(genericCountMatch[1].replace(',', '.'));
+      const unknownUnit = genericCountMatch[2].toLowerCase();
+
+      // Avoid converting measurement-looking abbreviations to pieces.
+      const looksLikeMeasurement =
+        /^(ml|l|mg|kg|fl|fluid)$/i.test(unknownUnit);
+
+      if (amount != null && !looksLikeMeasurement) {
+        return {
+          amount,
+          unit: 'piece',
+        };
+      }
     }
 
-    if (!match) return { amount: null, unit: null };
+    // Final fallback: use a standardized parenthetical gram/ounce weight when
+    // the primary serving description could not be represented by FitQuest.
+    const weightMatch = servingText.match(
+      /\(\s*(\d+(?:[.,]\d+)?)\s*(g|grams?|oz|ounces?)\s*\)/i,
+    );
 
-    return {
-      amount: fractionToNumber(match[1]),
-      unit: normalizeUnit(match[2]),
-    };
+    if (weightMatch) {
+      return {
+        amount: parseNumber(weightMatch[1]),
+        unit: normalizeUnit(weightMatch[2]),
+      };
+    }
+
+    return { amount: null, unit: null };
   }
 
   function extractNutrition(text) {
@@ -257,19 +324,17 @@
       .replace(/[|]/g, 'I')
       .replace(/[ \t]+/g, ' ');
 
-    const lines = normalized
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .filter(Boolean);
+    const flattened = normalized
+      .replace(/\r?\n/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
 
     const findValue = (patterns) => {
-      for (const line of lines) {
-        for (const pattern of patterns) {
-          const match = line.match(pattern);
-          if (match) {
-            const value = parseNumber(match[1]);
-            if (value !== null) return value;
-          }
+      for (const pattern of patterns) {
+        const match = flattened.match(pattern);
+        if (match) {
+          const value = parseNumber(match[1]);
+          if (value !== null) return value;
         }
       }
       return null;
@@ -279,23 +344,31 @@
 
     return {
       calories: findValue([
-        /\bcalories?\s*[:\-]?\s*(\d+(?:[.,]\d+)?)/i,
+        /\bcalor[i1l]es?\s*[:\-]?\s*(\d+(?:[.,]\d+)?)/i,
       ]),
       fat: findValue([
         /\btotal\s+fat\s*[:\-]?\s*(\d+(?:[.,]\d+)?)\s*g\b/i,
-        /^\s*fat\s*[:\-]?\s*(\d+(?:[.,]\d+)?)\s*g\b/i,
+        /\bfat\s*[:\-]?\s*(\d+(?:[.,]\d+)?)\s*g\b/i,
       ]),
       carbs: findValue([
+        /\btotal\s+carbo\s*hydrate\s*[:\-]?\s*(\d+(?:[.,]\d+)?)\s*g\b/i,
         /\btotal\s+carbohydrate\s*[:\-]?\s*(\d+(?:[.,]\d+)?)\s*g\b/i,
+        /\btotal\s+carbohydrates\s*[:\-]?\s*(\d+(?:[.,]\d+)?)\s*g\b/i,
         /\btotal\s+carbs?\s*[:\-]?\s*(\d+(?:[.,]\d+)?)\s*g\b/i,
-        /^\s*carbohydrates?\s*[:\-]?\s*(\d+(?:[.,]\d+)?)\s*g\b/i,
+        /\bcarbo\s*hydrate\s*[:\-]?\s*(\d+(?:[.,]\d+)?)\s*g\b/i,
+        /\bcarbohydrates?\s*[:\-]?\s*(\d+(?:[.,]\d+)?)\s*g\b/i,
       ]),
       protein: findValue([
-        /\bprotein\s*[:\-]?\s*(\d+(?:[.,]\d+)?)\s*g\b/i,
+        /\bprote[i1l]n\s*[:\-]?\s*(\d+(?:[.,]\d+)?)\s*g\b/i,
       ]),
       servingAmount: serving.amount,
       servingUnit: serving.unit,
       cancelled: false,
+
+      // Temporary troubleshooting data. Keeping this in the returned object
+      // costs essentially nothing and lets us inspect OCR output later if a
+      // specific label still fails.
+      ocrText: normalized,
     };
   }
 
