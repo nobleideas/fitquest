@@ -17,7 +17,7 @@ class _AuthPageState extends State<AuthPage> {
   bool isLoading = false;
   bool awaitingConfirmation = false;
 
-  // NEW: show/hide password toggle
+  // Show/hide password toggle
   bool _obscurePassword = true;
 
   String? errorMessage;
@@ -116,7 +116,14 @@ class _AuthPageState extends State<AuthPage> {
         email,
         redirectTo: 'https://app.fitquest.space/#/reset-password',
       );
-      _setSuccess("Check your email for a password reset link.");
+
+      _setSuccess(
+        "If an account exists for this email, we sent a password reset link.\n\n"
+        "Make sure you entered the email address you originally used to sign up for Fit Quest. "
+        "If you're unsure which email you used, search your email accounts for \"Fit Quest\" "
+        "to find your original verification email.\n\n"
+        "Also check your spam or junk folder.",
+      );
     } on AuthException catch (e) {
       _setError(e.message);
     } catch (e) {
@@ -213,7 +220,9 @@ class _AuthPageState extends State<AuthPage> {
                     suffixIcon: IconButton(
                       tooltip: _obscurePassword ? 'Show password' : 'Hide password',
                       icon: Icon(
-                        _obscurePassword ? Icons.visibility : Icons.visibility_off,
+                        _obscurePassword
+                            ? Icons.visibility
+                            : Icons.visibility_off,
                       ),
                       onPressed: () {
                         setState(() {

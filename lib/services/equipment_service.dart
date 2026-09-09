@@ -157,6 +157,7 @@ class EquipmentService {
     String? gymId,
     String? sourceRoutineId,
     String? sourceTrainerUserId,
+    bool allowUnassignedEquipment = false,
   }) async {
     final trimmedName = name.trim();
     if (trimmedName.isEmpty) {
@@ -166,7 +167,9 @@ class EquipmentService {
     final normalizedKind = _normalizeKind(kind);
     final trimmedGymId = gymId?.trim() ?? '';
 
-    if (normalizedKind == 'equipment' && trimmedGymId.isEmpty) {
+    if (normalizedKind == 'equipment' &&
+        trimmedGymId.isEmpty &&
+        !allowUnassignedEquipment) {
       throw StateError('A gym must be selected before creating equipment.');
     }
 
@@ -177,7 +180,7 @@ class EquipmentService {
     };
 
     if (normalizedKind == 'equipment') {
-      values['gym_id'] = trimmedGymId;
+      values['gym_id'] = trimmedGymId.isEmpty ? null : trimmedGymId;
     } else {
       values['gym_id'] = null;
       values['source_routine_id'] = sourceRoutineId;
@@ -192,7 +195,7 @@ class EquipmentService {
 
     final equipment = Map<String, dynamic>.from(res);
 
-    if (normalizedKind == 'equipment') {
+    if (normalizedKind == 'equipment' && trimmedGymId.isNotEmpty) {
       await supabase.from('equipment_gyms').upsert(
         {
           'equipment_id': equipment['id'],
