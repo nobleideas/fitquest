@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 
 import '../services/friend_profile_service.dart';
+import '../services/gym_service.dart';
 
 class FriendProfilePage extends StatefulWidget {
   final String friendUserId;
@@ -628,6 +629,7 @@ class _CopyableContainerTab extends StatefulWidget {
 
 class _CopyableContainerTabState extends State<_CopyableContainerTab> {
   final _friendProfileService = FriendProfileService();
+  final _gymService = GymService();
 
   bool _selectMode = false;
   final Set<int> _selectedIndexes = {};
@@ -899,11 +901,219 @@ class _CopyableContainerTabState extends State<_CopyableContainerTab> {
   String _capitalize(String s) =>
       s.isEmpty ? s : '${s[0].toUpperCase()}${s.substring(1)}';
 
+  Future<String?> _createGymForImport() async {
+    final controller = TextEditingController();
+
+    try {
+      final name = await showDialog<String>(
+        context: context,
+        builder: (dialogContext) => StatefulBuilder(
+          builder: (context, setDialogState) {
+            final canCreate = controller.text.trim().isNotEmpty;
+
+            return AlertDialog(
+              title: const Text('Create Gym'),
+              content: TextField(
+                controller: controller,
+                autofocus: true,
+                textCapitalization: TextCapitalization.words,
+                decoration: const InputDecoration(
+                  labelText: 'Gym name',
+                  hintText: 'Example: Planet Fitness',
+                  border: OutlineInputBorder(),
+                ),
+                onChanged: (_) => setDialogState(() {}),
+                onSubmitted: (value) {
+                  final trimmed = value.trim();
+                  if (trimmed.isNotEmpty) {
+                    Navigator.pop(dialogContext, trimmed);
+                  }
+                },
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogContext),
+                  child: const Text('Cancel'),
+                ),
+                ElevatedButton(
+                  onPressed: canCreate
+                      ? () => Navigator.pop(
+                            dialogContext,
+                            controller.text.trim(),
+                          )
+                      : null,
+                  child: const Text('Create'),
+                ),
+              ],
+            );
+          },
+        ),
+      );
+
+      if (name == null || name.trim().isEmpty) return null;
+
+      final gym = await _gymService.createGym(name.trim());
+      final gymId = (gym['id'] ?? '').toString().trim();
+
+      if (gymId.isEmpty) {
+        throw StateError('The new gym was created without a valid ID.');
+      }
+
+      return gymId;
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            behavior: SnackBarBehavior.floating,
+            content: Text('Could not create gym: $e'),
+          ),
+        );
+      }
+      return null;
+    } finally {
+      controller.dispose();
+    }
+  }
+
+  Future<String?> _chooseDestinationGym() async {
+    try {
+      final gyms = await _gymService.getGyms();
+
+      if (!mounted) return null;
+
+      if (gyms.isEmpty) {
+        final shouldCreate = await showDialog<bool>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            title: const Text('Create a gym first'),
+            content: const Text(
+              'Equipment must be added to one of your gyms. '
+              'Create your first gym to continue importing.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: const Text('Cancel'),
+              ),
+              ElevatedButton.icon(
+                onPressed: () => Navigator.pop(dialogContext, true),
+                icon: const Icon(Icons.add_business_outlined),
+                label: const Text('Create Gym'),
+              ),
+            ],
+          ),
+        );
+
+        if (shouldCreate != true || !mounted) return null;
+        return _createGymForImport();
+      }
+
+      final activeGymId = await _gymService.getActiveGymId();
+
+      if (!mounted) return null;
+
+      final validIds = gyms
+          .map((gym) => (gym['id'] ?? '').toString().trim())
+          .where((id) => id.isNotEmpty)
+          .toSet();
+
+      String selectedGymId =
+          activeGymId != null && validIds.contains(activeGymId)
+              ? activeGymId
+              : validIds.first;
+
+      final result = await showDialog<String>(
+        context: context,
+        builder: (dialogContext) => StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: const Text('Choose Destination Gym'),
+              content: DropdownButtonFormField<String>(
+                initialValue: selectedGymId,
+                isExpanded: true,
+                decoration: const InputDecoration(
+                  labelText: 'Add equipment to',
+                  prefixIcon: Icon(Icons.location_on_outlined),
+                  border: OutlineInputBorder(),
+                ),
+                items: [
+                  ...gyms.map(
+                    (gym) => DropdownMenuItem<String>(
+                      value: (gym['id'] ?? '').toString(),
+                      child: Text((gym['name'] ?? 'Gym').toString()),
+                    ),
+                  ),
+                  const DropdownMenuItem<String>(
+                    value: '__create_new__',
+                    child: Row(
+                      children: [
+                        Icon(Icons.add),
+                        SizedBox(width: 8),
+                        Text('Create New Gym'),
+                      ],
+                    ),
+                  ),
+                ],
+                onChanged: (value) {
+                  if (value == null) return;
+
+                  if (value == '__create_new__') {
+                    Navigator.pop(dialogContext, '__create_new__');
+                    return;
+                  }
+
+                  setDialogState(() => selectedGymId = value);
+                },
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogContext),
+                  child: const Text('Cancel'),
+                ),
+                ElevatedButton(
+                  onPressed: () =>
+                      Navigator.pop(dialogContext, selectedGymId),
+                  child: const Text('Continue'),
+                ),
+              ],
+            );
+          },
+        ),
+      );
+
+      if (result == '__create_new__') {
+        if (!mounted) return null;
+        return _createGymForImport();
+      }
+
+      return result;
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            behavior: SnackBarBehavior.floating,
+            content: Text('Could not load your gyms: $e'),
+          ),
+        );
+      }
+      return null;
+    }
+  }
+
   Future<void> _addSelectedToMyList() async {
     if (_selectedIndexes.isEmpty || _isAdding) return;
 
     final mode = await _askCopyMode(context, _selectedIndexes.length);
     if (mode == null) return;
+
+    String? destinationGymId;
+
+    if (widget.insertKind == 'equipment') {
+      destinationGymId = await _chooseDestinationGym();
+      if (destinationGymId == null || destinationGymId.trim().isEmpty) {
+        return;
+      }
+    }
 
     final selectedContainers = _selectedIndexes
         .map((index) => Map<String, dynamic>.from(widget.friendContainers[index]))
@@ -922,6 +1132,7 @@ class _CopyableContainerTabState extends State<_CopyableContainerTab> {
         friendExercises: widget.friendExercises,
         insertKind: widget.insertKind,
         includeExercises: mode == _CopyMode.containerAndExercises,
+        destinationGymId: destinationGymId,
       );
 
       if (!mounted) return;
@@ -929,7 +1140,7 @@ class _CopyableContainerTabState extends State<_CopyableContainerTab> {
       final message = mode == _CopyMode.containerOnly
           ? result.skippedContainers > 0
               ? "Added ${result.addedContainers} ${widget.titlePlural} • "
-                  "Skipped ${result.skippedContainers} (already exists)"
+                  "Skipped ${result.skippedContainers} (already in destination)"
               : "Added ${result.addedContainers} ${widget.titlePlural}"
           : widget.insertKind == 'routine'
               ? "Added ${result.addedContainers} ${widget.titlePlural} "
@@ -949,6 +1160,15 @@ class _CopyableContainerTabState extends State<_CopyableContainerTab> {
       );
 
       _clearSelection();
+    } catch (e) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          content: Text('Import failed: $e'),
+        ),
+      );
     } finally {
       if (mounted) setState(() => _isAdding = false);
     }

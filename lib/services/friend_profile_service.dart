@@ -215,8 +215,10 @@ class FriendProfileService {
   Future<Map<String, dynamic>> createContainer({
     required String name,
     required String kind,
+    String? gymId,
     String? sourceRoutineId,
     String? sourceTrainerUserId,
+    bool allowUnassignedEquipment = false,
   }) async {
     final existing = await findExistingContainer(
       name: name,
@@ -230,8 +232,10 @@ class FriendProfileService {
     final created = await equipmentService.insertEquipment(
       name,
       kind: kind,
+      gymId: gymId,
       sourceRoutineId: sourceRoutineId,
       sourceTrainerUserId: sourceTrainerUserId,
+      allowUnassignedEquipment: allowUnassignedEquipment,
     );
 
     return Map<String, dynamic>.from(created);
@@ -251,6 +255,7 @@ class FriendProfileService {
     return createContainer(
       name: importedEquipmentName,
       kind: 'equipment',
+      allowUnassignedEquipment: true,
     );
   }
 
@@ -370,6 +375,7 @@ class FriendProfileService {
     required List<Map<String, dynamic>> friendExercises,
     required String insertKind,
     required bool includeExercises,
+    String? destinationGymId,
   }) async {
     final currentUser = supabase.auth.currentUser;
 
@@ -386,6 +392,15 @@ class FriendProfileService {
       throw ArgumentError(
         'Invalid insertKind: $insertKind. '
         'Must be "equipment" or "routine".',
+      );
+    }
+
+    final cleanedDestinationGymId = destinationGymId?.trim() ?? '';
+
+    if (normalizedInsertKind == 'equipment' &&
+        cleanedDestinationGymId.isEmpty) {
+      throw StateError(
+        'Select a destination gym before importing equipment.',
       );
     }
 
@@ -426,9 +441,30 @@ class FriendProfileService {
 
         if (existingContainer != null) {
           createdContainer = existingContainer;
-          skippedContainers++;
 
-          if (normalizedInsertKind == 'routine') {
+          if (normalizedInsertKind == 'equipment') {
+            final existingId =
+                (existingContainer['id'] ?? '').toString().trim();
+
+            if (existingId.isEmpty) {
+              skippedContainers++;
+            } else {
+              final currentGymIds =
+                  await equipmentService.getGymIdsForEquipment(existingId);
+
+              if (currentGymIds.contains(cleanedDestinationGymId)) {
+                skippedContainers++;
+              } else {
+                await equipmentService.assignEquipmentToGym(
+                  equipmentId: existingId,
+                  gymId: cleanedDestinationGymId,
+                );
+                addedContainers++;
+              }
+            }
+          } else {
+            skippedContainers++;
+
             final existingId =
                 (existingContainer['id'] ?? '').toString().trim();
             final existingSourceRoutineId =
@@ -464,6 +500,9 @@ class FriendProfileService {
           createdContainer = await createContainer(
             name: name,
             kind: normalizedInsertKind,
+            gymId: normalizedInsertKind == 'equipment'
+                ? cleanedDestinationGymId
+                : null,
             sourceRoutineId: normalizedInsertKind == 'routine'
                 ? sourceContainerId
                 : null,
