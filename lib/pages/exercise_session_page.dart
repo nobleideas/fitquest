@@ -7,6 +7,7 @@ import 'package:video_player/video_player.dart';
 
 import '../services/exercise_service.dart';
 import '../services/session_service.dart';
+import '../services/workout_date_service.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class ExerciseSessionPage extends StatefulWidget {
@@ -22,6 +23,8 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
   final repsController = TextEditingController();
   final userFormNotesController = TextEditingController();
   final SessionService sessionService = SessionService();
+  final WorkoutDateService _workoutDateService = WorkoutDateService.instance;
+  bool _isSavingSet = false;
   final ExerciseService exerciseService = ExerciseService();
   bool _isRemovingTrainerVideo = false;
   bool _isSavingFormNotes = false;
@@ -60,8 +63,14 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
   @override
   void initState() {
     super.initState();
+    _workoutDateService.selectedDate.addListener(_onWorkoutDateChanged);
     _loadTodayAndLast4Days();
     _loadExerciseVideos();
+  }
+
+  void _onWorkoutDateChanged() {
+    if (!mounted) return;
+    _loadTodayAndLast4Days();
   }
 
   // ---------- Day key helpers ----------
@@ -73,7 +82,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
     return '$y-$m-$day';
   }
 
-  String _todayKey() => _dayKey(DateTime.now());
+  String _todayKey() => _dayKey(_workoutDateService.activeDate);
 
   DateTime _dateFromDayKey(String key) {
     final parts = key.split('-').map(int.parse).toList();
@@ -129,85 +138,111 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
   Future<void> _loadTodayAndLast4Days() async {
     final user = Supabase.instance.client.auth.currentUser;
     final exerciseId = (widget.exercise['id'] ?? '').toString().trim();
-
     if (user == null || exerciseId.isEmpty) return;
 
+    // A backlog date is the active workout day. Earlier recorded days are
+    // displayed for comparison; later dates must not appear as prior history.
+    final activeKey = _todayKey();
+    final activeDate = _dateFromDayKey(activeKey);
     final recentRows = await Supabase.instance.client
         .from('exercise_sessions')
         .select('created_at')
         .eq('user_id', user.id)
         .eq('exercise_id', exerciseId)
+        .lt('created_at', DateTime(activeDate.year, activeDate.month, activeDate.day + 1).toUtc().toIso8601String())
         .order('created_at', ascending: false)
-        .limit(500);
+        .limit(1000);
 
-    final todayKey = _todayKey();
     final seen = <String>{};
     final priorKeys = <String>[];
-    var hasToday = false;
-
     for (final row in recentRows) {
-      if (row is! Map) continue;
-
-      final parsed = DateTime.tryParse(
-        (row['created_at'] ?? '').toString(),
-      );
+      final parsed = DateTime.tryParse((row['created_at'] ?? '').toString());
       if (parsed == null) continue;
-
       final key = _dayKey(parsed);
-
-      if (key == todayKey) {
-        hasToday = true;
-        continue;
-      }
-
-      if (seen.add(key)) {
-        priorKeys.add(key);
-      }
-
+      if (key.compareTo(activeKey) >= 0) continue;
+      if (seen.add(key)) priorKeys.add(key);
       if (priorKeys.length == 4) break;
     }
 
-    final keysToLoad = <String>[
-      if (hasToday) todayKey,
-      ...priorKeys,
-    ];
-
+    final keysToLoad = <String>[activeKey, ...priorKeys];
     final map = <String, List<Map<String, dynamic>>>{};
     final volMap = <String, double>{};
-
     for (final key in keysToLoad) {
-      final date = _dateFromDayKey(key);
       final sessions = await sessionService.getSessionsForDate(
-        exerciseId,
-        date,
+        exerciseId, _dateFromDayKey(key),
       );
-
       map[key] = sessions;
-
       double totalVolume = 0;
       for (final session in sessions) {
-        final metricType = (session['metric_type'] ?? 'reps').toString();
-        final loadType = (session['load_type'] ?? 'weight').toString();
-        if (metricType == 'reps' && loadType == 'weight') {
-          totalVolume +=
-              _numToDouble(session['weight']) *
-              _sessionMetricValue(session);
+        if ((session['metric_type'] ?? 'reps').toString() == 'reps' &&
+            (session['load_type'] ?? 'weight').toString() == 'weight') {
+          totalVolume += _numToDouble(session['weight']) * _sessionMetricValue(session);
         }
       }
-
       volMap[key] = totalVolume;
     }
 
-    if (!mounted) return;
-
+    if (!mounted || _todayKey() != activeKey) return;
     setState(() {
-      todayDayKey = hasToday ? todayKey : null;
+      todayDayKey = map[activeKey]?.isNotEmpty == true ? activeKey : null;
       last4DayKeys = priorKeys;
       sessionsByDayKey = map;
       volumeByDayKey = volMap;
     });
-
     await _loadProgress();
+  }
+
+  Future<void> _saveSet() async {
+    if (_isSavingSet) return;
+    final weight = double.tryParse(weightController.text.trim());
+    final metricValue = double.tryParse(repsController.text.trim());
+    if (weight == null || metricValue == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Enter a valid load and metric value.')),
+      );
+      return;
+    }
+    if (_selectedMetricType == 'reps' && metricValue != metricValue.roundToDouble()) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Reps must be a whole number.')),
+      );
+      return;
+    }
+    setState(() => _isSavingSet = true);
+    bool sessionSaved = false;
+    try {
+      final res = await sessionService.insertSession(
+        exerciseId: widget.exercise['id'].toString(),
+        weight: weight,
+        metricType: _selectedMetricType,
+        metricValue: metricValue,
+        loadType: _selectedLoadType,
+      );
+      sessionSaved = true;
+      // Only call XP once for a newly inserted session. Never automatically
+      // retry the RPC, since the database function is not idempotent.
+      await Supabase.instance.client.rpc(
+        'add_session_xp',
+        params: {'session_id': res['id']},
+      );
+      if (!mounted) return;
+      weightController.clear();
+      repsController.clear();
+      await _loadTodayAndLast4Days();
+    } catch (e) {
+      if (!mounted) return;
+      // The session may already be committed even if XP failed. Do not retry
+      // saving automatically; that could create duplicate sets.
+      if (sessionSaved) await _loadTodayAndLast4Days();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(sessionSaved
+          ? 'Set saved, but XP confirmation failed. Check history before trying again. $e'
+          : 'Could not save set: $e'),
+      ));
+    } finally {
+      if (mounted) setState(() => _isSavingSet = false);
+    }
   }
 
   Future<void> _deleteSession(String sessionId) async {
@@ -918,6 +953,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
 
   @override
   void dispose() {
+    _workoutDateService.selectedDate.removeListener(_onWorkoutDateChanged);
     weightController.dispose();
     repsController.dispose();
     userFormNotesController.dispose();
@@ -929,6 +965,8 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
   @override
   Widget build(BuildContext context) {
     final exercise = widget.exercise;
+    final isBacklogging = _workoutDateService.isBacklogging;
+    final activeWorkoutDate = _workoutDateService.activeDate;
 
     return Scaffold(
       appBar: AppBar(title: Text(exercise['name'] ?? 'Exercise')),
@@ -937,6 +975,16 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            if (isBacklogging) ...[
+              Card(
+                child: ListTile(
+                  leading: const Icon(Icons.history),
+                  title: const Text('Backlog Workout'),
+                  subtitle: Text('Logging for ${_formatDate(activeWorkoutDate)}'),
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
             // ----------------- Log Form -----------------
             Text(
               "Log Your Session",
@@ -1012,39 +1060,8 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
               width: double.infinity,
               child: ElevatedButton.icon(
                 icon: const Icon(Icons.save),
-                label: const Text("Save Set"),
-                onPressed: () async {
-                  final weight = double.tryParse(weightController.text.trim());
-                  final metricValue = double.tryParse(repsController.text.trim());
-                  if (weight == null || metricValue == null) return;
-
-                  if (_selectedMetricType == 'reps' &&
-                      metricValue != metricValue.roundToDouble()) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Reps must be a whole number.')),
-                    );
-                    return;
-                  }
-
-                  final res = await sessionService.insertSession(
-                    exerciseId: exercise['id'].toString(),
-                    weight: weight,
-                    metricType: _selectedMetricType,
-                    metricValue: metricValue,
-                    loadType: _selectedLoadType,
-                  );
-
-                  final sessionID = res['id'];
-
-                  await Supabase.instance.client.rpc(
-                    'add_session_xp',
-                    params: {'session_id': sessionID},
-                  );
-
-                  weightController.clear();
-                  repsController.clear();
-                  await _loadTodayAndLast4Days();
-                },
+                label: Text(_isSavingSet ? "Saving..." : "Save Set"),
+                onPressed: _isSavingSet ? null : _saveSet,
               ),
             ),
 
@@ -1101,13 +1118,15 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
 
             // ----------------- Today's Workout -----------------
             Text(
-              "Today's Workout",
+              isBacklogging ? "Selected Workout Day" : "Today's Workout",
               style: Theme.of(context).textTheme.titleMedium,
             ),
             const SizedBox(height: 8),
             Text(
-              "Today's sets are shown here but are excluded from the current "
-              "progress calculations until the calendar day changes.",
+              isBacklogging
+                  ? "Sets for ${_formatDate(activeWorkoutDate)} appear here. Existing sets are preserved when you add more."
+                  : "Today's sets are shown here but are excluded from the current "
+                    "progress calculations until the calendar day changes.",
               style: Theme.of(context).textTheme.bodySmall,
             ),
             const SizedBox(height: 12),
@@ -1123,7 +1142,9 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
                       const SizedBox(width: 10),
                       Expanded(
                         child: Text(
-                          "No sets have been recorded for this exercise today.",
+                          isBacklogging
+                              ? "No sets recorded for this exercise on ${_formatDate(activeWorkoutDate)}."
+                              : "No sets have been recorded for this exercise today.",
                           style: Theme.of(context).textTheme.bodyMedium,
                         ),
                       ),
@@ -1142,14 +1163,16 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
 
             // ----------------- Last 4 Recorded Days -----------------
             Text(
-              "Last 4 Recorded Days",
+              "Last 4 Earlier Recorded Days",
               style: Theme.of(context).textTheme.titleMedium,
             ),
             const SizedBox(height: 8),
             Text(
-              "These are completed prior workout days. Tomorrow, today's "
-              "workout will automatically move into this section and the "
-              "progress calculation will refresh using it.",
+              isBacklogging
+                  ? "These are workout days before the selected backlog date."
+                  : "These are completed prior workout days. Tomorrow, today's "
+                    "workout will automatically move into this section and the "
+                    "progress calculation will refresh using it.",
               style: Theme.of(context).textTheme.bodySmall,
             ),
             const SizedBox(height: 12),
