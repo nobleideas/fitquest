@@ -2757,37 +2757,28 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                     ],
                   ),
                   const SizedBox(height: 16),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: _consumeFoodSearchField(),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: _openAddFoodDialog,
-                          icon: const Icon(Icons.add),
-                          label: const Text('Add Food Item'),
-                        ),
-                      ),
-                    ],
+                  // Full-width, vertically stacked actions prevent text clipping
+                  // on narrow mobile screens.
+                  _consumeFoodSearchField(),
+                  const SizedBox(height: 10),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: _openAddFoodDialog,
+                      icon: const Icon(Icons.add),
+                      label: const Text('Add Food Item'),
+                    ),
                   ),
                   const SizedBox(height: 10),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: _consumeMealSearchField(),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed:
-                              _foodItems.isEmpty ? null : _openAddMealDialog,
-                          icon: const Icon(Icons.add_circle_outline),
-                          label: const Text('Add Meal'),
-                        ),
-                      ),
-                    ],
+                  _consumeMealSearchField(),
+                  const SizedBox(height: 10),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      onPressed: _foodItems.isEmpty ? null : _openAddMealDialog,
+                      icon: const Icon(Icons.add_circle_outline),
+                      label: const Text('Add Meal'),
+                    ),
                   ),
                   const SizedBox(height: 10),
                   SizedBox(
