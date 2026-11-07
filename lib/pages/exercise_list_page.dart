@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../services/exercise_service.dart';
 import '../services/equipment_service.dart';
+import '../services/workout_date_service.dart';
 import 'exercise_session_page.dart';
 
 class ExerciseListPage extends StatefulWidget {
@@ -28,6 +29,7 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
 
   final _exerciseService = ExerciseService();
   final _equipmentService = EquipmentService();
+  final _workoutDateService = WorkoutDateService.instance;
 
   Set<String> exercisesWithSessionsToday = {};
   final Set<String> _sourceExercisesWithVideo = {};
@@ -42,7 +44,18 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
   @override
   void initState() {
     super.initState();
+    _workoutDateService.selectedDate.addListener(_onWorkoutDateChanged);
     _loadExercises();
+  }
+
+  void _onWorkoutDateChanged() {
+    if (mounted) _loadExercises();
+  }
+
+  @override
+  void dispose() {
+    _workoutDateService.selectedDate.removeListener(_onWorkoutDateChanged);
+    super.dispose();
   }
 
   String _cleanStr(dynamic v) {
@@ -166,9 +179,9 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
     final user = supabase.auth.currentUser;
     if (user == null) return {};
 
-    final nowLocal = DateTime.now();
-    final startLocal = DateTime(nowLocal.year, nowLocal.month, nowLocal.day);
-    final endLocal = startLocal.add(const Duration(days: 1));
+    final activeDate = _workoutDateService.activeDate;
+    final startLocal = DateTime(activeDate.year, activeDate.month, activeDate.day);
+    final endLocal = DateTime(activeDate.year, activeDate.month, activeDate.day + 1);
 
     final startUtc = startLocal.toUtc().toIso8601String();
     final endUtc = endLocal.toUtc().toIso8601String();
@@ -836,9 +849,31 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
   Widget build(BuildContext context) {
     final emptyText = "No exercises available for this $_kindTitle.";
 
+    final backlogDate = _workoutDateService.selectedDate.value;
     return Scaffold(
       appBar: AppBar(title: Text(widget.equipmentName)),
-      body: isLoading
+      body: Column(
+        children: [
+          if (backlogDate != null)
+            Material(
+              color: Theme.of(context).colorScheme.secondaryContainer,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                child: Row(
+                  children: [
+                    const Icon(Icons.history),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        'Backlog Workout: ${backlogDate.month}/${backlogDate.day}/${backlogDate.year}',
+                        style: const TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          Expanded(child: isLoading
           ? const Center(child: CircularProgressIndicator())
           : exercises.isEmpty
               ? Center(child: Text(emptyText))
@@ -901,7 +936,9 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
                       );
                     },
                   ),
-                ),
+                )),
+        ],
+      ),
       floatingActionButton: FloatingActionButton(
         onPressed: _showAddOptionsIfRoutine,
         child: const Icon(Icons.add),

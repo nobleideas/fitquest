@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../services/suggestion_service.dart';
+import '../services/workout_date_service.dart';
 import '../services/friend_profile_service.dart';
 import 'exercise_session_page.dart';
 import 'friend_profile_page.dart';
@@ -63,6 +64,8 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
   WorkoutFilter _selectedFilter = WorkoutFilter.all;
   bool _showFriends = true;
 
+  final WorkoutDateService _workoutDateService = WorkoutDateService.instance;
+
   final FriendProfileService _friendProfileService = FriendProfileService();
 
   bool _isSubmittingReport = false;
@@ -99,6 +102,7 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _workoutDateService.selectedDate.addListener(_onWorkoutDateChanged);
 
     // Load persisted suggestion first, then load summary.
     _restoreSuggestedRoutineFromPrefs();
@@ -108,6 +112,7 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _workoutDateService.selectedDate.removeListener(_onWorkoutDateChanged);
     _reportController.dispose();
     super.dispose();
   }
@@ -120,6 +125,60 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
         state == AppLifecycleState.detached) {
       _persistSuggestedRoutineToPrefs();
     }
+  }
+
+  void _onWorkoutDateChanged() {
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _startBacklogWorkout() async {
+    final today = DateUtils.dateOnly(DateTime.now());
+    final selected = await showDatePicker(
+      context: context,
+      initialDate: _workoutDateService.selectedDate.value ??
+          today.subtract(const Duration(days: 1)),
+      firstDate: DateTime(2000),
+      lastDate: today.subtract(const Duration(days: 1)),
+      helpText: 'Select the date of your past workout',
+    );
+    if (selected == null || !mounted) return;
+    _workoutDateService.startBacklog(selected);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Backlog mode: ${_formatDate(selected)}')),
+    );
+  }
+
+  void _finishBacklogWorkout() {
+    _workoutDateService.finishBacklog();
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Backlog finished. Back to today.')),
+    );
+    _loadRecentExercises();
+  }
+
+  Widget _buildBacklogStatus() {
+    final selected = _workoutDateService.selectedDate.value;
+    if (selected == null) return const SizedBox.shrink();
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text('Backlog Workout • ${_formatDate(selected)}',
+                style: const TextStyle(fontWeight: FontWeight.bold)),
+            const SizedBox(height: 6),
+            const Text('Workouts you log while backlog mode is active will use this date once the workout pages and session service are updated.'),
+            const SizedBox(height: 8),
+            FilledButton.icon(
+              onPressed: _finishBacklogWorkout,
+              icon: const Icon(Icons.check_circle_outline),
+              label: const Text('Finish Backlog'),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   // ===================== Persistence helpers =====================
@@ -1662,6 +1721,14 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
                   onPressed: _isSuggesting ? null : _openSuggestRoutineDialog,
                 ),
                 _homeActionRow(
+                  label: _workoutDateService.isBacklogging
+                      ? 'Change Backlog Date'
+                      : 'Backlog Workout',
+                  tooltip: 'Choose a past workout date',
+                  icon: const Icon(Icons.history),
+                  onPressed: _startBacklogWorkout,
+                ),
+                _homeActionRow(
                   label: 'Report Bug',
                   tooltip: 'Report a bug / suggestion',
                   icon: const Icon(Icons.bug_report_outlined),
@@ -1678,6 +1745,8 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
               ],
             ),
             const SizedBox(height: 12),
+            _buildBacklogStatus(),
+            if (_workoutDateService.isBacklogging) const SizedBox(height: 12),
             Text(
               'Workout Summary',
               style: Theme.of(context).textTheme.headlineSmall,

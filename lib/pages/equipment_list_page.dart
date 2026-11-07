@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../services/equipment_service.dart';
 import '../services/gym_service.dart';
+import '../services/workout_date_service.dart';
 import '../data/equipment_catalog.dart';
 import 'exercise_list_page.dart';
 
@@ -17,6 +18,7 @@ class EquipmentListPageState extends State<EquipmentListPage> {
   final supabase = Supabase.instance.client;
   final _equipmentService = EquipmentService();
   final _gymService = GymService();
+  final _workoutDateService = WorkoutDateService.instance;
 
   List<Map<String, dynamic>> equipmentList = [];
   List<Map<String, dynamic>> gyms = [];
@@ -29,7 +31,7 @@ class EquipmentListPageState extends State<EquipmentListPage> {
   String? get _activeGymId => activeGym?['id']?.toString();
   bool get _isSelectionMode => _selectedEquipmentIds.isNotEmpty;
 
-  /// Equipment IDs that have at least one exercise session today
+  /// Equipment IDs with sessions on the currently selected workout date.
   Set<String> equipmentWithSessionsToday = {};
 
   static const List<String?> _muscleFiltersGrid = [
@@ -60,7 +62,18 @@ class EquipmentListPageState extends State<EquipmentListPage> {
   @override
   void initState() {
     super.initState();
+    _workoutDateService.selectedDate.addListener(_onWorkoutDateChanged);
     _loadPageData();
+  }
+
+  void _onWorkoutDateChanged() {
+    if (mounted) _loadEquipment();
+  }
+
+  @override
+  void dispose() {
+    _workoutDateService.selectedDate.removeListener(_onWorkoutDateChanged);
+    super.dispose();
   }
 
   String _normalizeMuscle(dynamic value) {
@@ -282,9 +295,9 @@ class EquipmentListPageState extends State<EquipmentListPage> {
     final user = supabase.auth.currentUser;
     if (user == null) return {};
 
-    final nowLocal = DateTime.now();
-    final startLocal = DateTime(nowLocal.year, nowLocal.month, nowLocal.day);
-    final endLocal = startLocal.add(const Duration(days: 1));
+    final selected = _workoutDateService.activeDate;
+    final startLocal = DateTime(selected.year, selected.month, selected.day);
+    final endLocal = DateTime(selected.year, selected.month, selected.day + 1);
 
     final startUtc = startLocal.toUtc().toIso8601String();
     final endUtc = endLocal.toUtc().toIso8601String();
@@ -1839,6 +1852,22 @@ class EquipmentListPageState extends State<EquipmentListPage> {
                   _buildSelectionBar(),
                   _buildKindFilterBar(), // ✅ NEW
                   _buildMuscleFilterBar(),
+                  if (_workoutDateService.isBacklogging)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.history, size: 18),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'Backlog date: ${_workoutDateService.activeDate.month}/${_workoutDateService.activeDate.day}/${_workoutDateService.activeDate.year}',
+                              style: const TextStyle(fontWeight: FontWeight.w600),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                   Expanded(
                     child: RefreshIndicator(
                       onRefresh: _loadEquipment,
