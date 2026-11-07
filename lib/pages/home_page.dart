@@ -1375,7 +1375,7 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
           children: [
             Row(
               children: [
-                const Icon(Icons.casino),
+                const Text('☯', style: TextStyle(fontSize: 26)),
                 const SizedBox(width: 10),
                 Expanded(
                   child: Text(
@@ -1589,6 +1589,32 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
     );
   }
 
+  Widget _homeActionRow({
+    required String label,
+    required String tooltip,
+    required Widget icon,
+    required VoidCallback? onPressed,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              label,
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
+          ),
+          IconButton(
+            tooltip: tooltip,
+            onPressed: onPressed,
+            icon: icon,
+          ),
+        ],
+      ),
+    );
+  }
+
   // ===================== UI =====================
 
   @override
@@ -1614,38 +1640,44 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
         padding: const EdgeInsets.all(16.0),
         child: ListView(
           children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
+            // Home actions: descriptive labels on the left, buttons on the right.
+            Column(
               children: [
-                IconButton(
-                  tooltip: 'Meal Tracker',
-                  onPressed: _openMealTracker,
+                _homeActionRow(
+                  label: 'Track/Share Calories',
+                  tooltip: 'Track/Share Calories',
                   icon: const Icon(Icons.restaurant),
+                  onPressed: _openMealTracker,
                 ),
-                IconButton(
-                  tooltip: 'Suggest Routine',
-                  onPressed: _isSuggesting ? null : _openSuggestRoutineDialog,
+                _homeActionRow(
+                  label: 'Suggest Balanced Workout',
+                  tooltip: 'Suggest Balanced Workout',
                   icon: _isSuggesting
                       ? const SizedBox(
                           width: 20,
                           height: 20,
                           child: CircularProgressIndicator(strokeWidth: 2),
                         )
-                      : const Icon(Icons.casino),
+                      : const Text('☯', style: TextStyle(fontSize: 26)),
+                  onPressed: _isSuggesting ? null : _openSuggestRoutineDialog,
                 ),
-                IconButton(
+                _homeActionRow(
+                  label: 'Report Bug',
                   tooltip: 'Report a bug / suggestion',
-                  onPressed: _isSubmittingReport ? null : _openReportDialog,
                   icon: const Icon(Icons.bug_report_outlined),
+                  onPressed: _isSubmittingReport ? null : _openReportDialog,
                 ),
-                IconButton(
-                  tooltip: 'Share',
-                  onPressed:
-                      entries.any((s) => s.isCurrentUser) ? _openSharePicker : null,
+                _homeActionRow(
+                  label: 'Share Workout',
+                  tooltip: 'Share Workout',
                   icon: const Icon(Icons.share),
+                  onPressed: entries.any((s) => s.isCurrentUser)
+                      ? _openSharePicker
+                      : null,
                 ),
               ],
             ),
+            const SizedBox(height: 12),
             Text(
               'Workout Summary',
               style: Theme.of(context).textTheme.headlineSmall,
