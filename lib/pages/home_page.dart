@@ -621,7 +621,7 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
           }
 
           return AlertDialog(
-            title: const Text('Share workouts'),
+            title: const Text('Share Completed Workouts'),
             content: SizedBox(
               width: double.maxFinite,
               child: Column(
@@ -748,6 +748,31 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
     return int.tryParse(v.toString()) ?? 0;
   }
 
+  // Sum actual logging windows, not the entire span between the first and
+  // last set of the calendar day. A gap of more than 60 minutes starts a
+  // separate workout (for example, an AM session and a PM session).
+  // A session with only one recorded set has zero measurable elapsed time.
+  static const Duration _workoutInactivityGap = Duration(minutes: 60);
+
+  int _activeWorkoutMinutes(Iterable<DateTime> timestamps) {
+    final times = timestamps.toList()..sort();
+    if (times.length < 2) return 0;
+
+    var sessionStart = times.first;
+    var previous = times.first;
+    var total = Duration.zero;
+
+    for (final time in times.skip(1)) {
+      if (time.difference(previous) > _workoutInactivityGap) {
+        total += previous.difference(sessionStart);
+        sessionStart = time;
+      }
+      previous = time;
+    }
+    total += previous.difference(sessionStart);
+    return total.inMinutes;
+  }
+
   DateTime? _friendRowCreatedAtLocal(Map<String, dynamic> row) {
     final value = row['created_at'];
     if (value == null) return null;
@@ -787,6 +812,7 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
       DateTime? first;
       DateTime? last;
+      final workoutTimes = <DateTime>[];
 
       final setsByName = <String, int>{};
       final firstTimeByName = <String, DateTime>{};
@@ -803,6 +829,7 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
         final local = _friendRowCreatedAtLocal(row);
 
         if (local != null) {
+          workoutTimes.add(local);
           if (first == null || local.isBefore(first)) first = local;
           if (last == null || local.isAfter(last)) last = local;
         }
@@ -879,11 +906,7 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
         volumeByType: volumeByType,
       );
 
-      var durationMinutes = 0;
-      if (first != null && last != null) {
-        durationMinutes = last.difference(first).inMinutes;
-        if (durationMinutes < 0) durationMinutes = 0;
-      }
+      final durationMinutes = _activeWorkoutMinutes(workoutTimes);
 
       summaries.add(
         DayWorkoutSummary(
@@ -978,12 +1001,14 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
       final Map<DateTime, Map<String, DateTime>> firstSessionByExerciseByDay = {};
       final Map<DateTime, DateTime> firstSessionLocalByDay = {};
       final Map<DateTime, DateTime> lastSessionLocalByDay = {};
+      final Map<DateTime, List<DateTime>> workoutTimesByDay = {};
       final Map<DateTime, Map<String, double>> volumeByDayByType = {};
 
       for (final row in sessions) {
         final local = DateTime.parse(row['created_at']).toLocal();
         final day = DateTime(local.year, local.month, local.day);
         workoutDays.add(day);
+        workoutTimesByDay.putIfAbsent(day, () => <DateTime>[]).add(local);
 
         final currentFirst = firstSessionLocalByDay[day];
         final currentLast = lastSessionLocalByDay[day];
@@ -1105,13 +1130,11 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
           volumeByType: volumeByDayByType[day] ?? const {},
         );
 
-        int durationMin = 0;
         final first = firstSessionLocalByDay[day];
         final last = lastSessionLocalByDay[day];
-        if (first != null && last != null) {
-          durationMin = last.difference(first).inMinutes;
-          if (durationMin < 0) durationMin = 0;
-        }
+        final durationMin = _activeWorkoutMinutes(
+          workoutTimesByDay[day] ?? const <DateTime>[],
+        );
 
         ownSummaries.add(
           DayWorkoutSummary(
@@ -1735,8 +1758,8 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
                   onPressed: _isSubmittingReport ? null : _openReportDialog,
                 ),
                 _homeActionRow(
-                  label: 'Share Workout',
-                  tooltip: 'Share Workout',
+                  label: 'Share Completed Workout',
+                  tooltip: 'Share Completed Workout',
                   icon: const Icon(Icons.share),
                   onPressed: entries.any((s) => s.isCurrentUser)
                       ? _openSharePicker
