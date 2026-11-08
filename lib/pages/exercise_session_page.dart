@@ -206,6 +206,8 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
     final hasVolMap = <String, bool>{};
     final roundMap = <String, int>{};
     for (final key in keysToLoad) {
+      // Backfill the entire local workout day, not just this exercise.
+      await sessionService.backfillExerciseOrdersForDate(_dateFromDayKey(key));
       final sessions = await sessionService.getSessionsForDate(
         exerciseId, _dateFromDayKey(key),
       );
@@ -531,10 +533,18 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
       ),
       child: ExpansionTile(
         initiallyExpanded: initiallyExpanded,
-        title: Text(
-          '$title  •  ${sessions.length} ${sessions.length == 1 ? 'set' : 'sets'}'
-          '${round == null ? '' : '  •  Round $round'}'
-          '${showVolume ? '  •  Volume: ${volume.toStringAsFixed(0)}' : ''}',
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('$title  •  ${sessions.length} ${sessions.length == 1 ? 'set' : 'sets'}'),
+            if (showVolume)
+              Text('Volume: ${volume.toStringAsFixed(0)}',
+                  style: Theme.of(context).textTheme.bodySmall),
+            if (round != null)
+              Text('Round $round',
+                  style: Theme.of(context).textTheme.bodySmall),
+          ],
         ),
         children: sessions.isEmpty
             ? const [

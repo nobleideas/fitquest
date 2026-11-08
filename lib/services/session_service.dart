@@ -104,6 +104,18 @@ class SessionService {
     }
   }
 
+  /// Assigns missing orders across all exercises on one LOCAL workout day.
+  /// Existing orders and recorded sets are preserved. Requires the companion
+  /// Supabase migration; the database checks auth.uid() and applies RLS.
+  Future<void> backfillExerciseOrdersForDate(DateTime dayLocal) async {
+    final startLocal = DateTime(dayLocal.year, dayLocal.month, dayLocal.day);
+    final endLocal = DateTime(dayLocal.year, dayLocal.month, dayLocal.day + 1);
+    await supabase.rpc('backfill_exercise_orders_for_day', params: {
+      'p_day_start': startLocal.toUtc().toIso8601String(),
+      'p_day_end': endLocal.toUtc().toIso8601String(),
+    });
+  }
+
   Future<List<DateTime>> getLast3SessionDates(String exerciseId) async {
     final user = supabase.auth.currentUser!;
     final res = await supabase
