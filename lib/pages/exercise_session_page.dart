@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:video_player/video_player.dart';
 
+import '../theme/fitquest_theme.dart';
 import '../services/exercise_service.dart';
 import '../services/session_service.dart';
 import '../services/workout_date_service.dart';
@@ -665,19 +666,19 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
     final isReferenceRound = dayKey != _todayKey() &&
         round != null && _referenceRounds.contains(round);
     final isExactRound = round == _currentRound;
-    final theme = Theme.of(context);
+    final theme = FitQuestTheme.dark;
 
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
-      elevation: isBestMatch ? 5 : 3,
+      elevation: 0,
       color: isBestMatch ? theme.colorScheme.primaryContainer : null,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(18),
         side: isBestMatch
             ? BorderSide(color: theme.colorScheme.primary, width: 2)
             : isReferenceRound
                 ? BorderSide(color: theme.colorScheme.primary.withValues(alpha: 0.5))
-                : BorderSide.none,
+                : const BorderSide(color: FitQuestTheme.outline),
       ),
       child: ExpansionTile(
         initiallyExpanded: initiallyExpanded,
@@ -685,7 +686,8 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text('$title  •  ${sessions.length} ${sessions.length == 1 ? 'set' : 'sets'}'),
+            Text('$title  •  ${sessions.length} ${sessions.length == 1 ? 'set' : 'sets'}',
+                style: theme.textTheme.titleSmall),
             if (isBestMatch)
               Text(isExactRound
                   ? 'BEST VOLUME · ROUND $round'
@@ -702,10 +704,10 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
                   )),
             if (showVolume)
               Text('Volume: ${volume.toStringAsFixed(0)}',
-                  style: Theme.of(context).textTheme.bodySmall),
+                  style: FitQuestTheme.dark.textTheme.bodySmall),
             if (round != null)
               Text('Round $round',
-                  style: Theme.of(context).textTheme.bodySmall),
+                  style: FitQuestTheme.dark.textTheme.bodySmall),
           ],
         ),
         children: sessions.isEmpty
@@ -749,7 +751,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
                         if (setVolume != null)
                           Text(
                             'Vol: ${setVolume.toStringAsFixed(0)}',
-                            style: Theme.of(context).textTheme.bodySmall,
+                            style: FitQuestTheme.dark.textTheme.bodySmall,
                           ),
                         IconButton(
                           tooltip: 'Edit set',
@@ -1036,13 +1038,13 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
           children: [
             Text(
               title,
-              style: Theme.of(context).textTheme.titleSmall,
+              style: FitQuestTheme.dark.textTheme.titleSmall,
             ),
             if (subtitle != null) ...[
               const SizedBox(height: 4),
               Text(
                 subtitle,
-                style: Theme.of(context).textTheme.bodySmall,
+                style: FitQuestTheme.dark.textTheme.bodySmall,
               ),
             ],
             const SizedBox(height: 10),
@@ -1081,7 +1083,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
             ] else
               Text(
                 hasUrl ? 'Loading video...' : emptyMessage,
-                style: Theme.of(context).textTheme.bodySmall,
+                style: FitQuestTheme.dark.textTheme.bodySmall,
               ),
             if ((formNotes ?? '').trim().isNotEmpty) ...[
               const SizedBox(height: 10),
@@ -1089,12 +1091,12 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
                 width: double.infinity,
                 padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
-                  border: Border.all(color: Theme.of(context).dividerColor),
+                  border: Border.all(color: FitQuestTheme.dark.dividerColor),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Text(
                   formNotes!.trim(),
-                  style: Theme.of(context).textTheme.bodySmall,
+                  style: FitQuestTheme.dark.textTheme.bodySmall,
                 ),
               ),
             ],
@@ -1121,7 +1123,9 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
     final isBacklogging = _workoutDateService.isBacklogging;
     final activeWorkoutDate = _workoutDateService.activeDate;
 
-    return Scaffold(
+    return Theme(
+      data: FitQuestTheme.dark,
+      child: Scaffold(
       appBar: AppBar(title: Text(exercise['name'] ?? 'Exercise')),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
@@ -1139,32 +1143,26 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
               const SizedBox(height: 12),
             ],
             // ----------------- Log Form -----------------
-            Text(
-              "Log Your Session",
-              style: Theme.of(context).textTheme.headlineSmall,
+            const FitQuestSectionHeader(
+              title: 'Log your session',
+              subtitle: 'One set at a time. Every rep counts.',
+              icon: Icons.fitness_center,
             ),
-            const SizedBox(height: 8),
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Row(
-                  children: [
-                    Icon(Icons.layers_outlined,
-                        color: Theme.of(context).colorScheme.primary),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Text(_currentRound == null
-                          ? 'Determining current round...'
-                          : 'Current round: $_currentRound  •  '
-                            '${sessionsByDayKey[_todayKey()]?.length ?? 0} sets logged',
-                          style: Theme.of(context).textTheme.titleSmall),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-            const SizedBox(height: 12),
-
+            Row(children: [
+              Expanded(child: FitQuestMetricTile(
+                label: 'CURRENT ROUND',
+                value: _currentRound?.toString() ?? '—',
+                icon: Icons.layers_outlined,
+              )),
+              const SizedBox(width: 12),
+              Expanded(child: FitQuestMetricTile(
+                label: 'SETS LOGGED',
+                value: '${sessionsByDayKey[_todayKey()]?.length ?? 0}',
+                icon: Icons.check_circle_outline,
+                accentColor: FitQuestTheme.mint,
+              )),
+            ]),
+            const SizedBox(height: 20),
             TextField(
               controller: weightController,
               keyboardType: TextInputType.number,
@@ -1243,16 +1241,16 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
             const SizedBox(height: 24),
 
             // ----------------- Today's Workout -----------------
-            Text(
-              isBacklogging ? "Selected Workout Day" : "Today's Workout",
-              style: Theme.of(context).textTheme.titleMedium,
+            FitQuestSectionHeader(
+              title: isBacklogging ? 'Selected workout day' : "Today's workout",
+              icon: Icons.today_outlined,
             ),
             const SizedBox(height: 8),
             Text(
               isBacklogging
                   ? "Sets for ${_formatDate(activeWorkoutDate)} appear here. Existing sets are preserved when you add more."
                   : "Today's recorded sets appear here.",
-              style: Theme.of(context).textTheme.bodySmall,
+              style: FitQuestTheme.dark.textTheme.bodySmall,
             ),
             const SizedBox(height: 12),
 
@@ -1270,7 +1268,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
                           isBacklogging
                               ? "No sets recorded for this exercise on ${_formatDate(activeWorkoutDate)}."
                               : "No sets have been recorded for this exercise today.",
-                          style: Theme.of(context).textTheme.bodyMedium,
+                          style: FitQuestTheme.dark.textTheme.bodyMedium,
                         ),
                       ),
                     ],
@@ -1287,8 +1285,10 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
             const SizedBox(height: 20),
 
             // ----------------- Paged Previous Days -----------------
-            Text('Previous Days',
-                style: Theme.of(context).textTheme.titleMedium),
+            const FitQuestSectionHeader(
+              title: 'Previous days',
+              icon: Icons.history,
+            ),
             const SizedBox(height: 8),
             Text(
               isBacklogging
@@ -1296,7 +1296,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
                     'The highest-volume day in the closest available round(s) is highlighted.'
                   : 'Browse all previous workout days, four at a time. '
                     'The highest-volume day in the closest available round(s) is highlighted.',
-              style: Theme.of(context).textTheme.bodySmall,
+              style: FitQuestTheme.dark.textTheme.bodySmall,
             ),
             const SizedBox(height: 12),
             if (_isLoadingHistory)
@@ -1329,7 +1329,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
                   Text(
                     '${_historyPage + 1} / '
                     '${(previousDayKeys.length + _historyPageSize - 1) ~/ _historyPageSize}',
-                    style: Theme.of(context).textTheme.bodySmall,
+                    style: FitQuestTheme.dark.textTheme.bodySmall,
                   ),
                   TextButton.icon(
                     onPressed: (_historyPage + 1) * _historyPageSize >=
@@ -1361,14 +1361,14 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
             const SizedBox(height: 24),
 
             // ----------------- Exercise Form Videos -----------------
-            Text(
-              "Exercise Form Videos",
-              style: Theme.of(context).textTheme.titleMedium,
+            const FitQuestSectionHeader(
+              title: 'Exercise form videos',
+              icon: Icons.play_circle_outline,
             ),
             const SizedBox(height: 6),
             Text(
               "Compare the imported trainer demonstration with your own form.",
-              style: Theme.of(context).textTheme.bodySmall,
+              style: FitQuestTheme.dark.textTheme.bodySmall,
             ),
             const SizedBox(height: 12),
 
@@ -1503,7 +1503,7 @@ if ((_importedVideoUrl ?? '').trim().isNotEmpty &&
               const SizedBox(height: 8),
               Text(
                 "Selected: ${_pickedVideo!.name}",
-                style: Theme.of(context).textTheme.bodySmall,
+                style: FitQuestTheme.dark.textTheme.bodySmall,
               ),
             ],
 
@@ -1540,6 +1540,7 @@ if ((_importedVideoUrl ?? '').trim().isNotEmpty &&
           ],
         ),
       ),
+    ),
     );
   }
 }
