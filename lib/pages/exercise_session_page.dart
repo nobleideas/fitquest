@@ -37,7 +37,8 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
   int _historyPage = 0;
   static const int _historyPageSize = 4;
   int? _currentRound;
-  String? _bestMatchingDayKey;
+  Set<String> _bestReferenceDayKeys = <String>{};
+  Set<int> _referenceRounds = <int>{};
   bool _isLoadingHistory = true;
   int _historyRequest = 0;
   Map<String, List<Map<String, dynamic>>> sessionsByDayKey = {};
@@ -308,14 +309,44 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
         if (round != null) roundMap[entry.key] = round;
       }
 
-      String? bestKey;
-      double? bestVolume;
+      // Choose the nearest available historical round(s). An exact match
+      // always wins. If the current round lies between two equally distant
+      // available rounds, retain both for comparison. This works for any
+      // positive round number without special-case branches.
+      final availableRounds = priorKeys
+          .where((key) => hasVolMap[key] == true && roundMap[key] != null)
+          .map((key) => roundMap[key]!)
+          .toSet();
+      final referenceRounds = <int>{};
+      if (availableRounds.isNotEmpty) {
+        final nearestDistance = availableRounds
+            .map((round) => (round - currentRound).abs())
+            .reduce((a, b) => a < b ? a : b);
+        referenceRounds.addAll(availableRounds.where(
+            (round) => (round - currentRound).abs() == nearestDistance));
+      }
+
+      // Highlight the highest-volume day independently for EACH nearest
+      // round, including ties within a round. Never compare volume across
+      // different rounds to choose which fallback round to show.
+      final bestVolumeByRound = <int, double>{};
       for (final key in priorKeys) {
-        if (roundMap[key] != currentRound || hasVolMap[key] != true) continue;
+        final round = roundMap[key];
+        if (round == null || !referenceRounds.contains(round) ||
+            hasVolMap[key] != true) continue;
         final volume = volMap[key]!;
-        if (bestVolume == null || volume > bestVolume) {
-          bestVolume = volume;
-          bestKey = key;
+        final previous = bestVolumeByRound[round];
+        if (previous == null || volume > previous) {
+          bestVolumeByRound[round] = volume;
+        }
+      }
+      final bestKeys = <String>{};
+      for (final key in priorKeys) {
+        final round = roundMap[key];
+        if (round != null && bestVolumeByRound.containsKey(round) &&
+            hasVolMap[key] == true &&
+            volMap[key] == bestVolumeByRound[round]) {
+          bestKeys.add(key);
         }
       }
 
@@ -330,7 +361,8 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
         hasVolumeByDayKey = hasVolMap;
         roundByDayKey = roundMap;
         _currentRound = currentRound;
-        _bestMatchingDayKey = bestKey;
+        _bestReferenceDayKeys = bestKeys;
+        _referenceRounds = referenceRounds;
         if (_historyPage * _historyPageSize >= priorKeys.length) {
           _historyPage = 0;
         }
@@ -629,9 +661,10 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
     final volume = volumeByDayKey[dayKey] ?? 0;
     final showVolume = hasVolumeByDayKey[dayKey] ?? false;
     final round = roundByDayKey[dayKey];
-    final isBestMatch = dayKey == _bestMatchingDayKey;
-    final isMatchingRound = dayKey != _todayKey() &&
-        _currentRound != null && round == _currentRound;
+    final isBestMatch = _bestReferenceDayKeys.contains(dayKey);
+    final isReferenceRound = dayKey != _todayKey() &&
+        round != null && _referenceRounds.contains(round);
+    final isExactRound = round == _currentRound;
     final theme = Theme.of(context);
 
     return Card(
@@ -642,7 +675,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
         borderRadius: BorderRadius.circular(12),
         side: isBestMatch
             ? BorderSide(color: theme.colorScheme.primary, width: 2)
-            : isMatchingRound
+            : isReferenceRound
                 ? BorderSide(color: theme.colorScheme.primary.withValues(alpha: 0.5))
                 : BorderSide.none,
       ),
@@ -654,13 +687,15 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
           children: [
             Text('$title  •  ${sessions.length} ${sessions.length == 1 ? 'set' : 'sets'}'),
             if (isBestMatch)
-              Text('BEST VOLUME · ROUND $_currentRound',
+              Text(isExactRound
+                  ? 'BEST VOLUME · ROUND $round'
+                  : 'BEST AVAILABLE · ROUND $round',
                   style: theme.textTheme.labelMedium?.copyWith(
                     color: theme.colorScheme.primary,
                     fontWeight: FontWeight.bold,
                   )),
-            if (isMatchingRound && !isBestMatch)
-              Text('MATCHING ROUND',
+            if (isReferenceRound && !isBestMatch)
+              Text(isExactRound ? 'MATCHING ROUND' : 'NEAREST ROUND · $round',
                   style: theme.textTheme.labelSmall?.copyWith(
                     color: theme.colorScheme.primary,
                     fontWeight: FontWeight.bold,
@@ -1258,9 +1293,9 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
             Text(
               isBacklogging
                   ? 'Earlier workout days before the selected backlog date. '
-                    'Your highest-volume day in the same round is highlighted.'
+                    'The highest-volume day in the closest available round(s) is highlighted.'
                   : 'Browse all previous workout days, four at a time. '
-                    'Your highest-volume day in the same round is highlighted.',
+                    'The highest-volume day in the closest available round(s) is highlighted.',
               style: Theme.of(context).textTheme.bodySmall,
             ),
             const SizedBox(height: 12),
@@ -1306,19 +1341,21 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
                   ),
                 ],
               ),
-              if (_bestMatchingDayKey != null &&
-                  !previousDayKeys
+              ...(_bestReferenceDayKeys.toList()
+                    ..sort((a, b) => (roundByDayKey[a] ?? 0)
+                        .compareTo(roundByDayKey[b] ?? 0)))
+                  .where((key) => !previousDayKeys
                       .skip(_historyPage * _historyPageSize)
                       .take(_historyPageSize)
-                      .contains(_bestMatchingDayKey))
-                TextButton.icon(
-                  onPressed: () => setState(() {
-                    _historyPage = previousDayKeys.indexOf(_bestMatchingDayKey!) ~/
-                        _historyPageSize;
-                  }),
-                  icon: const Icon(Icons.emoji_events_outlined),
-                  label: Text('Jump to best Round $_currentRound day'),
-                ),
+                      .contains(key))
+                  .map((key) => TextButton.icon(
+                        onPressed: () => setState(() {
+                          _historyPage = previousDayKeys.indexOf(key) ~/
+                              _historyPageSize;
+                        }),
+                        icon: const Icon(Icons.emoji_events_outlined),
+                        label: Text('Jump to best Round ${roundByDayKey[key]} day'),
+                      )),
             ],
 
             const SizedBox(height: 24),
