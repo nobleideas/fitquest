@@ -36,13 +36,9 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
   List<String> last4DayKeys = []; // "YYYY-MM-DD", excludes today
   Map<String, List<Map<String, dynamic>>> sessionsByDayKey = {};
   Map<String, double> volumeByDayKey = {};
-
-  // -------- Progress --------
-  double? _strengthTrendPercent;
-  double? _volumeTrendPercent;
-  String _strengthTrendLabel = 'Not enough data';
-  String _volumeTrendLabel = 'Not enough data';
-  String? _progressSummary;
+  Map<String, bool> hasVolumeByDayKey = {};
+  Map<String, int> roundByDayKey = {};
+  bool _metricPreferenceLoaded = false;
 
   // -------- Form video state --------
   final ImagePicker _picker = ImagePicker();
@@ -134,6 +130,33 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
         : value.toStringAsFixed(2).replaceFirst(RegExp(r'0+$'), '').replaceFirst(RegExp(r'\.$'), '');
   }
 
+  // The most recent saved set is the preference for this exercise.
+  // A new exercise keeps the default Weight + Reps.
+  void _restoreMetricPreference(List<Map<String, dynamic>> sessions) {
+    if (_metricPreferenceLoaded || sessions.isEmpty) return;
+    final latest = List<Map<String, dynamic>>.from(sessions)
+      ..sort((a, b) => (b['created_at'] ?? '').toString()
+          .compareTo((a['created_at'] ?? '').toString()));
+    final row = latest.first;
+    final load = (row['load_type'] ?? 'weight').toString();
+    final metric = (row['metric_type'] ?? 'reps').toString();
+    _selectedLoadType = ['weight', 'level'].contains(load) ? load : 'weight';
+    _selectedMetricType = ['reps', 'seconds', 'minutes', 'miles'].contains(metric)
+        ? metric : 'reps';
+    _metricPreferenceLoaded = true;
+  }
+
+  // Persistent exercise order is assigned atomically when a set is saved.
+  // Older records without an order remain unclassified rather than guessing.
+  int? _storedRound(List<Map<String, dynamic>> sessions) {
+    for (final session in sessions) {
+      final raw = session['exercise_order'];
+      final order = raw is num ? raw.toInt() : int.tryParse('$raw');
+      if (order != null && order > 0) return ((order - 1) ~/ 2) + 1;
+    }
+    return null;
+  }
+
   // ---------- Sessions ----------
   Future<void> _loadTodayAndLast4Days() async {
     final user = Supabase.instance.client.auth.currentUser;
@@ -144,9 +167,22 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
     // displayed for comparison; later dates must not appear as prior history.
     final activeKey = _todayKey();
     final activeDate = _dateFromDayKey(activeKey);
+    if (!_metricPreferenceLoaded) {
+      final latestRows = await Supabase.instance.client
+          .from('exercise_sessions')
+          .select('created_at, metric_type, load_type')
+          .eq('user_id', user.id)
+          .eq('exercise_id', exerciseId)
+          .order('created_at', ascending: false)
+          .limit(1);
+      if (latestRows.isNotEmpty && mounted) {
+        setState(() => _restoreMetricPreference(
+            latestRows.map((row) => Map<String, dynamic>.from(row)).toList()));
+      }
+    }
     final recentRows = await Supabase.instance.client
         .from('exercise_sessions')
-        .select('created_at')
+        .select('created_at, metric_type, load_type')
         .eq('user_id', user.id)
         .eq('exercise_id', exerciseId)
         .lt('created_at', DateTime(activeDate.year, activeDate.month, activeDate.day + 1).toUtc().toIso8601String())
@@ -167,19 +203,28 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
     final keysToLoad = <String>[activeKey, ...priorKeys];
     final map = <String, List<Map<String, dynamic>>>{};
     final volMap = <String, double>{};
+    final hasVolMap = <String, bool>{};
+    final roundMap = <String, int>{};
     for (final key in keysToLoad) {
       final sessions = await sessionService.getSessionsForDate(
         exerciseId, _dateFromDayKey(key),
       );
       map[key] = sessions;
       double totalVolume = 0;
+      bool hasVolume = false;
       for (final session in sessions) {
         if ((session['metric_type'] ?? 'reps').toString() == 'reps' &&
             (session['load_type'] ?? 'weight').toString() == 'weight') {
+          hasVolume = true;
           totalVolume += _numToDouble(session['weight']) * _sessionMetricValue(session);
         }
       }
       volMap[key] = totalVolume;
+      hasVolMap[key] = hasVolume;
+      if (sessions.isNotEmpty) {
+        final round = _storedRound(sessions);
+        if (round != null) roundMap[key] = round;
+      }
     }
 
     if (!mounted || _todayKey() != activeKey) return;
@@ -188,8 +233,9 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
       last4DayKeys = priorKeys;
       sessionsByDayKey = map;
       volumeByDayKey = volMap;
+      hasVolumeByDayKey = hasVolMap;
+      roundByDayKey = roundMap;
     });
-    await _loadProgress();
   }
 
   Future<void> _saveSet() async {
@@ -467,75 +513,6 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
   }
 }
 
-  // ---------- Rolling progress ----------
-  Future<void> _loadProgress() async {
-    try {
-      final exerciseId = (widget.exercise['id'] ?? '').toString().trim();
-      if (exerciseId.isEmpty) return;
-
-      final performance = await exerciseService.getExercisePerformanceData(
-        exerciseId: exerciseId,
-      );
-
-      if (!mounted) return;
-      setState(() {
-        _strengthTrendPercent = performance.strengthTrendPercent;
-        _volumeTrendPercent = performance.volumeTrendPercent;
-        _strengthTrendLabel = performance.strengthTrendLabel;
-        _volumeTrendLabel = performance.volumeTrendLabel;
-        _progressSummary = performance.progressSummary;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      setState(() {
-        _progressSummary = 'Could not calculate progress: $e';
-      });
-    }
-  }
-
-  String _formatTrendPercent(double? value) {
-    if (value == null) return '—';
-    final prefix = value > 0 ? '+' : '';
-    return '$prefix${value.toStringAsFixed(1)}%';
-  }
-
-  IconData _trendIcon(double? value) {
-    if (value == null) return Icons.horizontal_rule;
-    if (value > 1) return Icons.trending_up;
-    if (value < -1) return Icons.trending_down;
-    return Icons.trending_flat;
-  }
-
-  Widget _buildProgressTile({
-    required String title,
-    required double? value,
-    required String label,
-  }) {
-    return Expanded(
-      child: Container(
-        padding: const EdgeInsets.all(10),
-        decoration: BoxDecoration(
-          color: Theme.of(context).colorScheme.surfaceContainerHighest,
-          borderRadius: BorderRadius.circular(10),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Icon(_trendIcon(value)),
-            const SizedBox(height: 6),
-            Text(title, style: Theme.of(context).textTheme.bodySmall),
-            const SizedBox(height: 4),
-            Text(
-              _formatTrendPercent(value),
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
-            Text(label, style: Theme.of(context).textTheme.bodySmall),
-          ],
-        ),
-      ),
-    );
-  }
-
   Widget _buildWorkoutDayCard({
     required String dayKey,
     required String title,
@@ -543,6 +520,8 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
   }) {
     final sessions = sessionsByDayKey[dayKey] ?? const [];
     final volume = volumeByDayKey[dayKey] ?? 0;
+    final showVolume = hasVolumeByDayKey[dayKey] ?? false;
+    final round = roundByDayKey[dayKey];
 
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
@@ -553,7 +532,9 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
       child: ExpansionTile(
         initiallyExpanded: initiallyExpanded,
         title: Text(
-          '$title  •  Volume: ${volume.toStringAsFixed(0)}',
+          '$title  •  ${sessions.length} ${sessions.length == 1 ? 'set' : 'sets'}'
+          '${round == null ? '' : '  •  Round $round'}'
+          '${showVolume ? '  •  Volume: ${volume.toStringAsFixed(0)}' : ''}',
         ),
         children: sessions.isEmpty
             ? const [
@@ -1015,7 +996,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
                     value: _selectedLoadType == type,
                     onChanged: (checked) {
                       if (checked == true) {
-                        setState(() => _selectedLoadType = type);
+                        setState(() { _selectedLoadType = type; _metricPreferenceLoaded = true; });
                       }
                     },
                   ),
@@ -1047,7 +1028,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
                     value: _selectedMetricType == type,
                     onChanged: (checked) {
                       if (checked == true) {
-                        setState(() => _selectedMetricType = type);
+                        setState(() { _selectedMetricType = type; _metricPreferenceLoaded = true; });
                       }
                     },
                   ),
@@ -1067,53 +1048,6 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
 
             const SizedBox(height: 16),
 
-            if (_progressSummary != null)
-              Card(
-                elevation: 2,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          const Icon(Icons.insights),
-                          const SizedBox(width: 8),
-                          Text(
-                            'Progress',
-                            style: Theme.of(context).textTheme.titleMedium,
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      Row(
-                        children: [
-                          _buildProgressTile(
-                            title: 'Strength trend',
-                            value: _strengthTrendPercent,
-                            label: _strengthTrendLabel,
-                          ),
-                          const SizedBox(width: 10),
-                          _buildProgressTile(
-                            title: 'Volume trend',
-                            value: _volumeTrendPercent,
-                            label: _volumeTrendLabel,
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 10),
-                      Text(
-                        _progressSummary!,
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-
             const SizedBox(height: 24),
 
             // ----------------- Today's Workout -----------------
@@ -1125,8 +1059,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
             Text(
               isBacklogging
                   ? "Sets for ${_formatDate(activeWorkoutDate)} appear here. Existing sets are preserved when you add more."
-                  : "Today's sets are shown here but are excluded from the current "
-                    "progress calculations until the calendar day changes.",
+                  : "Today's recorded sets appear here.",
               style: Theme.of(context).textTheme.bodySmall,
             ),
             const SizedBox(height: 12),
@@ -1155,7 +1088,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
             else
               _buildWorkoutDayCard(
                 dayKey: todayDayKey!,
-                title: "Today",
+                title: isBacklogging ? _formatDate(activeWorkoutDate) : "Today",
                 initiallyExpanded: true,
               ),
 
@@ -1170,9 +1103,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
             Text(
               isBacklogging
                   ? "These are workout days before the selected backlog date."
-                  : "These are completed prior workout days. Tomorrow, today's "
-                    "workout will automatically move into this section and the "
-                    "progress calculation will refresh using it.",
+                  : "These are the four most recent earlier days for this exercise.",
               style: Theme.of(context).textTheme.bodySmall,
             ),
             const SizedBox(height: 12),

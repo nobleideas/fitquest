@@ -22,42 +22,38 @@ class SessionService {
     // change the date used for this insertion.
     final selectedBacklogDate = _workoutDateService.selectedDate.value;
 
-    final values = <String, dynamic>{
-      'user_id': user.id,
-      'exercise_id': exerciseId,
-      'weight': weight,
-      'load_type': loadType,
-      // Keep reps populated for backwards compatibility with older code.
-      // Non-rep metrics intentionally store 0 reps.
-      'reps': metricType == 'reps' ? metricValue.toInt() : 0,
-      'metric_type': metricType,
-      'metric_value': metricValue,
-    };
+    final workoutDate = selectedBacklogDate ?? DateTime.now();
+    final day = DateTime(workoutDate.year, workoutDate.month, workoutDate.day);
+    final dayEnd = DateTime(day.year, day.month, day.day + 1);
 
+    String? historicalCreatedAt;
     if (selectedBacklogDate != null) {
-      final date = DateTime(
-        selectedBacklogDate.year,
-        selectedBacklogDate.month,
-        selectedBacklogDate.day,
-      );
-      final today = DateTime.now();
-      final todayStart = DateTime(today.year, today.month, today.day);
-      if (!date.isBefore(todayStart)) {
+      final now = DateTime.now();
+      final todayStart = DateTime(now.year, now.month, now.day);
+      if (!day.isBefore(todayStart)) {
         throw StateError('Backlog date must be before today.');
       }
-
-      // Noon local time avoids most DST edge cases and ensures the session
-      // appears on the selected local calendar date. Existing rows are untouched.
-      final historicalLocal = DateTime(date.year, date.month, date.day, 12);
-      values['created_at'] = historicalLocal.toUtc().toIso8601String();
+      // Keep the existing local-noon convention for historical sessions.
+      historicalCreatedAt = DateTime(day.year, day.month, day.day, 12)
+          .toUtc().toIso8601String();
     }
 
-    final res = await supabase
-        .from('exercise_sessions')
-        .insert(values)
-        .select()
-        .single();
-
+    // Atomic database operation: serialize inserts for a workout day, reuse
+    // the exercise's order, or allocate the next distinct-exercise position.
+    // This avoids ties from historical noon timestamps and concurrent devices.
+    final res = await supabase.rpc('insert_exercise_session_with_order', params: {
+      'p_exercise_id': exerciseId,
+      'p_weight': weight,
+      'p_metric_value': metricValue,
+      'p_metric_type': metricType,
+      'p_load_type': loadType,
+      'p_day_start': day.toUtc().toIso8601String(),
+      'p_day_end': dayEnd.toUtc().toIso8601String(),
+      'p_created_at': historicalCreatedAt,
+    });
+    if (res is! Map) {
+      throw StateError('Unexpected response from session insert.');
+    }
     return Map<String, dynamic>.from(res);
   }
 
