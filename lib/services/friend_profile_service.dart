@@ -126,6 +126,28 @@ class FriendProfileService {
   }
 
 
+  /// Reads another user's food log. Supabase RLS must explicitly permit
+  /// accepted friends to SELECT the relevant consumption and food rows.
+  Future<List<Map<String, dynamic>>> loadFriendFoodLog(String friendUserId) async {
+    final currentUser = supabase.auth.currentUser;
+    if (currentUser == null) throw StateError('User must be logged in.');
+    if (friendUserId.trim().isEmpty) throw ArgumentError('Missing friend ID.');
+
+    // Validate against the existing accepted-friends RPC before requesting data.
+    final accepted = await getAcceptedFriends();
+    final isAccepted = accepted.any((row) =>
+        (row['friend_id'] ?? row['id'] ?? '').toString() == friendUserId);
+    if (!isAccepted) throw StateError('Only accepted friends can be viewed.');
+
+    final rows = await supabase
+        .from('food_consumptions')
+        .select('id, consumed_at, servings, food_items!inner(id, name, brand, calories, fat, carbs, protein, serving_amount, serving_unit)')
+        .eq('user_id', friendUserId)
+        .order('consumed_at', ascending: false)
+        .limit(1000);
+    return _mapList(rows);
+  }
+
   Future<List<Map<String, dynamic>>> getAcceptedFriends() async {
     // Reuse the exact accepted-friends source already used elsewhere in Fit Quest.
     // EquipmentService calls the existing get_accepted_friends RPC and returns

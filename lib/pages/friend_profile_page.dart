@@ -3,6 +3,7 @@ import 'package:video_player/video_player.dart';
 
 import '../services/friend_profile_service.dart';
 import '../services/gym_service.dart';
+import '../services/meal_service.dart';
 
 class FriendProfilePage extends StatefulWidget {
   final String friendUserId;
@@ -30,11 +31,13 @@ class _FriendProfilePageState extends State<FriendProfilePage>
   List<Map<String, dynamic>> _history = [];
   List<Map<String, dynamic>> _equipment = []; // friend containers (equipment+routines)
   List<Map<String, dynamic>> _exercises = [];
+  List<Map<String, dynamic>> _foodLog = [];
+  String? _foodLogError;
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 4, vsync: this);
+    _tabController = TabController(length: 5, vsync: this);
     _loadAll();
   }
 
@@ -58,12 +61,21 @@ class _FriendProfilePageState extends State<FriendProfilePage>
       final data = await _friendProfileService.loadFriendProfile(
         widget.friendUserId,
       );
+      List<Map<String, dynamic>> foodLog = [];
+      String? foodLogError;
+      try {
+        foodLog = await _friendProfileService.loadFriendFoodLog(widget.friendUserId);
+      } catch (e) {
+        foodLogError = e.toString();
+      }
 
       if (!mounted) return;
       setState(() {
         _history = data.history;
         _equipment = data.containers;
         _exercises = data.exercises;
+        _foodLog = foodLog;
+        _foodLogError = foodLogError;
         _loading = false;
       });
     } catch (e) {
@@ -105,11 +117,14 @@ class _FriendProfilePageState extends State<FriendProfilePage>
         title: Text(title),
         bottom: TabBar(
           controller: _tabController,
+          isScrollable: true,
+          tabAlignment: TabAlignment.start,
           tabs: const [
             Tab(text: "History"),
             Tab(text: "Equipment"),
             Tab(text: "Routines"),
             Tab(text: "Exercises"),
+            Tab(text: "Food Log"),
           ],
         ),
         actions: [
@@ -159,6 +174,7 @@ class _FriendProfilePageState extends State<FriendProfilePage>
                       exercises: _exercises,
                       friendEquipment: _equipment,
                     ),
+                    _FriendFoodLogTab(rows: _foodLog, error: _foodLogError),
                   ],
                 ),
     );
@@ -303,18 +319,24 @@ class _HistoryTabState extends State<_HistoryTab> {
       final day = entry.key;
       final dayRows = entry.value;
 
-      DateTime? first;
-      DateTime? last;
-      for (final r in dayRows) {
-        final dt = _rowCreatedAtLocal(r);
-        if (dt == null) continue;
-        if (first == null || dt.isBefore(first)) first = dt;
-        if (last == null || dt.isAfter(last)) last = dt;
-      }
+      // Sum separate workout intervals; never count the idle time between
+      // morning and evening sessions as training time.
+      final times = dayRows
+          .map(_rowCreatedAtLocal)
+          .whereType<DateTime>()
+          .toList()..sort();
       int durationMin = 0;
-      if (first != null && last != null) {
-        durationMin = last.difference(first).inMinutes;
-        if (durationMin < 0) durationMin = 0;
+      if (times.length > 1) {
+        var sessionStart = times.first;
+        var sessionEnd = times.first;
+        for (final time in times.skip(1)) {
+          if (time.difference(sessionEnd) > const Duration(minutes: 60)) {
+            durationMin += sessionEnd.difference(sessionStart).inMinutes;
+            sessionStart = time;
+          }
+          sessionEnd = time;
+        }
+        durationMin += sessionEnd.difference(sessionStart).inMinutes;
       }
 
       final Map<String, int> setsByName = {};
@@ -1952,5 +1974,150 @@ class _FriendExerciseFormVideoPageState extends State<FriendExerciseFormVideoPag
                       ),
       ),
     );  // test comment
+  }
+}
+// ---------------- FRIEND FOOD LOG (read-only Meal Tracker presentation) ----------------
+class _FriendFoodLogTab extends StatefulWidget {
+  final List<Map<String, dynamic>> rows;
+  final String? error;
+  const _FriendFoodLogTab({required this.rows, required this.error});
+  @override
+  State<_FriendFoodLogTab> createState() => _FriendFoodLogTabState();
+}
+
+class _FriendFoodLogTabState extends State<_FriendFoodLogTab> {
+  final Set<DateTime> _expandedDays = <DateTime>{};
+
+  String _formatNumber(double value) =>
+      (value - value.round()).abs() < 0.01
+          ? value.round().toString() : value.toStringAsFixed(1);
+
+  String _foodDisplayName(FoodItem food) =>
+      food.brand.trim().isEmpty ? food.name : '${food.name} (${food.brand})';
+
+  Widget _macroCell(String label) => SizedBox(
+        width: 44,
+        child: Text(label, textAlign: TextAlign.right,
+            style: const TextStyle(fontWeight: FontWeight.w700)),
+      );
+
+  Widget _macroValue(double value) => SizedBox(
+        width: 44,
+        child: Text(_formatNumber(value), textAlign: TextAlign.right),
+      );
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.error != null) {
+      return Center(child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Text('Could not load friend food log.\n\n${widget.error}',
+            textAlign: TextAlign.center),
+      ));
+    }
+
+    final grouped = <DateTime, List<ConsumedFood>>{};
+    for (final row in widget.rows) {
+      final rawFood = row['food_items'];
+      final foodMap = rawFood is Map ? rawFood
+          : rawFood is List && rawFood.isNotEmpty && rawFood.first is Map
+              ? rawFood.first as Map : null;
+      if (foodMap == null) continue;
+      final when = DateTime.tryParse((row['consumed_at'] ?? '').toString());
+      if (when == null) continue;
+      final local = when.toLocal();
+      final day = DateTime(local.year, local.month, local.day);
+      final rawServings = row['servings'];
+      final servings = rawServings is num ? rawServings.toDouble()
+          : double.tryParse((rawServings ?? '').toString()) ?? 0.0;
+      grouped.putIfAbsent(day, () => []).add(ConsumedFood(
+        id: (row['id'] ?? '').toString(),
+        consumedAt: local,
+        servings: servings,
+        food: FoodItem.fromMap(Map<String, dynamic>.from(foodMap)),
+      ));
+    }
+    final days = grouped.keys.toList()..sort((a, b) => b.compareTo(a));
+    if (days.isEmpty) {
+      return const Center(child: Text('No food has been logged yet.'));
+    }
+    return ListView.builder(
+      padding: const EdgeInsets.all(12),
+      itemCount: days.length + 1,
+      itemBuilder: (context, index) {
+        if (index == 0) return Padding(
+          padding: const EdgeInsets.only(bottom: 12),
+          child: Text('Food Log', style: Theme.of(context).textTheme.titleLarge),
+        );
+        final day = days[index - 1];
+        final items = grouped[day]!..sort((a, b) => a.consumedAt.compareTo(b.consumedAt));
+        final calories = items.fold<double>(0, (s, i) => s + i.calories);
+        final protein = items.fold<double>(0, (s, i) => s + i.protein);
+        final carbs = items.fold<double>(0, (s, i) => s + i.carbs);
+        final fat = items.fold<double>(0, (s, i) => s + i.fat);
+        final expanded = _expandedDays.contains(day);
+        return Card(
+          margin: const EdgeInsets.only(bottom: 14),
+          clipBehavior: Clip.antiAlias,
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            InkWell(
+              onTap: () => setState(() {
+                if (expanded) { _expandedDays.remove(day); }
+                else { _expandedDays.add(day); }
+              }),
+              child: Padding(
+                padding: const EdgeInsets.all(14),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Row(children: [
+                    Expanded(child: Text('${day.month}/${day.day}/${day.year}',
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold))),
+                    Icon(expanded ? Icons.expand_less : Icons.expand_more),
+                  ]),
+                  const SizedBox(height: 8),
+                  Wrap(spacing: 12, runSpacing: 6, children: [
+                    Text('${_formatNumber(calories)} cal',
+                      style: const TextStyle(fontWeight: FontWeight.w700)),
+                    Text('P ${_formatNumber(protein)}g'),
+                    Text('C ${_formatNumber(carbs)}g'),
+                    Text('F ${_formatNumber(fat)}g'),
+                  ]),
+                ]),
+              ),
+            ),
+            if (expanded) ...[
+              const Divider(height: 1),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(14, 12, 14, 6),
+                child: Row(children: [
+                  Expanded(child: Text('Foods', style: Theme.of(context)
+                    .textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w700))),
+                  _macroCell('P'), _macroCell('C'), _macroCell('F'),
+                ]),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(14, 4, 14, 14),
+                child: Column(children: items.map((item) => Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
+                    Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text(_foodDisplayName(item.food), maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontWeight: FontWeight.w600)),
+                      const SizedBox(height: 2),
+                      Text('${_formatNumber(item.servings)} serving${item.servings == 1 ? '' : 's'} '
+                        '(${_formatNumber(item.food.servingAmount)} ${item.food.servingUnit} each) '
+                        '• ${_formatNumber(item.calories)} cal',
+                        maxLines: 2, overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.bodySmall),
+                    ])),
+                    _macroValue(item.protein), _macroValue(item.carbs), _macroValue(item.fat),
+                  ]),
+                )).toList()),
+              ),
+            ],
+          ]),
+        );
+      },
+    );
   }
 }
