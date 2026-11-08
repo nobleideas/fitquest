@@ -31,9 +31,15 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
   String _selectedMetricType = 'reps';
   String _selectedLoadType = 'weight';
 
-  // --- Today's workout + four most recent prior workout days
+  // --- Current workout and paged historical workout days
   String? todayDayKey;
-  List<String> last4DayKeys = []; // "YYYY-MM-DD", excludes today
+  List<String> previousDayKeys = []; // All earlier days, newest first.
+  int _historyPage = 0;
+  static const int _historyPageSize = 4;
+  int? _currentRound;
+  String? _bestMatchingDayKey;
+  bool _isLoadingHistory = true;
+  int _historyRequest = 0;
   Map<String, List<Map<String, dynamic>>> sessionsByDayKey = {};
   Map<String, double> volumeByDayKey = {};
   Map<String, bool> hasVolumeByDayKey = {};
@@ -60,13 +66,13 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
   void initState() {
     super.initState();
     _workoutDateService.selectedDate.addListener(_onWorkoutDateChanged);
-    _loadTodayAndLast4Days();
+    _loadWorkoutHistory();
     _loadExerciseVideos();
   }
 
   void _onWorkoutDateChanged() {
     if (!mounted) return;
-    _loadTodayAndLast4Days();
+    _loadWorkoutHistory();
   }
 
   // ---------- Day key helpers ----------
@@ -157,87 +163,186 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
     return null;
   }
 
-  // ---------- Sessions ----------
-  Future<void> _loadTodayAndLast4Days() async {
+  // ---------- Sessions and round-aware history ----------
+  Future<List<Map<String, dynamic>>> _fetchAllExerciseSessions(
+    String userId,
+    String exerciseId,
+    DateTime activeDate,
+  ) async {
+    final endUtc = DateTime(activeDate.year, activeDate.month,
+            activeDate.day + 1)
+        .toUtc()
+        .toIso8601String();
+    final all = <Map<String, dynamic>>[];
+    const pageSize = 500;
+    for (var offset = 0; ; offset += pageSize) {
+      final page = await Supabase.instance.client
+          .from('exercise_sessions')
+          .select()
+          .eq('user_id', userId)
+          .eq('exercise_id', exerciseId)
+          .lt('created_at', endUtc)
+          .order('created_at', ascending: false)
+          .range(offset, offset + pageSize - 1);
+      all.addAll(page.map((r) => Map<String, dynamic>.from(r)));
+      if (page.length < pageSize) break;
+    }
+    return all;
+  }
+
+  Future<int> _resolveCurrentRound(String userId, String exerciseId,
+      DateTime activeDate) async {
+    // Match the order allocation used by insert_exercise_session_with_order.
+    // An exercise already logged today retains its existing order.
+    final startUtc = DateTime(activeDate.year, activeDate.month,
+            activeDate.day)
+        .toUtc().toIso8601String();
+    final endUtc = DateTime(activeDate.year, activeDate.month,
+            activeDate.day + 1)
+        .toUtc().toIso8601String();
+    await sessionService.backfillExerciseOrdersForDate(activeDate);
+    final rows = <Map<String, dynamic>>[];
+    const pageSize = 500;
+    for (var offset = 0; ; offset += pageSize) {
+      final page = await Supabase.instance.client
+          .from('exercise_sessions')
+          .select('exercise_id, exercise_order')
+          .eq('user_id', userId)
+          .gte('created_at', startUtc)
+          .lt('created_at', endUtc)
+          .range(offset, offset + pageSize - 1);
+      rows.addAll(page.map((r) => Map<String, dynamic>.from(r)));
+      if (page.length < pageSize) break;
+    }
+    int? existingOrder;
+    var maxOrder = 0;
+    final distinctIds = <String>{};
+    for (final row in rows) {
+      final id = (row['exercise_id'] ?? '').toString();
+      if (id.isNotEmpty) distinctIds.add(id);
+      final raw = row['exercise_order'];
+      final order = raw is num ? raw.toInt() : int.tryParse('$raw');
+      if (order != null && order > 0) {
+        if (order > maxOrder) maxOrder = order;
+        if (id == exerciseId) {
+          existingOrder = existingOrder == null
+              ? order
+              : (order < existingOrder ? order : existingOrder);
+        }
+      }
+    }
+    final nextOrder = existingOrder ??
+        (maxOrder > distinctIds.length ? maxOrder : distinctIds.length) + 1;
+    return ((nextOrder - 1) ~/ 2) + 1;
+  }
+
+  Future<void> _loadWorkoutHistory() async {
     final user = Supabase.instance.client.auth.currentUser;
     final exerciseId = (widget.exercise['id'] ?? '').toString().trim();
     if (user == null || exerciseId.isEmpty) return;
-
-    // A backlog date is the active workout day. Earlier recorded days are
-    // displayed for comparison; later dates must not appear as prior history.
+    final request = ++_historyRequest;
     final activeKey = _todayKey();
     final activeDate = _dateFromDayKey(activeKey);
-    if (!_metricPreferenceLoaded) {
-      final latestRows = await Supabase.instance.client
-          .from('exercise_sessions')
-          .select('created_at, metric_type, load_type')
-          .eq('user_id', user.id)
-          .eq('exercise_id', exerciseId)
-          .order('created_at', ascending: false)
-          .limit(1);
-      if (latestRows.isNotEmpty && mounted) {
-        setState(() => _restoreMetricPreference(
-            latestRows.map((row) => Map<String, dynamic>.from(row)).toList()));
-      }
-    }
-    final recentRows = await Supabase.instance.client
-        .from('exercise_sessions')
-        .select('created_at, metric_type, load_type')
-        .eq('user_id', user.id)
-        .eq('exercise_id', exerciseId)
-        .lt('created_at', DateTime(activeDate.year, activeDate.month, activeDate.day + 1).toUtc().toIso8601String())
-        .order('created_at', ascending: false)
-        .limit(1000);
+    if (mounted) setState(() => _isLoadingHistory = true);
 
-    final seen = <String>{};
-    final priorKeys = <String>[];
-    for (final row in recentRows) {
-      final parsed = DateTime.tryParse((row['created_at'] ?? '').toString());
-      if (parsed == null) continue;
-      final key = _dayKey(parsed);
-      if (key.compareTo(activeKey) >= 0) continue;
-      if (seen.add(key)) priorKeys.add(key);
-      if (priorKeys.length == 4) break;
-    }
-
-    final keysToLoad = <String>[activeKey, ...priorKeys];
-    final map = <String, List<Map<String, dynamic>>>{};
-    final volMap = <String, double>{};
-    final hasVolMap = <String, bool>{};
-    final roundMap = <String, int>{};
-    for (final key in keysToLoad) {
-      // Backfill the entire local workout day, not just this exercise.
-      await sessionService.backfillExerciseOrdersForDate(_dateFromDayKey(key));
-      final sessions = await sessionService.getSessionsForDate(
-        exerciseId, _dateFromDayKey(key),
-      );
-      map[key] = sessions;
-      double totalVolume = 0;
-      bool hasVolume = false;
-      for (final session in sessions) {
-        if ((session['metric_type'] ?? 'reps').toString() == 'reps' &&
-            (session['load_type'] ?? 'weight').toString() == 'weight') {
-          hasVolume = true;
-          totalVolume += _numToDouble(session['weight']) * _sessionMetricValue(session);
+    try {
+      // Restore the exercise's most recently used metric selection, including
+      // when viewing an older backlog date.
+      if (!_metricPreferenceLoaded) {
+        final latestRows = await Supabase.instance.client
+            .from('exercise_sessions')
+            .select('created_at, metric_type, load_type')
+            .eq('user_id', user.id)
+            .eq('exercise_id', exerciseId)
+            .order('created_at', ascending: false)
+            .limit(1);
+        if (latestRows.isNotEmpty && mounted && request == _historyRequest) {
+          setState(() => _restoreMetricPreference(
+              latestRows.map((row) => Map<String, dynamic>.from(row)).toList()));
         }
       }
-      volMap[key] = totalVolume;
-      hasVolMap[key] = hasVolume;
-      if (sessions.isNotEmpty) {
-        final round = _storedRound(sessions);
-        if (round != null) roundMap[key] = round;
-      }
-    }
 
-    if (!mounted || _todayKey() != activeKey) return;
-    setState(() {
-      todayDayKey = map[activeKey]?.isNotEmpty == true ? activeKey : null;
-      last4DayKeys = priorKeys;
-      sessionsByDayKey = map;
-      volumeByDayKey = volMap;
-      hasVolumeByDayKey = hasVolMap;
-      roundByDayKey = roundMap;
-    });
+      final currentRound = await _resolveCurrentRound(
+          user.id, exerciseId, activeDate);
+      final rows = await _fetchAllExerciseSessions(
+          user.id, exerciseId, activeDate);
+      final map = <String, List<Map<String, dynamic>>>{};
+      for (final row in rows) {
+        final dt = DateTime.tryParse((row['created_at'] ?? '').toString());
+        if (dt == null) continue;
+        final key = _dayKey(dt);
+        if (key.compareTo(activeKey) > 0) continue;
+        map.putIfAbsent(key, () => []).add(row);
+      }
+      map.putIfAbsent(activeKey, () => []);
+
+      // Historical sessions may predate persistent exercise_order. Backfill
+      // only days that need it, and re-read the affected exercise's sets.
+      for (final key in map.keys.toList()) {
+        final sessions = map[key]!;
+        if (sessions.isEmpty || _storedRound(sessions) != null) continue;
+        final day = _dateFromDayKey(key);
+        await sessionService.backfillExerciseOrdersForDate(day);
+        map[key] = await sessionService.getSessionsForDate(exerciseId, day);
+      }
+
+      final priorKeys = map.keys.where((key) => key.compareTo(activeKey) < 0)
+          .toList()..sort((a, b) => b.compareTo(a));
+      final volMap = <String, double>{};
+      final hasVolMap = <String, bool>{};
+      final roundMap = <String, int>{};
+      for (final entry in map.entries) {
+        var volume = 0.0;
+        var hasVolume = false;
+        for (final session in entry.value) {
+          if ((session['metric_type'] ?? 'reps').toString() == 'reps' &&
+              (session['load_type'] ?? 'weight').toString() == 'weight') {
+            hasVolume = true;
+            volume += _numToDouble(session['weight']) *
+                _sessionMetricValue(session);
+          }
+        }
+        volMap[entry.key] = volume;
+        hasVolMap[entry.key] = hasVolume;
+        final round = _storedRound(entry.value);
+        if (round != null) roundMap[entry.key] = round;
+      }
+
+      String? bestKey;
+      double? bestVolume;
+      for (final key in priorKeys) {
+        if (roundMap[key] != currentRound || hasVolMap[key] != true) continue;
+        final volume = volMap[key]!;
+        if (bestVolume == null || volume > bestVolume) {
+          bestVolume = volume;
+          bestKey = key;
+        }
+      }
+
+      if (!mounted || request != _historyRequest || _todayKey() != activeKey) {
+        return;
+      }
+      setState(() {
+        todayDayKey = map[activeKey]!.isNotEmpty ? activeKey : null;
+        previousDayKeys = priorKeys;
+        sessionsByDayKey = map;
+        volumeByDayKey = volMap;
+        hasVolumeByDayKey = hasVolMap;
+        roundByDayKey = roundMap;
+        _currentRound = currentRound;
+        _bestMatchingDayKey = bestKey;
+        if (_historyPage * _historyPageSize >= priorKeys.length) {
+          _historyPage = 0;
+        }
+        _isLoadingHistory = false;
+      });
+    } catch (e) {
+      if (!mounted || request != _historyRequest) return;
+      setState(() => _isLoadingHistory = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not load workout history: $e')),
+      );
+    }
   }
 
   Future<void> _saveSet() async {
@@ -276,12 +381,12 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
       if (!mounted) return;
       weightController.clear();
       repsController.clear();
-      await _loadTodayAndLast4Days();
+      await _loadWorkoutHistory();
     } catch (e) {
       if (!mounted) return;
       // The session may already be committed even if XP failed. Do not retry
       // saving automatically; that could create duplicate sets.
-      if (sessionSaved) await _loadTodayAndLast4Days();
+      if (sessionSaved) await _loadWorkoutHistory();
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text(sessionSaved
@@ -295,7 +400,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
 
   Future<void> _deleteSession(String sessionId) async {
     await sessionService.deleteSession(sessionId);
-    await _loadTodayAndLast4Days();
+    await _loadWorkoutHistory();
   }
 
   Future<void> _editSession(Map<String, dynamic> session) async {
@@ -416,7 +521,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
       loadType: loadType,
     );
 
-    await _loadTodayAndLast4Days();
+    await _loadWorkoutHistory();
   }
 
   Future<void> _saveUserFormNotes() async {
@@ -524,12 +629,22 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
     final volume = volumeByDayKey[dayKey] ?? 0;
     final showVolume = hasVolumeByDayKey[dayKey] ?? false;
     final round = roundByDayKey[dayKey];
+    final isBestMatch = dayKey == _bestMatchingDayKey;
+    final isMatchingRound = dayKey != _todayKey() &&
+        _currentRound != null && round == _currentRound;
+    final theme = Theme.of(context);
 
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
-      elevation: 3,
+      elevation: isBestMatch ? 5 : 3,
+      color: isBestMatch ? theme.colorScheme.primaryContainer : null,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
+        side: isBestMatch
+            ? BorderSide(color: theme.colorScheme.primary, width: 2)
+            : isMatchingRound
+                ? BorderSide(color: theme.colorScheme.primary.withValues(alpha: 0.5))
+                : BorderSide.none,
       ),
       child: ExpansionTile(
         initiallyExpanded: initiallyExpanded,
@@ -538,6 +653,17 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
           mainAxisSize: MainAxisSize.min,
           children: [
             Text('$title  •  ${sessions.length} ${sessions.length == 1 ? 'set' : 'sets'}'),
+            if (isBestMatch)
+              Text('BEST VOLUME · ROUND $_currentRound',
+                  style: theme.textTheme.labelMedium?.copyWith(
+                    color: theme.colorScheme.primary,
+                    fontWeight: FontWeight.bold,
+                  )),
+            if (isMatchingRound && !isBestMatch)
+              Text('MATCHING ROUND',
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: theme.colorScheme.primary,
+                  )),
             if (showVolume)
               Text('Volume: ${volume.toStringAsFixed(0)}',
                   style: Theme.of(context).textTheme.bodySmall),
@@ -981,6 +1107,26 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
               "Log Your Session",
               style: Theme.of(context).textTheme.headlineSmall,
             ),
+            const SizedBox(height: 8),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Row(
+                  children: [
+                    Icon(Icons.layers_outlined,
+                        color: Theme.of(context).colorScheme.primary),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(_currentRound == null
+                          ? 'Determining current round...'
+                          : 'Current round: $_currentRound  •  '
+                            '${sessionsByDayKey[_todayKey()]?.length ?? 0} sets logged',
+                          style: Theme.of(context).textTheme.titleSmall),
+                    ),
+                  ],
+                ),
+              ),
+            ),
             const SizedBox(height: 12),
 
             TextField(
@@ -1104,48 +1250,75 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
 
             const SizedBox(height: 20),
 
-            // ----------------- Last 4 Recorded Days -----------------
-            Text(
-              "Last 4 Earlier Recorded Days",
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
+            // ----------------- Paged Previous Days -----------------
+            Text('Previous Days',
+                style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 8),
             Text(
               isBacklogging
-                  ? "These are workout days before the selected backlog date."
-                  : "These are the four most recent earlier days for this exercise.",
+                  ? 'Earlier workout days before the selected backlog date. '
+                    'Your highest-volume day in the same round is highlighted.'
+                  : 'Browse all previous workout days, four at a time. '
+                    'Your highest-volume day in the same round is highlighted.',
               style: Theme.of(context).textTheme.bodySmall,
             ),
             const SizedBox(height: 12),
-
-            if (last4DayKeys.isEmpty)
-              Card(
-                elevation: 1,
-                child: Padding(
-                  padding: const EdgeInsets.all(14),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.history),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Text(
-                          "No prior workout days have been recorded for this exercise.",
-                          style: Theme.of(context).textTheme.bodyMedium,
-                        ),
-                      ),
-                    ],
-                  ),
+            if (_isLoadingHistory)
+              const Center(child: CircularProgressIndicator())
+            else if (previousDayKeys.isEmpty)
+              const Card(
+                child: ListTile(
+                  leading: Icon(Icons.history),
+                  title: Text('No previous workout days for this exercise.'),
                 ),
               )
-            else
-              ...last4DayKeys.map((key) {
-                final date = _dateFromDayKey(key);
-
-                return _buildWorkoutDayCard(
-                  dayKey: key,
-                  title: _formatDate(date),
-                );
-              }),
+            else ...[
+              ...previousDayKeys
+                  .skip(_historyPage * _historyPageSize)
+                  .take(_historyPageSize)
+                  .map((key) => _buildWorkoutDayCard(
+                        dayKey: key,
+                        title: _formatDate(_dateFromDayKey(key)),
+                      )),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  TextButton.icon(
+                    onPressed: _historyPage == 0
+                        ? null
+                        : () => setState(() => _historyPage--),
+                    icon: const Icon(Icons.chevron_left),
+                    label: const Text('Newer'),
+                  ),
+                  Text(
+                    '${_historyPage + 1} / '
+                    '${(previousDayKeys.length + _historyPageSize - 1) ~/ _historyPageSize}',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  TextButton.icon(
+                    onPressed: (_historyPage + 1) * _historyPageSize >=
+                            previousDayKeys.length
+                        ? null
+                        : () => setState(() => _historyPage++),
+                    icon: const Icon(Icons.chevron_right),
+                    label: const Text('Older'),
+                  ),
+                ],
+              ),
+              if (_bestMatchingDayKey != null &&
+                  !previousDayKeys
+                      .skip(_historyPage * _historyPageSize)
+                      .take(_historyPageSize)
+                      .contains(_bestMatchingDayKey))
+                TextButton.icon(
+                  onPressed: () => setState(() {
+                    _historyPage = previousDayKeys.indexOf(_bestMatchingDayKey!) ~/
+                        _historyPageSize;
+                  }),
+                  icon: const Icon(Icons.emoji_events_outlined),
+                  label: Text('Jump to best Round $_currentRound day'),
+                ),
+            ],
 
             const SizedBox(height: 24),
 
