@@ -663,6 +663,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
               Text('MATCHING ROUND',
                   style: theme.textTheme.labelSmall?.copyWith(
                     color: theme.colorScheme.primary,
+                    fontWeight: FontWeight.bold,
                   )),
             if (showVolume)
               Text('Volume: ${volume.toStringAsFixed(0)}',
