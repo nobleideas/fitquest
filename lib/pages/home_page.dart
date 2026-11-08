@@ -78,6 +78,10 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
   final SuggestedDayTypeChoice _defaultChoice = SuggestedDayTypeChoice.auto;
   SuggestedRoutine? _suggestedRoutine;
   bool _isSuggesting = false;
+  // Most recent recorded round for each exercise in the suggested routine.
+  final Map<String, int> _lastCompletedRoundByExercise = {};
+  int _roundLookupGeneration = 0;
+
   int _lastSuggestedMinutes = 30;
 
   // Keeps individual exercise shuffles from repeating the same replacements
@@ -261,6 +265,7 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
         if (!mounted) return;
         setState(() => _suggestedRoutine = enrichedRoutine);
+        await _refreshSuggestedExerciseRounds();
         await _persistSuggestedRoutineToPrefs();
       }
     } catch (_) {
@@ -295,6 +300,53 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
     }
   }
 
+  // Refreshes independently of routine generation so saved suggestions and
+  // individual shuffles also show up-to-date workout history.
+  Future<void> _refreshSuggestedExerciseRounds() async {
+    final generation = ++_roundLookupGeneration;
+    final routine = _suggestedRoutine;
+    final user = supabase.auth.currentUser;
+    if (routine == null || user == null) {
+      if (mounted) setState(() => _lastCompletedRoundByExercise.clear());
+      return;
+    }
+
+    final ids = routine.exercises
+        .map((ex) => (ex['id'] ?? '').toString().trim())
+        .where((id) => id.isNotEmpty)
+        .toSet();
+    final found = <String, int>{};
+
+    await Future.wait(ids.map((id) async {
+      try {
+        // The last logged set for an exercise identifies its most recent
+        // workout day. All sets for that exercise/day share exercise_order.
+        final rows = await supabase
+            .from('exercise_sessions')
+            .select('exercise_order')
+            .eq('user_id', user.id)
+            .eq('exercise_id', id)
+            .not('exercise_order', 'is', null)
+            .order('created_at', ascending: false)
+            .limit(1);
+        if (rows.isEmpty) return;
+        final order = (rows.first['exercise_order'] as num?)?.toInt();
+        if (order != null && order > 0) {
+          found[id] = (order + 1) ~/ 2;
+        }
+      } catch (e) {
+        debugPrint('Could not load last round for exercise $id: $e');
+      }
+    }));
+
+    if (!mounted || generation != _roundLookupGeneration) return;
+    setState(() {
+      _lastCompletedRoundByExercise
+        ..clear()
+        ..addAll(found);
+    });
+  }
+
   // ===================== open exercise session from suggestion =====================
 
   Future<void> _openExerciseSessionFromSuggestion(
@@ -307,6 +359,7 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
     if (!mounted) return;
     await _loadRecentExercises(); // keep summary updated
+    await _refreshSuggestedExerciseRounds();
   }
 
   // ---------------- Bug/Suggestion report system ----------------
@@ -1309,6 +1362,7 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
       if (!mounted) return;
       _individualRandomizeHistoryBySlot.clear();
       setState(() => _suggestedRoutine = enrichedRoutine);
+      await _refreshSuggestedExerciseRounds();
 
       // ✅ Persist after any change
       await _persistSuggestedRoutineToPrefs();
@@ -1367,6 +1421,7 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
       }
 
       setState(() => _suggestedRoutine = enrichedRoutine);
+      await _refreshSuggestedExerciseRounds();
 
       await _persistSuggestedRoutineToPrefs();
     } catch (e) {
@@ -1407,7 +1462,11 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
     if (confirm != true) return;
 
     if (!mounted) return;
-    setState(() => _suggestedRoutine = null);
+    setState(() {
+      _suggestedRoutine = null;
+      _lastCompletedRoundByExercise.clear();
+    });
+    ++_roundLookupGeneration;
     await _clearSuggestedRoutinePersisted();
   }
 
@@ -1523,6 +1582,8 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 final index = entry.key;
                 final ex = entry.value;
                 final name = (ex['name'] ?? '').toString();
+                final lastRound = _lastCompletedRoundByExercise[
+                    (ex['id'] ?? '').toString().trim()];
                 final mg = (ex['primary_muscle_group'] ?? '').toString();
                 final equipmentName = (ex['equipment_name'] ?? '')
                     .toString()
@@ -1566,11 +1627,23 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
                           const SizedBox(width: 8),
                         ],
                         Expanded(
-                          child: Text(
-                            equipmentName.isEmpty
-                                ? '$name ($mg)'
-                                : '$name ($mg)  •  $equipmentName',
-                            style: const TextStyle(fontWeight: FontWeight.w600),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                equipmentName.isEmpty
+                                    ? '$name ($mg)'
+                                    : '$name ($mg)  •  $equipmentName',
+                                style: const TextStyle(fontWeight: FontWeight.w600),
+                              ),
+                              if (lastRound != null) ...[
+                                const SizedBox(height: 3),
+                                Text(
+                                  '• Last completed in round $lastRound',
+                                  style: Theme.of(context).textTheme.bodySmall,
+                                ),
+                              ],
+                            ],
                           ),
                         ),
                         if (hasUserVideo) ...[
