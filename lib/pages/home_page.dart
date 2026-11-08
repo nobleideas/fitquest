@@ -317,26 +317,73 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
         .toSet();
     final found = <String, int>{};
 
+    // Look up the actual latest set first, including rows whose order is null.
+    // Otherwise an older ordered workout can incorrectly masquerade as the
+    // latest round, and un-backfilled exercises disappear from suggestions.
+    final latestByExercise = <String, Map<String, dynamic>>{};
     await Future.wait(ids.map((id) async {
       try {
-        // The last logged set for an exercise identifies its most recent
-        // workout day. All sets for that exercise/day share exercise_order.
         final rows = await supabase
             .from('exercise_sessions')
-            .select('exercise_order')
+            .select('created_at, exercise_order')
             .eq('user_id', user.id)
             .eq('exercise_id', id)
-            .not('exercise_order', 'is', null)
             .order('created_at', ascending: false)
             .limit(1);
-        if (rows.isEmpty) return;
-        final order = (rows.first['exercise_order'] as num?)?.toInt();
-        if (order != null && order > 0) {
-          found[id] = (order + 1) ~/ 2;
+        if (rows.isNotEmpty) {
+          latestByExercise[id] = Map<String, dynamic>.from(rows.first);
         }
       } catch (e) {
-        debugPrint('Could not load last round for exercise $id: $e');
+        debugPrint('Could not load latest workout for exercise $id: $e');
       }
+    }));
+
+    // Backfill each missing local workout day only once, even when multiple
+    // suggested exercises were performed on that same day.
+    final daysToBackfill = <DateTime>{};
+    for (final row in latestByExercise.values) {
+      final order = (row['exercise_order'] as num?)?.toInt();
+      if (order != null && order > 0) continue;
+      final created = DateTime.tryParse((row['created_at'] ?? '').toString());
+      if (created == null) continue;
+      final local = created.toLocal();
+      daysToBackfill.add(DateTime(local.year, local.month, local.day));
+    }
+
+    await Future.wait(daysToBackfill.map((day) async {
+      try {
+        final start = DateTime(day.year, day.month, day.day);
+        final end = DateTime(day.year, day.month, day.day + 1);
+        await supabase.rpc('backfill_exercise_orders_for_day', params: {
+          'p_day_start': start.toUtc().toIso8601String(),
+          'p_day_end': end.toUtc().toIso8601String(),
+        });
+      } catch (e) {
+        debugPrint('Could not backfill rounds for $day: $e');
+      }
+    }));
+
+    await Future.wait(latestByExercise.entries.map((entry) async {
+      final id = entry.key;
+      var order = (entry.value['exercise_order'] as num?)?.toInt();
+      if (order == null || order <= 0) {
+        try {
+          final rows = await supabase
+              .from('exercise_sessions')
+              .select('exercise_order')
+              .eq('user_id', user.id)
+              .eq('exercise_id', id)
+              .eq('created_at', entry.value['created_at'])
+              .not('exercise_order', 'is', null)
+              .limit(1);
+          if (rows.isNotEmpty) {
+            order = (rows.first['exercise_order'] as num?)?.toInt();
+          }
+        } catch (e) {
+          debugPrint('Could not reload round for exercise $id: $e');
+        }
+      }
+      if (order != null && order > 0) found[id] = (order + 1) ~/ 2;
     }));
 
     if (!mounted || generation != _roundLookupGeneration) return;
