@@ -48,6 +48,9 @@ class EquipmentListPageState extends State<EquipmentListPage> {
 
   String _selectedMuscle = 'All';
 
+  final TextEditingController _equipmentSearchController = TextEditingController();
+  String _equipmentSearchQuery = '';
+
   // ✅ NEW: kind filter (all / equipment / routine)
   static const List<String> _kindFilters = ['All', 'Equipment', 'Routines'];
   String _selectedKind = 'All';
@@ -73,6 +76,7 @@ class EquipmentListPageState extends State<EquipmentListPage> {
   @override
   void dispose() {
     _workoutDateService.selectedDate.removeListener(_onWorkoutDateChanged);
+    _equipmentSearchController.dispose();
     super.dispose();
   }
 
@@ -128,18 +132,52 @@ class EquipmentListPageState extends State<EquipmentListPage> {
   }
 
   List<Map<String, dynamic>> get _filteredEquipment {
-    // First filter by kind (All/Equipment/Routines)
-    final byKind = equipmentList.where(_matchesKindFilter).toList();
+    final query = _equipmentSearchQuery.trim().toLowerCase();
+    final muscleKey = _selectedMuscleKey();
 
-    // Then filter by muscle group (only meaningful if exercises exist; routines with no exercises will drop out)
-    if (_selectedMuscle == 'All') return byKind;
+    return equipmentList.where((item) {
+      if (!_matchesKindFilter(item)) return false;
 
-    final key = _selectedMuscleKey();
-    return byKind.where((e) {
-      final id = e['id']?.toString() ?? '';
-      final groups = _equipmentMuscleGroups[id];
-      return groups != null && groups.contains(key);
+      if (_selectedMuscle != 'All') {
+        final id = item['id']?.toString() ?? '';
+        final groups = _equipmentMuscleGroups[id];
+        if (groups == null || !groups.contains(muscleKey)) return false;
+      }
+
+      if (query.isNotEmpty) {
+        final name = (item['name'] ?? '').toString().toLowerCase();
+        if (!name.contains(query)) return false;
+      }
+
+      return true;
     }).toList();
+  }
+
+  Widget _buildEquipmentSearchField() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+      child: TextField(
+        controller: _equipmentSearchController,
+        textInputAction: TextInputAction.search,
+        decoration: InputDecoration(
+          labelText: 'Find equipment or routine',
+          hintText: 'Search existing items by name',
+          prefixIcon: const Icon(Icons.search),
+          suffixIcon: _equipmentSearchQuery.isEmpty
+              ? null
+              : IconButton(
+                  tooltip: 'Clear search',
+                  icon: const Icon(Icons.clear),
+                  onPressed: () {
+                    _equipmentSearchController.clear();
+                    setState(() => _equipmentSearchQuery = '');
+                  },
+                ),
+          border: const OutlineInputBorder(),
+        ),
+        onChanged: (value) => setState(() => _equipmentSearchQuery = value),
+      ),
+    );
   }
 
   String _kindLabel(Map<String, dynamic> item) {
@@ -1849,6 +1887,7 @@ class EquipmentListPageState extends State<EquipmentListPage> {
             : Column(
                 children: [
                   _buildGymHeader(),
+                  _buildEquipmentSearchField(),
                   _buildSelectionBar(),
                   _buildKindFilterBar(), // ✅ NEW
                   _buildMuscleFilterBar(),
