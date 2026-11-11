@@ -310,7 +310,7 @@ class ProfilePageState extends State<ProfilePage> {
                     'Do not count your FitQuest workout here.',
                     style: TextStyle(
                       fontSize: 12,
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      color: FitQuestTheme.muted,
                     ),
                   ),
                   const SizedBox(height: 10),
@@ -347,7 +347,7 @@ class ProfilePageState extends State<ProfilePage> {
                       _activityDescription(selectedActivity!),
                       style: TextStyle(
                         fontSize: 12,
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        color: FitQuestTheme.muted,
                       ),
                     ),
                   ],
@@ -382,7 +382,7 @@ class ProfilePageState extends State<ProfilePage> {
                       'Choose an earlier date to add or correct a previous day.',
                       style: TextStyle(
                         fontSize: 12,
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        color: FitQuestTheme.muted,
                       ),
                     ),
                   ],
@@ -581,7 +581,7 @@ class ProfilePageState extends State<ProfilePage> {
               Text(
                 'No daily metrics recorded yet.',
                 style: TextStyle(
-                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  color: FitQuestTheme.muted,
                 ),
               ),
               const SizedBox(height: 12),
@@ -611,7 +611,7 @@ class ProfilePageState extends State<ProfilePage> {
                     _formatWeightDate(latest.date),
                     style: TextStyle(
                       fontSize: 12,
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      color: FitQuestTheme.muted,
                     ),
                   ),
                 ],
@@ -633,7 +633,7 @@ class ProfilePageState extends State<ProfilePage> {
                     '(excluding workouts)',
                     style: TextStyle(
                       fontSize: 11,
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      color: FitQuestTheme.muted,
                     ),
                   ),
                 ],
@@ -644,7 +644,7 @@ class ProfilePageState extends State<ProfilePage> {
                   deltaLabel,
                   style: TextStyle(
                     fontSize: 12,
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    color: FitQuestTheme.muted,
                   ),
                 ),
               ],
@@ -667,7 +667,7 @@ class ProfilePageState extends State<ProfilePage> {
                     _formatWeightDate(chartEntries.first.date),
                     style: TextStyle(
                       fontSize: 10,
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      color: FitQuestTheme.muted,
                     ),
                   ),
                   const Spacer(),
@@ -675,7 +675,7 @@ class ProfilePageState extends State<ProfilePage> {
                     _formatWeightDate(chartEntries.last.date),
                     style: TextStyle(
                       fontSize: 10,
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      color: FitQuestTheme.muted,
                     ),
                   ),
                 ],
@@ -845,7 +845,7 @@ class ProfilePageState extends State<ProfilePage> {
             style: TextStyle(
               fontSize: 12,
               fontWeight: FontWeight.w600,
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
+              color: FitQuestTheme.muted,
             ),
           ),
         ],
@@ -883,7 +883,7 @@ class ProfilePageState extends State<ProfilePage> {
                       '$workoutDays workout day${workoutDays == 1 ? '' : 's'}',
                       style: TextStyle(
                         fontSize: 12,
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        color: FitQuestTheme.muted,
                       ),
                     ),
                     const SizedBox(height: 4),
@@ -979,7 +979,8 @@ class ProfilePageState extends State<ProfilePage> {
       data: FitQuestTheme.dark,
       child: ColoredBox(
         color: FitQuestTheme.background,
-        child: FutureBuilder<Map<String, dynamic>>(
+        child: Builder(
+          builder: (context) => FutureBuilder<Map<String, dynamic>>(
       future: _dataFuture, // ✅ uses stored future
       builder: (context, snapshot) {
         if (!snapshot.hasData) {
@@ -1026,11 +1027,11 @@ class ProfilePageState extends State<ProfilePage> {
                     if (username != null && username.isNotEmpty)
                       Text(
                         "@$username",
-                        style: const TextStyle(fontSize: 16, color: Colors.grey),
+                        style: const TextStyle(fontSize: 16, color: FitQuestTheme.muted),
                       ),
 
                     const SizedBox(height: 6),
-                    Text("Level $level", style: const TextStyle(fontSize: 22, color: Colors.grey)),
+                    Text("Level $level", style: const TextStyle(fontSize: 22, color: FitQuestTheme.muted)),
                     const SizedBox(height: 10),
                     LinearProgressIndicator(
                       value: progress,
@@ -1040,7 +1041,7 @@ class ProfilePageState extends State<ProfilePage> {
                     const SizedBox(height: 10),
                     Text(
                       "Total Volume: ${totalVol.toStringAsFixed(0)} lbs",
-                      style: const TextStyle(color: Colors.grey),
+                      style: const TextStyle(color: FitQuestTheme.muted),
                     ),
 
                     const SizedBox(height: 16),
@@ -1194,12 +1195,19 @@ class ProfilePageState extends State<ProfilePage> {
               if (acceptedFriends.isEmpty)
                 const Text("No friends yet. Add someone by username above.")
               else
-                SizedBox(
+                Container(
                   height: acceptedFriends.length <= 4
-                      ? acceptedFriends.length * 64.0
-                      : 256.0,
+                      ? acceptedFriends.length * 64.0 + 16.0
+                      : 272.0,
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: FitQuestTheme.surface,
+                    borderRadius: BorderRadius.circular(18),
+                    border: Border.all(color: FitQuestTheme.outline, width: 1.2),
+                  ),
                   child: Scrollbar(
                     thumbVisibility: acceptedFriends.length > 4,
+                    radius: const Radius.circular(6),
                     child: ListView.builder(
                       primary: false,
                       itemCount: acceptedFriends.length,
@@ -1207,6 +1215,7 @@ class ProfilePageState extends State<ProfilePage> {
                         final f = acceptedFriends[index];
                         final uname = (f['username'] ?? 'Friend').toString();
                         return Card(
+                          color: FitQuestTheme.raisedSurface,
                           child: ListTile(
                             dense: true,
                             title: Text(uname, maxLines: 1,
@@ -1274,6 +1283,7 @@ class ProfilePageState extends State<ProfilePage> {
           ),
         );
       },
+          ),
         ),
       ),
     );
