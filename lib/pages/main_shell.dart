@@ -3,6 +3,7 @@ import 'home_page.dart';
 import 'equipment_list_page.dart';
 import 'profile_page.dart';
 import '../services/push_token_service.dart';
+import '../theme/fitquest_theme.dart';
 
 class MainShell extends StatefulWidget {
   const MainShell({super.key});
@@ -15,11 +16,8 @@ class _MainShellState extends State<MainShell> {
   int _index = 0;
 
   final GlobalKey<HomePageState> _homeKey = GlobalKey<HomePageState>();
-
-  // ✅ Equipment key
   final GlobalKey<EquipmentListPageState> _equipmentKey =
       GlobalKey<EquipmentListPageState>();
-
   final GlobalKey<ProfilePageState> _profileKey = GlobalKey<ProfilePageState>();
 
   late final List<Widget> _pages = [
@@ -31,9 +29,6 @@ class _MainShellState extends State<MainShell> {
   @override
   void initState() {
     super.initState();
-
-    // ✅ Register push token once when the app shell starts.
-    // Run after first frame to avoid any startup jank/crash risk.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       PushTokenService.instance.initAndRegister();
     });
@@ -56,29 +51,59 @@ class _MainShellState extends State<MainShell> {
     if (i == 0) _homeKey.currentState?.refresh();
     if (i == 1) _equipmentKey.currentState?.refresh();
     if (i == 2) _profileKey.currentState?.refresh();
-
     setState(() => _index = i);
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: Text(_title)),
-      body: IndexedStack(
-        index: _index,
-        children: _pages,
-      ),
-      bottomNavigationBar: BottomNavigationBar(
-        currentIndex: _index,
-        onTap: _onTap,
-        items: const [
-          BottomNavigationBarItem(icon: Icon(Icons.home), label: 'Home'),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.fitness_center),
-            label: 'Equipment',
+    return Theme(
+      data: FitQuestTheme.dark,
+      child: Scaffold(
+        backgroundColor: FitQuestTheme.background,
+        appBar: AppBar(
+          backgroundColor: FitQuestTheme.background,
+          foregroundColor: Colors.white,
+          surfaceTintColor: Colors.transparent,
+          elevation: 0,
+          title: Text(
+            _title,
+            style: const TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 0.2,
+            ),
           ),
-          BottomNavigationBarItem(icon: Icon(Icons.person), label: 'Profile'),
-        ],
+          bottom: PreferredSize(
+            preferredSize: const Size.fromHeight(1),
+            child: Container(height: 1, color: FitQuestTheme.outline),
+          ),
+        ),
+        body: IndexedStack(index: _index, children: _pages),
+        bottomNavigationBar: Container(
+          decoration: const BoxDecoration(
+            color: FitQuestTheme.surface,
+            border: Border(top: BorderSide(color: FitQuestTheme.outline)),
+          ),
+          child: BottomNavigationBar(
+            backgroundColor: FitQuestTheme.surface,
+            type: BottomNavigationBarType.fixed,
+            elevation: 0,
+            currentIndex: _index,
+            onTap: _onTap,
+            selectedItemColor: FitQuestTheme.accent,
+            unselectedItemColor: FitQuestTheme.muted,
+            selectedLabelStyle: const TextStyle(fontWeight: FontWeight.w700),
+            unselectedLabelStyle: const TextStyle(fontWeight: FontWeight.w600),
+            items: const [
+              BottomNavigationBarItem(icon: Icon(Icons.home), label: 'Home'),
+              BottomNavigationBarItem(
+                icon: Icon(Icons.fitness_center),
+                label: 'Equipment',
+              ),
+              BottomNavigationBarItem(icon: Icon(Icons.person), label: 'Profile'),
+            ],
+          ),
+        ),
       ),
     );
   }
