@@ -1529,6 +1529,7 @@ if ((_importedVideoUrl ?? '').trim().isNotEmpty &&
                 ),
               ),
           ],
+          ],
         ),
       ),
     ),
