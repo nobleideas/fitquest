@@ -1108,7 +1108,16 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
     return Theme(
       data: FitQuestTheme.dark,
       child: Scaffold(
-      appBar: AppBar(title: Text(exercise['name'] ?? 'Exercise')),
+      appBar: AppBar(
+        toolbarHeight: 76,
+        title: Text(
+          (exercise['name'] ?? 'Exercise').toString(),
+          maxLines: 2,
+          softWrap: true,
+          overflow: TextOverflow.visible,
+          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+        ),
+      ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: Column(
@@ -1409,36 +1418,6 @@ if ((_importedVideoUrl ?? '').trim().isNotEmpty &&
                     ? _pickedVideo!.path
                     : _userVideoUrl,
               ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: userFormNotesController,
-                minLines: 2,
-                maxLines: 4,
-                decoration: const InputDecoration(
-                  labelText: 'My form tips / isolation notes',
-                  hintText: 'Example: Keep elbows tucked and pause at peak contraction...',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 8),
-              Align(
-                alignment: Alignment.centerRight,
-                child: OutlinedButton.icon(
-                  icon: _isSavingFormNotes
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.notes),
-                  label: Text(
-                    _isSavingFormNotes ? 'Saving...' : 'Save Form Tips',
-                  ),
-                  onPressed: _isSavingFormNotes ? null : _saveUserFormNotes,
-                ),
-              ),
-            ],
-
             const SizedBox(height: 12),
 
             Row(
@@ -1521,6 +1500,34 @@ if ((_importedVideoUrl ?? '').trim().isNotEmpty &&
                 ),
               ),
             ],
+            const SizedBox(height: 16),
+              TextField(
+                controller: userFormNotesController,
+                minLines: 2,
+                maxLines: 4,
+                decoration: const InputDecoration(
+                  labelText: 'My form tips / isolation notes',
+                  hintText: 'Example: Keep elbows tucked and pause at peak contraction...',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerRight,
+                child: OutlinedButton.icon(
+                  icon: _isSavingFormNotes
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.notes),
+                  label: Text(
+                    _isSavingFormNotes ? 'Saving...' : 'Save Form Tips',
+                  ),
+                  onPressed: _isSavingFormNotes ? null : _saveUserFormNotes,
+                ),
+              ),
           ],
         ),
       ),
