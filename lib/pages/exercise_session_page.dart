@@ -8,6 +8,7 @@ import 'package:video_player/video_player.dart';
 import '../theme/fitquest_theme.dart';
 import '../services/exercise_service.dart';
 import '../services/session_service.dart';
+import '../services/muscle_exercise_position_service.dart';
 import '../services/workout_date_service.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -37,16 +38,17 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
   List<String> previousDayKeys = []; // All earlier days, newest first.
   int _historyPage = 0;
   static const int _historyPageSize = 4;
-  int? _currentRound;
+  int? _currentPosition;
+  final _positionService = MuscleExercisePositionService();
   Set<String> _bestReferenceDayKeys = <String>{};
-  Set<int> _referenceRounds = <int>{};
+  Set<int> _referencePositions = <int>{};
   String? _overallBestDayKey;
   bool _isLoadingHistory = true;
   int _historyRequest = 0;
   Map<String, List<Map<String, dynamic>>> sessionsByDayKey = {};
   Map<String, double> volumeByDayKey = {};
   Map<String, bool> hasVolumeByDayKey = {};
-  Map<String, int> roundByDayKey = {};
+  Map<String, int> positionByDayKey = {};
   bool _metricPreferenceLoaded = false;
 
   // -------- Form video state --------
@@ -157,16 +159,18 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
 
   // Persistent exercise order is assigned atomically when a set is saved.
   // Older records without an order remain unclassified rather than guessing.
-  int? _storedRound(List<Map<String, dynamic>> sessions) {
-    for (final session in sessions) {
+  bool _hasStoredOrder(List<Map<String, dynamic>> sessions) {
+    return sessions.any((session) {
       final raw = session['exercise_order'];
       final order = raw is num ? raw.toInt() : int.tryParse('$raw');
-      if (order != null && order > 0) return ((order - 1) ~/ 2) + 1;
-    }
-    return null;
+      return order != null && order > 0;
+    });
   }
 
-  // ---------- Sessions and round-aware history ----------
+  String _positionLabel(int n) => MuscleExercisePositionService.label(
+      n, (widget.exercise['primary_muscle_group'] ?? '').toString());
+
+  // ---------- Sessions and muscle-position-aware history ----------
   Future<List<Map<String, dynamic>>> _fetchAllExerciseSessions(
     String userId,
     String exerciseId,
@@ -193,50 +197,29 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
     return all;
   }
 
-  Future<int> _resolveCurrentRound(String userId, String exerciseId,
+  Future<int?> _resolveCurrentPosition(String userId, String exerciseId,
       DateTime activeDate) async {
-    // Match the order allocation used by insert_exercise_session_with_order.
-    // An exercise already logged today retains its existing order.
-    final startUtc = DateTime(activeDate.year, activeDate.month,
-            activeDate.day)
-        .toUtc().toIso8601String();
-    final endUtc = DateTime(activeDate.year, activeDate.month,
-            activeDate.day + 1)
-        .toUtc().toIso8601String();
     await sessionService.backfillExerciseOrdersForDate(activeDate);
-    final rows = <Map<String, dynamic>>[];
-    const pageSize = 500;
-    for (var offset = 0; ; offset += pageSize) {
-      final page = await Supabase.instance.client
-          .from('exercise_sessions')
-          .select('exercise_id, exercise_order')
-          .eq('user_id', userId)
-          .gte('created_at', startUtc)
-          .lt('created_at', endUtc)
-          .range(offset, offset + pageSize - 1);
-      rows.addAll(page.map((r) => Map<String, dynamic>.from(r)));
-      if (page.length < pageSize) break;
-    }
-    int? existingOrder;
-    var maxOrder = 0;
-    final distinctIds = <String>{};
+    final positions = await _positionService.positionsForDay(activeDate);
+    if (positions.containsKey(exerciseId)) return positions[exerciseId];
+    // The next distinct exercise in this muscle group, if not yet logged.
+    final muscle = (widget.exercise['primary_muscle_group'] ?? '').toString().trim();
+    if (muscle.isEmpty) return null;
+    final start = DateTime(activeDate.year, activeDate.month, activeDate.day);
+    final end = DateTime(activeDate.year, activeDate.month, activeDate.day + 1);
+    final rows = await Supabase.instance.client.from('exercise_sessions')
+        .select('exercise_id, exercises!inner(primary_muscle_group)')
+        .eq('user_id', userId)
+        .gte('created_at', start.toUtc().toIso8601String())
+        .lt('created_at', end.toUtc().toIso8601String());
+    final ids = <String>{};
     for (final row in rows) {
-      final id = (row['exercise_id'] ?? '').toString();
-      if (id.isNotEmpty) distinctIds.add(id);
-      final raw = row['exercise_order'];
-      final order = raw is num ? raw.toInt() : int.tryParse('$raw');
-      if (order != null && order > 0) {
-        if (order > maxOrder) maxOrder = order;
-        if (id == exerciseId) {
-          existingOrder = existingOrder == null
-              ? order
-              : (order < existingOrder ? order : existingOrder);
-        }
+      final ex = row['exercises'];
+      if (ex is Map && (ex['primary_muscle_group'] ?? '').toString().trim().toLowerCase() == muscle.toLowerCase()) {
+        ids.add(row['exercise_id'].toString());
       }
     }
-    final nextOrder = existingOrder ??
-        (maxOrder > distinctIds.length ? maxOrder : distinctIds.length) + 1;
-    return ((nextOrder - 1) ~/ 2) + 1;
+    return ids.length + 1;
   }
 
   Future<void> _loadWorkoutHistory() async {
@@ -265,7 +248,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
         }
       }
 
-      final currentRound = await _resolveCurrentRound(
+      final currentPosition = await _resolveCurrentPosition(
           user.id, exerciseId, activeDate);
       final rows = await _fetchAllExerciseSessions(
           user.id, exerciseId, activeDate);
@@ -283,7 +266,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
       // only days that need it, and re-read the affected exercise's sets.
       for (final key in map.keys.toList()) {
         final sessions = map[key]!;
-        if (sessions.isEmpty || _storedRound(sessions) != null) continue;
+        if (sessions.isEmpty || _hasStoredOrder(sessions)) continue;
         final day = _dateFromDayKey(key);
         await sessionService.backfillExerciseOrdersForDate(day);
         map[key] = await sessionService.getSessionsForDate(exerciseId, day);
@@ -293,7 +276,8 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
           .toList()..sort((a, b) => b.compareTo(a));
       final volMap = <String, double>{};
       final hasVolMap = <String, bool>{};
-      final roundMap = <String, int>{};
+      final positionMap = <String, int>{};
+      final positionCache = <String, Map<String, int>>{};
       for (final entry in map.entries) {
         var volume = 0.0;
         var hasVolume = false;
@@ -307,23 +291,27 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
         }
         volMap[entry.key] = volume;
         hasVolMap[entry.key] = hasVolume;
-        final round = _storedRound(entry.value);
-        if (round != null) roundMap[entry.key] = round;
+        if (entry.value.isNotEmpty) {
+          final day = _dateFromDayKey(entry.key);
+          positionCache[entry.key] = await _positionService.positionsForDay(day);
+          final position = positionCache[entry.key]![exerciseId];
+          if (position != null) positionMap[entry.key] = position;
+        }
       }
 
       // Volume is the primary benchmark, independent of exercise order.
-      // Also retain one or more tied best days in EACH recorded round.
-      final bestVolumeByRound = <int, double>{};
+      // Also retain the best volume for each muscle-group position.
+      final bestVolumeByPosition = <int, double>{};
       double? overallBestVolume;
       String? overallBestKey;
       for (final key in priorKeys) {
         if (hasVolMap[key] != true) continue;
         final volume = volMap[key]!;
-        final round = roundMap[key];
-        if (round != null &&
-            (bestVolumeByRound[round] == null ||
-                volume > bestVolumeByRound[round]!)) {
-          bestVolumeByRound[round] = volume;
+        final position = positionMap[key];
+        if (position != null &&
+            (bestVolumeByPosition[position] == null ||
+                volume > bestVolumeByPosition[position]!)) {
+          bestVolumeByPosition[position] = volume;
         }
         // Prior keys are newest first: equal volumes prefer the newer day.
         if (overallBestVolume == null || volume > overallBestVolume) {
@@ -333,15 +321,15 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
       }
       final bestKeys = <String>{};
       for (final key in priorKeys) {
-        final round = roundMap[key];
-        if (round != null && hasVolMap[key] == true &&
-            volMap[key] == bestVolumeByRound[round]) {
+        final position = positionMap[key];
+        if (position != null && hasVolMap[key] == true &&
+            volMap[key] == bestVolumeByPosition[position]) {
           bestKeys.add(key);
         }
       }
-      // Include the overall best even when its historical round is unknown.
+      // Include the overall best even when its historical position is unknown.
       if (overallBestKey != null) bestKeys.add(overallBestKey);
-      final referenceRounds = bestVolumeByRound.keys.toSet();
+      final referencePositions = bestVolumeByPosition.keys.toSet();
 
       if (!mounted || request != _historyRequest || _todayKey() != activeKey) {
         return;
@@ -352,10 +340,10 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
         sessionsByDayKey = map;
         volumeByDayKey = volMap;
         hasVolumeByDayKey = hasVolMap;
-        roundByDayKey = roundMap;
-        _currentRound = currentRound;
+        positionByDayKey = positionMap;
+        _currentPosition = currentPosition;
         _bestReferenceDayKeys = bestKeys;
-        _referenceRounds = referenceRounds;
+        _referencePositions = referencePositions;
         _overallBestDayKey = overallBestKey;
         if (_historyPage * _historyPageSize >= priorKeys.length) {
           _historyPage = 0;
@@ -654,12 +642,12 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
     final sessions = sessionsByDayKey[dayKey] ?? const [];
     final volume = volumeByDayKey[dayKey] ?? 0;
     final showVolume = hasVolumeByDayKey[dayKey] ?? false;
-    final round = roundByDayKey[dayKey];
+    final position = positionByDayKey[dayKey];
     final isBestMatch = _bestReferenceDayKeys.contains(dayKey);
     final isOverallBest = dayKey == _overallBestDayKey;
-    final isReferenceRound = dayKey != _todayKey() &&
-        round != null && _referenceRounds.contains(round);
-    final isExactRound = round == _currentRound;
+    final isReferencePosition = dayKey != _todayKey() &&
+        position != null && _referencePositions.contains(position);
+    final isExactPosition = position == _currentPosition;
     final theme = FitQuestTheme.dark;
 
     return Card(
@@ -670,7 +658,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
         borderRadius: BorderRadius.circular(18),
         side: isOverallBest
             ? BorderSide(color: theme.colorScheme.primary, width: 2)
-            : isReferenceRound
+            : isReferencePosition
                 ? BorderSide(color: theme.colorScheme.primary.withValues(alpha: 0.5))
                 : const BorderSide(color: FitQuestTheme.outline),
       ),
@@ -684,14 +672,14 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
                 style: theme.textTheme.titleSmall),
             if (isBestMatch)
               Text(isOverallBest
-                  ? 'OVERALL BEST VOLUME${round == null ? '' : ' · ROUND $round'}'
-                  : 'BEST VOLUME · ROUND $round',
+                  ? 'OVERALL BEST VOLUME'
+                  : 'BEST AT THIS POSITION',
                   style: theme.textTheme.labelMedium?.copyWith(
                     color: theme.colorScheme.primary,
                     fontWeight: FontWeight.bold,
                   )),
-            if (isReferenceRound && !isBestMatch)
-              Text(isExactRound ? 'CURRENT ROUND' : 'ROUND $round HISTORY',
+            if (isReferencePosition && !isBestMatch)
+              Text(isExactPosition ? 'SAME EXERCISE POSITION' : 'POSITION HISTORY',
                   style: theme.textTheme.labelSmall?.copyWith(
                     color: theme.colorScheme.primary,
                     fontWeight: FontWeight.bold,
@@ -699,8 +687,8 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
             if (showVolume)
               Text('Volume: ${volume.toStringAsFixed(0)}',
                   style: FitQuestTheme.dark.textTheme.bodySmall),
-            if (round != null)
-              Text('Round $round',
+            if (position != null)
+              Text(_positionLabel(position),
                   style: FitQuestTheme.dark.textTheme.bodySmall),
           ],
         ),
@@ -1144,8 +1132,8 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
             ),
             Row(children: [
               Expanded(child: FitQuestMetricTile(
-                label: 'CURRENT ROUND',
-                value: _currentRound?.toString() ?? '—',
+                label: 'EXERCISE POSITION',
+                value: _currentPosition == null ? '—' : _positionLabel(_currentPosition!),
                 icon: Icons.layers_outlined,
               )),
               const SizedBox(width: 12),
@@ -1287,9 +1275,9 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
             Text(
               isBacklogging
                   ? 'Earlier workout days before the selected backlog date. '
-                    'Overall best volume and the best volume for each round are highlighted.'
+                    'Highest volume is highlighted; position-specific bests are also marked.'
                   : 'Browse all previous workout days, four at a time. '
-                    'Overall best volume and the best volume for each round are highlighted.',
+                    'Highest volume is highlighted; position-specific bests are also marked.',
               style: FitQuestTheme.dark.textTheme.bodySmall,
             ),
             const SizedBox(height: 12),
@@ -1336,8 +1324,8 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
                 ],
               ),
               ...(_bestReferenceDayKeys.toList()
-                    ..sort((a, b) => (roundByDayKey[a] ?? 0)
-                        .compareTo(roundByDayKey[b] ?? 0)))
+                    ..sort((a, b) => (positionByDayKey[a] ?? 0)
+                        .compareTo(positionByDayKey[b] ?? 0)))
                   .where((key) => !previousDayKeys
                       .skip(_historyPage * _historyPageSize)
                       .take(_historyPageSize)
@@ -1350,7 +1338,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
                         icon: const Icon(Icons.emoji_events_outlined),
                         label: Text(key == _overallBestDayKey
                              ? 'Jump to overall best volume'
-                             : 'Jump to best Round ${roundByDayKey[key]} day'),
+                             : 'Jump to best ${positionByDayKey[key] == null ? 'exercise' : _positionLabel(positionByDayKey[key]!)} day'),
                       )),
             ],
 

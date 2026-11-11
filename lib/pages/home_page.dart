@@ -7,6 +7,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../services/suggestion_service.dart';
 import '../services/workout_date_service.dart';
+import '../services/muscle_exercise_position_service.dart';
 import '../services/friend_profile_service.dart';
 import 'exercise_session_page.dart';
 import 'friend_profile_page.dart';
@@ -78,9 +79,9 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
   final SuggestedDayTypeChoice _defaultChoice = SuggestedDayTypeChoice.auto;
   SuggestedRoutine? _suggestedRoutine;
   bool _isSuggesting = false;
-  // Most recent recorded round for each exercise in the suggested routine.
-  final Map<String, int> _lastCompletedRoundByExercise = {};
-  int _roundLookupGeneration = 0;
+  // Most recent muscle-group position for each exercise in the suggested routine.
+  final Map<String, int> _lastCompletedPositionByExercise = {};
+  int _positionLookupGeneration = 0;
 
   int _lastSuggestedMinutes = 30;
 
@@ -265,7 +266,7 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
         if (!mounted) return;
         setState(() => _suggestedRoutine = enrichedRoutine);
-        await _refreshSuggestedExerciseRounds();
+        await _refreshSuggestedExercisePositions();
         await _persistSuggestedRoutineToPrefs();
       }
     } catch (_) {
@@ -302,12 +303,12 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   // Refreshes independently of routine generation so saved suggestions and
   // individual shuffles also show up-to-date workout history.
-  Future<void> _refreshSuggestedExerciseRounds() async {
-    final generation = ++_roundLookupGeneration;
+  Future<void> _refreshSuggestedExercisePositions() async {
+    final generation = ++_positionLookupGeneration;
     final routine = _suggestedRoutine;
     final user = supabase.auth.currentUser;
     if (routine == null || user == null) {
-      if (mounted) setState(() => _lastCompletedRoundByExercise.clear());
+      if (mounted) setState(() => _lastCompletedPositionByExercise.clear());
       return;
     }
 
@@ -319,7 +320,7 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
     // Look up the actual latest set first, including rows whose order is null.
     // Otherwise an older ordered workout can incorrectly masquerade as the
-    // latest round, and un-backfilled exercises disappear from suggestions.
+    // latest position, and un-backfilled exercises disappear from suggestions.
     final latestByExercise = <String, Map<String, dynamic>>{};
     await Future.wait(ids.map((id) async {
       try {
@@ -359,36 +360,29 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
           'p_day_end': end.toUtc().toIso8601String(),
         });
       } catch (e) {
-        debugPrint('Could not backfill rounds for $day: $e');
+        debugPrint('Could not backfill exercise orders for $day: $e');
       }
     }));
 
-    await Future.wait(latestByExercise.entries.map((entry) async {
-      final id = entry.key;
-      var order = (entry.value['exercise_order'] as num?)?.toInt();
-      if (order == null || order <= 0) {
-        try {
-          final rows = await supabase
-              .from('exercise_sessions')
-              .select('exercise_order')
-              .eq('user_id', user.id)
-              .eq('exercise_id', id)
-              .eq('created_at', entry.value['created_at'])
-              .not('exercise_order', 'is', null)
-              .limit(1);
-          if (rows.isNotEmpty) {
-            order = (rows.first['exercise_order'] as num?)?.toInt();
-          }
-        } catch (e) {
-          debugPrint('Could not reload round for exercise $id: $e');
-        }
+    final dayCache = <String, Map<String, int>>{};
+    final positionService = MuscleExercisePositionService();
+    for (final entry in latestByExercise.entries) {
+      final created = DateTime.tryParse((entry.value['created_at'] ?? '').toString())?.toLocal();
+      if (created == null) continue;
+      final day = DateTime(created.year, created.month, created.day);
+      final key = '${day.year}-${day.month}-${day.day}';
+      try {
+        dayCache[key] ??= await positionService.positionsForDay(day);
+        final position = dayCache[key]![entry.key];
+        if (position != null) found[entry.key] = position;
+      } catch (e) {
+        debugPrint('Could not load muscle position for ${entry.key}: $e');
       }
-      if (order != null && order > 0) found[id] = (order + 1) ~/ 2;
-    }));
+    }
 
-    if (!mounted || generation != _roundLookupGeneration) return;
+    if (!mounted || generation != _positionLookupGeneration) return;
     setState(() {
-      _lastCompletedRoundByExercise
+      _lastCompletedPositionByExercise
         ..clear()
         ..addAll(found);
     });
@@ -406,7 +400,7 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
     if (!mounted) return;
     await _loadRecentExercises(); // keep summary updated
-    await _refreshSuggestedExerciseRounds();
+    await _refreshSuggestedExercisePositions();
   }
 
   // ---------------- Bug/Suggestion report system ----------------
@@ -1409,7 +1403,7 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
       if (!mounted) return;
       _individualRandomizeHistoryBySlot.clear();
       setState(() => _suggestedRoutine = enrichedRoutine);
-      await _refreshSuggestedExerciseRounds();
+      await _refreshSuggestedExercisePositions();
 
       // ✅ Persist after any change
       await _persistSuggestedRoutineToPrefs();
@@ -1468,7 +1462,7 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
       }
 
       setState(() => _suggestedRoutine = enrichedRoutine);
-      await _refreshSuggestedExerciseRounds();
+      await _refreshSuggestedExercisePositions();
 
       await _persistSuggestedRoutineToPrefs();
     } catch (e) {
@@ -1511,9 +1505,9 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
     if (!mounted) return;
     setState(() {
       _suggestedRoutine = null;
-      _lastCompletedRoundByExercise.clear();
+      _lastCompletedPositionByExercise.clear();
     });
-    ++_roundLookupGeneration;
+    ++_positionLookupGeneration;
     await _clearSuggestedRoutinePersisted();
   }
 
@@ -1629,7 +1623,7 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 final index = entry.key;
                 final ex = entry.value;
                 final name = (ex['name'] ?? '').toString();
-                final lastRound = _lastCompletedRoundByExercise[
+                final lastPosition = _lastCompletedPositionByExercise[
                     (ex['id'] ?? '').toString().trim()];
                 final mg = (ex['primary_muscle_group'] ?? '').toString();
                 final equipmentName = (ex['equipment_name'] ?? '')
@@ -1683,10 +1677,10 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                     : '$name ($mg)  •  $equipmentName',
                                 style: const TextStyle(fontWeight: FontWeight.w600),
                               ),
-                              if (lastRound != null) ...[
+                              if (lastPosition != null) ...[
                                 const SizedBox(height: 3),
                                 Text(
-                                  '• Last completed in round $lastRound',
+                                  'Last completed as ${MuscleExercisePositionService.label(lastPosition, mg)}',
                                   style: Theme.of(context).textTheme.bodySmall,
                                 ),
                               ],
