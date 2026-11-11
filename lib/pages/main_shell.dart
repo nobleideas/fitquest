@@ -65,6 +65,8 @@ class _MainShellState extends State<MainShell> {
           foregroundColor: Colors.white,
           surfaceTintColor: Colors.transparent,
           elevation: 0,
+          scrolledUnderElevation: 0,
+          centerTitle: true,
           title: Text(
             _title,
             style: const TextStyle(
@@ -73,18 +75,9 @@ class _MainShellState extends State<MainShell> {
               letterSpacing: 0.2,
             ),
           ),
-          bottom: PreferredSize(
-            preferredSize: const Size.fromHeight(1),
-            child: Container(height: 1, color: FitQuestTheme.outline),
-          ),
         ),
         body: IndexedStack(index: _index, children: _pages),
-        bottomNavigationBar: Container(
-          decoration: const BoxDecoration(
-            color: FitQuestTheme.surface,
-            border: Border(top: BorderSide(color: FitQuestTheme.outline)),
-          ),
-          child: BottomNavigationBar(
+        bottomNavigationBar: BottomNavigationBar(
             backgroundColor: FitQuestTheme.surface,
             type: BottomNavigationBarType.fixed,
             elevation: 0,
@@ -102,7 +95,6 @@ class _MainShellState extends State<MainShell> {
               ),
               BottomNavigationBarItem(icon: Icon(Icons.person), label: 'Profile'),
             ],
-          ),
         ),
       ),
     );
