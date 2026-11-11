@@ -803,7 +803,7 @@ class ProfilePageState extends State<ProfilePage> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text('$label — ${volume.toStringAsFixed(0)} total lbs', style: const TextStyle(fontSize: 16)),
+        Text('$label — ${volume.toStringAsFixed(0)} total lbs', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: Color(0xFFE4E9F2))),
         const SizedBox(height: 4),
         LinearProgressIndicator(
           value: (volume / target).clamp(0.0, 1.0),
@@ -1021,7 +1021,7 @@ class ProfilePageState extends State<ProfilePage> {
               Center(
                 child: Column(
                   children: [
-                    Text(rank, style: const TextStyle(fontSize: 32, fontWeight: FontWeight.bold)),
+                    Text(rank, style: const TextStyle(fontSize: 32, fontWeight: FontWeight.w800, color: Color(0xFFF4F6FB))),
                     const SizedBox(height: 8),
 
                     if (username != null && username.isNotEmpty)
@@ -1190,10 +1190,10 @@ class ProfilePageState extends State<ProfilePage> {
               ],
 
               // -------- Accepted friends --------
-              const Text("Friends", style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+              const Text("Friends", style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: Color(0xFFF4F6FB))),
               const SizedBox(height: 12),
               if (acceptedFriends.isEmpty)
-                const Text("No friends yet. Add someone by username above.")
+                const Text("No friends yet. Add someone by username above.", style: TextStyle(color: Color(0xFFE4E9F2)))
               else
                 Container(
                   height: acceptedFriends.length <= 4
@@ -1219,7 +1219,8 @@ class ProfilePageState extends State<ProfilePage> {
                           child: ListTile(
                             dense: true,
                             title: Text(uname, maxLines: 1,
-                                overflow: TextOverflow.ellipsis),
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(color: Color(0xFFF4F6FB))),
                             trailing: const Icon(Icons.chevron_right),
                             onTap: () {
                               Navigator.push(
@@ -1242,7 +1243,7 @@ class ProfilePageState extends State<ProfilePage> {
               const SizedBox(height: 20),
 
               // -------- Muscle bars --------
-              const Text("Muscle Group Volume", style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+              const Text("Muscle Group Volume", style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: Color(0xFFF4F6FB))),
               const SizedBox(height: 20),
               _volumeBar("Back", back),
               _volumeBar("Chest", chest),
