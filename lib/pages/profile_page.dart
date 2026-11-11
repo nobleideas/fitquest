@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'friend_profile_page.dart';
 import '../services/exercise_service.dart';
 import '../services/profile_service.dart';
+import '../theme/fitquest_theme.dart';
 
 class ProfilePage extends StatefulWidget {
   const ProfilePage({super.key});
@@ -972,288 +973,360 @@ class ProfilePageState extends State<ProfilePage> {
     super.dispose();
   }
 
+  Widget _sectionTitle(String title, IconData icon) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Row(children: [
+        Icon(icon, size: 19, color: Theme.of(context).colorScheme.primary),
+        const SizedBox(width: 9),
+        Expanded(child: Text(title, style: const TextStyle(
+          fontSize: 17, fontWeight: FontWeight.w800,
+        ))),
+      ]),
+    );
+  }
+
+  Widget _surfaceCard(Widget child) {
+    return Card(
+      margin: EdgeInsets.zero,
+      elevation: 0,
+      color: Theme.of(context).colorScheme.surfaceContainerHighest,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+      child: Padding(padding: const EdgeInsets.all(16), child: child),
+    );
+  }
+
+  Widget _profileHero({
+    required String rank,
+    required String? username,
+    required int level,
+    required double progress,
+    required double totalVolume,
+  }) {
+    final colors = Theme.of(context).colorScheme;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(22),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [colors.primary.withValues(alpha: 0.22),
+            colors.surfaceContainerHighest],
+        ),
+        border: Border.all(color: colors.primary.withValues(alpha: 0.28)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text('YOUR FITQUEST PROFILE', style: TextStyle(
+          fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 1.6,
+          color: colors.primary,
+        )),
+        const SizedBox(height: 12),
+        Row(children: [
+          Container(
+            width: 54, height: 54,
+            decoration: BoxDecoration(
+              color: colors.primary.withValues(alpha: 0.16),
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Icon(Icons.military_tech_outlined, size: 30, color: colors.primary),
+          ),
+          const SizedBox(width: 13),
+          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(rank, style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w900)),
+            if (username != null && username.isNotEmpty)
+              Text('@$username', maxLines: 2, overflow: TextOverflow.ellipsis,
+                style: TextStyle(color: colors.onSurfaceVariant)),
+          ])),
+          Text('LVL $level', style: TextStyle(
+            fontSize: 16, fontWeight: FontWeight.w900, color: colors.primary)),
+        ]),
+        const SizedBox(height: 20),
+        Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+          const Text('Level progress', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+          Text('${(progress * 100).round()}%', style: TextStyle(
+            fontSize: 12, color: colors.onSurfaceVariant)),
+        ]),
+        const SizedBox(height: 8),
+        ClipRRect(borderRadius: BorderRadius.circular(12), child: LinearProgressIndicator(
+          value: progress, minHeight: 9,
+          backgroundColor: colors.onSurface.withValues(alpha: 0.10),
+        )),
+        const SizedBox(height: 13),
+        Text('Total training volume  •  ${totalVolume.toStringAsFixed(0)} lbs',
+          style: TextStyle(fontSize: 12, color: colors.onSurfaceVariant)),
+      ]),
+    );
+  }
+
+  Widget _friendsCard(
+    List<Map<String, dynamic>> acceptedFriends,
+    List<Map<String, dynamic>> incomingRequests,
+  ) {
+    final colors = Theme.of(context).colorScheme;
+    return _surfaceCard(Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Row(children: [
+        const Expanded(child: Text('Friends', style: TextStyle(
+          fontSize: 17, fontWeight: FontWeight.w800))),
+        Text('${acceptedFriends.length} connected', style: TextStyle(
+          fontSize: 12, color: colors.onSurfaceVariant)),
+      ]),
+      const SizedBox(height: 12),
+      TextField(
+        controller: _friendUsernameController,
+        textInputAction: TextInputAction.send,
+        decoration: InputDecoration(
+          labelText: 'Add by username',
+          hintText: 'Enter username',
+          isDense: true,
+          prefixIcon: const Icon(Icons.person_search_outlined),
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+          suffixIcon: IconButton(
+            tooltip: 'Send friend request',
+            icon: _isSendingRequest
+              ? const SizedBox(width: 18, height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2))
+              : const Icon(Icons.person_add_alt_1_outlined),
+            onPressed: _isSendingRequest ? null : () => _sendFriendRequest(context),
+          ),
+        ),
+        onSubmitted: (_) {
+          if (!_isSendingRequest) _sendFriendRequest(context);
+        },
+      ),
+      if (incomingRequests.isNotEmpty) ...[
+        const SizedBox(height: 18),
+        Text('REQUESTS (${incomingRequests.length})', style: TextStyle(
+          fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 1.1,
+          color: colors.primary)),
+        const SizedBox(height: 6),
+        ...incomingRequests.map((r) {
+          final reqId = (r['request_id'] ?? '').toString();
+          final fromUsername = (r['from_username'] ?? 'Unknown').toString();
+          return ListTile(
+            contentPadding: EdgeInsets.zero,
+            dense: true,
+            leading: const Icon(Icons.person_outline),
+            title: Text(fromUsername, maxLines: 1, overflow: TextOverflow.ellipsis),
+            subtitle: const Text('Wants to connect'),
+            trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+              IconButton(tooltip: 'Decline', icon: const Icon(Icons.close),
+                onPressed: () => _respondToRequest(context, reqId, 'declined')),
+              IconButton(tooltip: 'Accept', icon: const Icon(Icons.check_circle_outline),
+                color: colors.primary,
+                onPressed: () => _respondToRequest(context, reqId, 'accepted')),
+            ]),
+          );
+        }),
+      ],
+      const SizedBox(height: 15),
+      Row(children: [
+        const Expanded(child: Text('YOUR FRIENDS', style: TextStyle(
+          fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 1.1))),
+        if (acceptedFriends.length > 4)
+          Text('Scroll to browse', style: TextStyle(
+            fontSize: 11, color: colors.onSurfaceVariant)),
+      ]),
+      const SizedBox(height: 7),
+      if (acceptedFriends.isEmpty)
+        Padding(padding: const EdgeInsets.symmetric(vertical: 16),
+          child: Text('No friends yet. Add someone above to connect.',
+            style: TextStyle(color: colors.onSurfaceVariant)))
+      else
+        SizedBox(
+          height: acceptedFriends.length <= 4
+              ? acceptedFriends.length * 58.0
+              : 232,
+          child: Scrollbar(
+            thumbVisibility: acceptedFriends.length > 4,
+            child: ListView.builder(
+              primary: false,
+              physics: const ClampingScrollPhysics(),
+              itemCount: acceptedFriends.length,
+              itemBuilder: (context, index) {
+                final friend = acceptedFriends[index];
+                final name = (friend['username'] ?? 'Friend').toString();
+                return SizedBox(height: 58, child: ListTile(
+                  dense: true,
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 4),
+                  leading: CircleAvatar(
+                    radius: 17,
+                    backgroundColor: colors.primary.withValues(alpha: 0.14),
+                    child: Icon(Icons.person_outline, size: 19, color: colors.primary),
+                  ),
+                  title: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis),
+                  trailing: const Icon(Icons.chevron_right, size: 19),
+                  onTap: () => Navigator.push(context, MaterialPageRoute(
+                    builder: (_) => FriendProfilePage(
+                      friendUserId: friend['friend_id'].toString(),
+                      friendUsername: (friend['username'] ?? '').toString(),
+                    ),
+                  )),
+                ));
+              },
+            ),
+          ),
+        ),
+    ]));
+  }
+
+  Widget _muscleVolumeCard(Map<String, double> volumes) {
+    final colors = Theme.of(context).colorScheme;
+    final maxVolume = volumes.values.fold<double>(0, (a, b) => max(a, b));
+    return _surfaceCard(Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text('Total volume by muscle group', style: TextStyle(
+        fontSize: 12, color: colors.onSurfaceVariant)),
+      const SizedBox(height: 14),
+      ...volumes.entries.map((entry) => Padding(
+        padding: const EdgeInsets.only(bottom: 15),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Expanded(child: Text(entry.key, style: const TextStyle(
+              fontSize: 13, fontWeight: FontWeight.w700))),
+            Text('${entry.value.toStringAsFixed(0)} lbs', style: TextStyle(
+              fontSize: 12, color: colors.onSurfaceVariant)),
+          ]),
+          const SizedBox(height: 6),
+          ClipRRect(borderRadius: BorderRadius.circular(8),
+            child: LinearProgressIndicator(
+              value: maxVolume <= 0 ? 0 : (entry.value / maxVolume).clamp(0.0, 1.0),
+              minHeight: 7,
+              backgroundColor: colors.onSurface.withValues(alpha: 0.09),
+            )),
+        ]),
+      )),
+      Text('Bars compare your muscle groups to your highest-volume group.',
+        style: TextStyle(fontSize: 11, color: colors.onSurfaceVariant)),
+    ]));
+  }
+
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder<Map<String, dynamic>>(
-      future: _dataFuture, // ✅ uses stored future
-      builder: (context, snapshot) {
-        if (!snapshot.hasData) {
-          return const Center(child: CircularProgressIndicator());
-        }
-
-        final profile = snapshot.data!['profile'] as Map<String, dynamic>;
-        final vol = snapshot.data!['volume'] as Map<String, dynamic>;
-        final acceptedFriends = snapshot.data!['acceptedFriends'] as List<Map<String, dynamic>>;
-        final incomingRequests = snapshot.data!['incomingRequests'] as List<Map<String, dynamic>>;
-        final totalExercises = snapshot.data!['totalExercises'] as int;
-        final videosUploaded = snapshot.data!['videosUploaded'] as int;
-        final yearWorkoutStats =
-            snapshot.data!['yearWorkoutStats'] as YearWorkoutStats;
-        final bodyWeightHistory =
-            snapshot.data!['bodyWeightHistory'] as List<BodyWeightEntry>;
-
-        final totalVol = _numToDouble(vol['total_volume']);
-        final level = _computeLevel(totalVol);
-        final progress = _levelProgress(totalVol);
-        final rank = _computeRank(level);
-
-        final goal = profile['goal'] as String?;
-        final username = (profile['username'] as String?)?.trim();
-
-        final back = _numToDouble(vol['volume_back']);
-        final chest = _numToDouble(vol['volume_chest']);
-        final shoulders = _numToDouble(vol['volume_shoulders']);
-        final arms = _numToDouble(vol['volume_arms']);
-        final legs = _numToDouble(vol['volume_legs']);
-        final core = _numToDouble(vol['volume_core']);
-
-        return SingleChildScrollView(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Center(
-                child: Column(
-                  children: [
-                    Text(rank, style: const TextStyle(fontSize: 32, fontWeight: FontWeight.bold)),
-                    const SizedBox(height: 8),
-
-                    if (username != null && username.isNotEmpty)
-                      Text(
-                        "@$username",
-                        style: const TextStyle(fontSize: 16, color: Colors.grey),
-                      ),
-
-                    const SizedBox(height: 6),
-                    Text("Level $level", style: const TextStyle(fontSize: 22, color: Colors.grey)),
-                    const SizedBox(height: 10),
-                    LinearProgressIndicator(
-                      value: progress,
-                      minHeight: 12,
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    const SizedBox(height: 10),
-                    Text(
-                      "Total Volume: ${totalVol.toStringAsFixed(0)} lbs",
-                      style: const TextStyle(color: Colors.grey),
-                    ),
-
-                    const SizedBox(height: 16),
-
-                    // -------- Body Weight --------
-                    _bodyWeightCard(bodyWeightHistory),
-
-                    const SizedBox(height: 16),
-
-                    // -------- Year Workout Analytics --------
-                    _trainingStatsCard(yearWorkoutStats),
-
-                    // -------- Goal Card --------
-                    const SizedBox(height: 16),
-                    Card(
-                      elevation: 2,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                      child: Padding(
-                        padding: const EdgeInsets.all(14),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Icon(Icons.flag_outlined),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  const Text("Goal", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                                  const SizedBox(height: 6),
-                                  Text(_goalLabel(goal)),
-                                ],
-                              ),
-                            ),
-                            const SizedBox(width: 10),
-                            TextButton.icon(
-                              onPressed: _isSavingGoal ? null : () => _editGoal(context, profile),
-                              icon: _isSavingGoal
-                                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
-                                  : const Icon(Icons.edit),
-                              label: const Text("Edit"),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-
-                    const SizedBox(height: 12),
-
-                    // -------- Exercise Video Analytics --------
-                    Card(
-                      elevation: 2,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                      child: Padding(
-                        padding: const EdgeInsets.all(14),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Icon(Icons.video_library_outlined),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  const Text(
-                                    "Exercise Videos",
-                                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                                  ),
-                                  const SizedBox(height: 6),
-                                  Text("$videosUploaded of $totalExercises exercises have videos"),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-
-                    const SizedBox(height: 12),
-
-                    // -------- Friends: Add by username --------
-                    Card(
-                      elevation: 2,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                      child: Padding(
-                        padding: const EdgeInsets.all(14),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text("Friends", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                            const SizedBox(height: 10),
-                            TextField(
-                              controller: _friendUsernameController,
-                              decoration: InputDecoration(
-                                labelText: "Add friend by username",
-                                hintText: "e.g. john123",
-                                border: const OutlineInputBorder(),
-                                suffixIcon: IconButton(
-                                  icon: _isSendingRequest
-                                      ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
-                                      : const Icon(Icons.person_add),
-                                  onPressed: _isSendingRequest ? null : () => _sendFriendRequest(context),
-                                ),
-                              ),
-                              onSubmitted: (_) => _isSendingRequest ? null : _sendFriendRequest(context),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-
-                    const SizedBox(height: 20),
-                  ],
-                ),
-              ),
-
-              // -------- Incoming friend requests --------
-              if (incomingRequests.isNotEmpty) ...[
-                const Text("Friend Requests", style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+    return Theme(
+      data: FitQuestTheme.dark,
+      child: Builder(builder: (context) => FutureBuilder<Map<String, dynamic>>(
+        future: _dataFuture,
+        builder: (context, snapshot) {
+          if (snapshot.hasError) {
+            return Center(child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                const Icon(Icons.error_outline, size: 34),
                 const SizedBox(height: 12),
-                ...incomingRequests.map((r) {
-                  final reqId = (r['request_id'] ?? '').toString();
-                  final fromUsername = (r['from_username'] ?? 'Unknown').toString();
+                const Text('Unable to load your profile.'),
+                const SizedBox(height: 12),
+                OutlinedButton.icon(onPressed: refresh,
+                  icon: const Icon(Icons.refresh), label: const Text('Retry')),
+              ]),
+            ));
+          }
+          if (!snapshot.hasData) {
+            return const Center(child: CircularProgressIndicator());
+          }
 
-                  return Card(
-                    child: ListTile(
-                      title: Text(fromUsername),
-                      subtitle: const Text("Wants to add you"),
-                      trailing: Wrap(
-                        spacing: 8,
-                        children: [
-                          IconButton(
-                            icon: const Icon(Icons.close),
-                            onPressed: () => _respondToRequest(context, reqId, 'declined'),
-                          ),
-                          IconButton(
-                            icon: const Icon(Icons.check),
-                            onPressed: () => _respondToRequest(context, reqId, 'accepted'),
-                          ),
-                        ],
-                      ),
+          final data = snapshot.data!;
+          final profile = data['profile'] as Map<String, dynamic>;
+          final vol = data['volume'] as Map<String, dynamic>;
+          final acceptedFriends = data['acceptedFriends'] as List<Map<String, dynamic>>;
+          final incomingRequests = data['incomingRequests'] as List<Map<String, dynamic>>;
+          final totalExercises = data['totalExercises'] as int;
+          final videosUploaded = data['videosUploaded'] as int;
+          final yearWorkoutStats = data['yearWorkoutStats'] as YearWorkoutStats;
+          final bodyWeightHistory = data['bodyWeightHistory'] as List<BodyWeightEntry>;
+          final totalVol = _numToDouble(vol['total_volume']);
+          final level = _computeLevel(totalVol);
+          final goal = profile['goal'] as String?;
+          final username = (profile['username'] as String?)?.trim();
+
+          return RefreshIndicator(
+            onRefresh: () async {
+              final next = _loadData();
+              setState(() => _dataFuture = next);
+              await next;
+            },
+            child: ListView(
+              padding: const EdgeInsets.fromLTRB(16, 18, 16, 28),
+              children: [
+                _profileHero(rank: _computeRank(level), username: username,
+                  level: level, progress: _levelProgress(totalVol),
+                  totalVolume: totalVol),
+                const SizedBox(height: 22),
+                _sectionTitle('Body & activity', Icons.monitor_weight_outlined),
+                _bodyWeightCard(bodyWeightHistory),
+                const SizedBox(height: 22),
+                _sectionTitle('Training overview', Icons.insights_outlined),
+                _trainingStatsCard(yearWorkoutStats),
+                const SizedBox(height: 22),
+                _sectionTitle('My goals & videos', Icons.flag_outlined),
+                _surfaceCard(Column(children: [
+                  Row(children: [
+                    const Icon(Icons.flag_outlined, size: 20),
+                    const SizedBox(width: 11),
+                    Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text('Fitness goal', style: TextStyle(fontSize: 13,
+                          fontWeight: FontWeight.w800)),
+                        const SizedBox(height: 3),
+                        Text(_goalLabel(goal)),
+                      ])),
+                    TextButton.icon(
+                      onPressed: _isSavingGoal ? null : () => _editGoal(context, profile),
+                      icon: _isSavingGoal
+                        ? const SizedBox(width: 16, height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2))
+                        : const Icon(Icons.edit_outlined, size: 17),
+                      label: const Text('Edit'),
                     ),
-                  );
+                  ]),
+                  const Divider(height: 28),
+                  Row(children: [
+                    const Icon(Icons.video_library_outlined, size: 20),
+                    const SizedBox(width: 11),
+                    Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text('Exercise videos', style: TextStyle(fontSize: 13,
+                          fontWeight: FontWeight.w800)),
+                        const SizedBox(height: 3),
+                        Text('$videosUploaded of $totalExercises exercises have videos'),
+                      ])),
+                  ]),
+                ])),
+                const SizedBox(height: 22),
+                _sectionTitle('Community', Icons.people_outline),
+                _friendsCard(acceptedFriends, incomingRequests),
+                const SizedBox(height: 22),
+                _sectionTitle('Muscle group volume', Icons.bar_chart_outlined),
+                _muscleVolumeCard({
+                  'Back': _numToDouble(vol['volume_back']),
+                  'Chest': _numToDouble(vol['volume_chest']),
+                  'Shoulders': _numToDouble(vol['volume_shoulders']),
+                  'Arms': _numToDouble(vol['volume_arms']),
+                  'Legs': _numToDouble(vol['volume_legs']),
+                  'Core': _numToDouble(vol['volume_core']),
                 }),
-                const SizedBox(height: 20),
-              ],
-
-              // -------- Accepted friends --------
-              const Text("Friends", style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
-              const SizedBox(height: 12),
-              if (acceptedFriends.isEmpty)
-                const Text("No friends yet. Add someone by username above.")
-              else
-                ...acceptedFriends.map((f) {
-                  final uname = (f['username'] ?? 'Friend').toString();
-                  return Card(
-                    child: ListTile(
-                      title: Text(uname),
-                      trailing: const Icon(Icons.chevron_right),
-                      onTap: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => FriendProfilePage(
-                              friendUserId: f['friend_id'].toString(),
-                              friendUsername: (f['username'] ?? '').toString(),
-                            ),
-                          ),
-                        );
-                      },
-                    ),
-                  );
-                }),
-
-              const SizedBox(height: 20),
-
-              // -------- Muscle bars --------
-              const Text("Muscle Group Volume", style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
-              const SizedBox(height: 20),
-              _volumeBar("Back", back),
-              _volumeBar("Chest", chest),
-              _volumeBar("Shoulders", shoulders),
-              _volumeBar("Arms", arms),
-              _volumeBar("Legs", legs),
-              _volumeBar("Core", core),
-
-              // Reset Stats after stats
-              const SizedBox(height: 12),
-              SizedBox(
-                width: double.infinity,
-                child: OutlinedButton.icon(
+                const SizedBox(height: 26),
+                _sectionTitle('Account', Icons.settings_outlined),
+                OutlinedButton.icon(
                   icon: _isResettingStats
-                      ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
-                      : const Icon(Icons.restart_alt),
-                  label: const Text("Reset Stats"),
+                    ? const SizedBox(width: 16, height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Icon(Icons.restart_alt),
+                  label: const Text('Reset Stats'),
                   onPressed: _isResettingStats ? null : () => _resetStats(context),
                 ),
-              ),
-
-              // Log Out after Reset Stats
-              const SizedBox(height: 12),
-              SizedBox(
-                width: double.infinity,
-                child: OutlinedButton.icon(
+                const SizedBox(height: 8),
+                OutlinedButton.icon(
                   icon: const Icon(Icons.logout),
-                  label: const Text("Log Out"),
-                  style: OutlinedButton.styleFrom(foregroundColor: Colors.red),
-                  onPressed: () async {
-                    await supabase.auth.signOut();
-                  },
+                  label: const Text('Log Out'),
+                  style: OutlinedButton.styleFrom(foregroundColor: Colors.redAccent),
+                  onPressed: () async => supabase.auth.signOut(),
                 ),
-              ),
-
-              const SizedBox(height: 20),
-            ],
-          ),
-        );
-      },
+              ],
+            ),
+          );
+        },
+      )),
     );
   }
 }
