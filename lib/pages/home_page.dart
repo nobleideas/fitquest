@@ -732,6 +732,13 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
                       ),
                     ],
                   ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Filter by workout type to share a specific type of workout.',
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: const Color(0xFFE5E9F3),
+                    ),
+                  ),
                   const SizedBox(height: 8),
                   Row(
                     children: [
@@ -1753,8 +1760,8 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
                     fontWeight:
                         selected ? FontWeight.bold : FontWeight.w600,
                     color: selected
-                        ? Theme.of(context).colorScheme.primary
-                        : null,
+                        ? const Color(0xFFD4C2FF)
+                        : const Color(0xFFF4F6FB),
                   ),
                 ),
               ),
@@ -1772,8 +1779,8 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
         const SizedBox(width: 8),
         const Expanded(
           child: Text(
-            'Show friends in workout summary',
-            style: TextStyle(fontWeight: FontWeight.w600),
+            'Show friends in workout summary feed',
+            style: TextStyle(color: Color(0xFFF4F6FB), fontWeight: FontWeight.w700),
           ),
         ),
         Switch(
@@ -1918,7 +1925,7 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
             _buildBacklogStatus(),
             if (_workoutDateService.isBacklogging) const SizedBox(height: 12),
             Text(
-              'Workout Summary',
+              'Workout Summary Feed',
               style: const TextStyle(color: Color(0xFFF4F6FB), fontSize: 24, fontWeight: FontWeight.w800),
             ),
             const SizedBox(height: 12),
@@ -2024,7 +2031,8 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
                             child: Text(
                               s.dayTypeLabel,
                               style: const TextStyle(
-                                fontWeight: FontWeight.w600,
+                                color: Color(0xFFF4F6FB),
+                                fontWeight: FontWeight.w700,
                               ),
                             ),
                           ),
@@ -2042,12 +2050,11 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                 vertical: 6,
                               ),
                               decoration: BoxDecoration(
-                                color: Theme.of(
-                                  context,
-                                ).colorScheme.surfaceContainerHighest,
+                                color: FitQuestTheme.raisedSurface,
+                                border: Border.all(color: FitQuestTheme.outline),
                                 borderRadius: BorderRadius.circular(16),
                               ),
-                              child: Text('${e.key}: ${e.value}', style: const TextStyle(color: Color(0xFFE4E9F2), fontWeight: FontWeight.w600)),
+                              child: Text('${e.key}: ${e.value}', style: const TextStyle(color: Color(0xFFF4F6FB), fontWeight: FontWeight.w700)),
                             );
                           }).toList(),
                         ),
