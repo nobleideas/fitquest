@@ -5,6 +5,7 @@ import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../theme/fitquest_theme.dart';
 import '../services/suggestion_service.dart';
 import '../services/workout_date_service.dart';
 import '../services/muscle_exercise_position_service.dart';
@@ -1549,7 +1550,7 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
     return Card(
       elevation: 0,
-      color: Theme.of(context).colorScheme.surfaceContainerHighest,
+      color: FitQuestTheme.surface,
       child: Padding(
         padding: const EdgeInsets.all(12),
         child: Column(
@@ -1792,21 +1793,41 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
     required VoidCallback? onPressed,
   }) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 2),
-      child: Row(
-        children: [
-          Expanded(
-            child: Text(
-              label,
-              style: const TextStyle(fontWeight: FontWeight.w600),
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Material(
+        color: FitQuestTheme.surface,
+        borderRadius: BorderRadius.circular(16),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(16),
+          onTap: onPressed,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 15, vertical: 6),
+            decoration: BoxDecoration(
+              border: Border.all(color: FitQuestTheme.outline),
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    label,
+                    style: const TextStyle(
+                      color: Color(0xFFF4F6FB),
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+                IconButton(
+                  tooltip: tooltip,
+                  onPressed: onPressed,
+                  color: FitQuestTheme.accent,
+                  icon: icon,
+                ),
+              ],
             ),
           ),
-          IconButton(
-            tooltip: tooltip,
-            onPressed: onPressed,
-            icon: icon,
-          ),
-        ],
+        ),
       ),
     );
   }
@@ -1815,12 +1836,24 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
-    if (isLoading) return const Center(child: CircularProgressIndicator());
+    if (isLoading) {
+      return Theme(
+        data: FitQuestTheme.dark,
+        child: const ColoredBox(
+          color: FitQuestTheme.background,
+          child: Center(child: CircularProgressIndicator()),
+        ),
+      );
+    }
 
     final entries = _workoutEntries();
 
     // ✅ BEFORE-pop handling: prevent pop, show warning once, then pop manually.
-    return PopScope(
+    return Theme(
+      data: FitQuestTheme.dark,
+      child: ColoredBox(
+        color: FitQuestTheme.background,
+        child: PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, result) async {
         if (didPop) return;
@@ -1886,7 +1919,7 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
             if (_workoutDateService.isBacklogging) const SizedBox(height: 12),
             Text(
               'Workout Summary',
-              style: Theme.of(context).textTheme.headlineSmall,
+              style: const TextStyle(color: Color(0xFFF4F6FB), fontSize: 24, fontWeight: FontWeight.w800),
             ),
             const SizedBox(height: 12),
 
@@ -1909,8 +1942,14 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 final muscleEntries = s.muscleGroupCounts.entries.toList()
                   ..sort((a, b) => b.value.compareTo(a.value));
 
-                return Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 10),
+                return Container(
+                  margin: const EdgeInsets.only(bottom: 10),
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: FitQuestTheme.surface,
+                    border: Border.all(color: FitQuestTheme.outline),
+                    borderRadius: BorderRadius.circular(18),
+                  ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -1922,6 +1961,7 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                 Text(
                                   _formatDate(date),
                                   style: const TextStyle(
+                                    color: Color(0xFFF4F6FB),
                                     fontWeight: FontWeight.bold,
                                   ),
                                 ),
@@ -2007,14 +2047,17 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                 ).colorScheme.surfaceContainerHighest,
                                 borderRadius: BorderRadius.circular(16),
                               ),
-                              child: Text('${e.key}: ${e.value}'),
+                              child: Text('${e.key}: ${e.value}', style: const TextStyle(color: Color(0xFFE4E9F2), fontWeight: FontWeight.w600)),
                             );
                           }).toList(),
                         ),
                       const SizedBox(height: 8),
                       ...s.exerciseNames.map((name) {
                         final sets = s.exerciseSetCountsByName[name] ?? 0;
-                        return Text('• $name ${sets}x');
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 4),
+                          child: Text('• $name ${sets}x', style: const TextStyle(color: Color(0xFFE4E9F2))),
+                        );
                       }),
                       const Divider(height: 24),
                     ],
@@ -2022,6 +2065,8 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 );
               }).toList(),
           ],
+        ),
+      ),
         ),
       ),
     );
