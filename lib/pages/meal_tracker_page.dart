@@ -1052,7 +1052,7 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                       const SizedBox(width: 12),
                       Expanded(
                         child: DropdownButtonFormField<String>(
-                          value: _servingUnits.contains(servingUnit)
+                          initialValue: _servingUnits.contains(servingUnit)
                               ? servingUnit
                               : 'serving',
                           isExpanded: true,
@@ -2501,20 +2501,22 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
   Widget _metricBox(String label, double value, {String suffix = 'g'}) {
     return Expanded(
       child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+        padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 10),
         decoration: BoxDecoration(
           color: Theme.of(context).colorScheme.surfaceContainerHighest,
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: const Color(0xFF405268), width: 0.7),
         ),
         child: Column(
           children: [
             Text(
               _formatNumber(value),
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                    fontWeight: FontWeight.bold,
+              style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                    fontWeight: FontWeight.w800,
+                    color: const Color(0xFFE7EEF7),
                   ),
             ),
-            const SizedBox(height: 2),
+            const SizedBox(height: 5),
             Text(
               suffix.isEmpty ? label : '$label ($suffix)',
               textAlign: TextAlign.center,
@@ -2714,8 +2716,112 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
     super.dispose();
   }
 
+  // Scoped premium-dark styling: leaves the rest of FitQuest unchanged.
+  ThemeData _mealTrackerTheme(BuildContext context) {
+    const background = Color(0xFF0B111B);
+    const surface = Color(0xFF172231);
+    const elevated = Color(0xFF202E40);
+    const accent = Color(0xFF72B5ED);
+    const foreground = Color(0xFFE7EEF7);
+    const secondary = Color(0xFFAFBED0);
+    const outline = Color(0xFF405268);
+
+    final base = ThemeData.dark(useMaterial3: true);
+    final scheme = base.colorScheme.copyWith(
+      primary: accent,
+      onPrimary: background,
+      secondary: accent,
+      onSecondary: background,
+      surface: surface,
+      onSurface: foreground,
+      surfaceContainerHighest: elevated,
+      outline: outline,
+      onSurfaceVariant: secondary,
+    );
+    return base.copyWith(
+      scaffoldBackgroundColor: background,
+      canvasColor: background,
+      colorScheme: scheme,
+      dividerColor: outline.withValues(alpha: 0.55),
+      textTheme: base.textTheme.apply(bodyColor: foreground, displayColor: foreground).copyWith(
+        bodySmall: base.textTheme.bodySmall?.copyWith(color: secondary),
+        labelSmall: base.textTheme.labelSmall?.copyWith(color: secondary),
+      ),
+      appBarTheme: const AppBarTheme(
+        backgroundColor: background,
+        foregroundColor: foreground,
+        elevation: 0,
+        centerTitle: false,
+      ),
+      cardTheme: CardThemeData(
+        color: surface,
+        elevation: 0,
+        margin: EdgeInsets.zero,
+        shape: RoundedRectangleBorder(
+          side: const BorderSide(color: outline, width: 0.7),
+          borderRadius: BorderRadius.circular(16),
+        ),
+      ),
+      dialogTheme: DialogThemeData(
+        backgroundColor: surface,
+        titleTextStyle: const TextStyle(color: foreground, fontSize: 20, fontWeight: FontWeight.w700),
+        contentTextStyle: const TextStyle(color: foreground, fontSize: 14),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      ),
+      bottomSheetTheme: const BottomSheetThemeData(
+        backgroundColor: surface,
+        modalBackgroundColor: surface,
+      ),
+      inputDecorationTheme: InputDecorationTheme(
+        filled: true,
+        fillColor: elevated,
+        labelStyle: const TextStyle(color: secondary),
+        hintStyle: const TextStyle(color: secondary),
+        prefixIconColor: secondary,
+        suffixIconColor: secondary,
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: outline),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: accent, width: 1.5),
+        ),
+      ),
+      outlinedButtonTheme: OutlinedButtonThemeData(
+        style: OutlinedButton.styleFrom(
+          foregroundColor: foreground,
+          padding: const EdgeInsets.symmetric(vertical: 15, horizontal: 14),
+          side: const BorderSide(color: outline),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        ),
+      ),
+      elevatedButtonTheme: ElevatedButtonThemeData(
+        style: ElevatedButton.styleFrom(
+          backgroundColor: accent,
+          foregroundColor: background,
+          padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 16),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        ),
+      ),
+      listTileTheme: const ListTileThemeData(
+        textColor: foreground,
+        iconColor: secondary,
+      ),
+      iconTheme: const IconThemeData(color: secondary),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    return Theme(
+      data: _mealTrackerTheme(context),
+      child: Builder(builder: (context) => _buildPremiumMealTracker(context)),
+    );
+  }
+
+  Widget _buildPremiumMealTracker(BuildContext context) {
     final today = _todaySummary;
 
     return Scaffold(
@@ -2738,7 +2844,10 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                 children: [
                   Text(
                     "Today's Nutrition",
-                    style: Theme.of(context).textTheme.headlineSmall,
+                    style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                      fontWeight: FontWeight.w800,
+                      color: const Color(0xFFE7EEF7),
+                    ),
                   ),
                   const SizedBox(height: 12),
                   Row(
@@ -2804,7 +2913,10 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                   const SizedBox(height: 24),
                   Text(
                     'Food Log',
-                    style: Theme.of(context).textTheme.titleLarge,
+                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.w800,
+                      color: const Color(0xFFE7EEF7),
+                    ),
                   ),
                   const SizedBox(height: 12),
                   if (_dailySummaries.isEmpty)
