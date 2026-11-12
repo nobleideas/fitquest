@@ -5,6 +5,104 @@ import '../services/friend_profile_service.dart';
 import '../services/gym_service.dart';
 import '../services/meal_service.dart';
 
+// Friend Profile premium-dark design tokens. Scoped to this page so other
+// FitQuest screens keep their existing themes.
+class _FriendUx {
+  static const background = Color(0xFF090D15);
+  static const surface = Color(0xFF151B27);
+  static const raised = Color(0xFF202838);
+  static const accent = Color(0xFF78E4C4);
+  static const text = Color(0xFFF4F7FC);
+  static const muted = Color(0xFFA6B2C4);
+
+  static ThemeData theme(BuildContext context) {
+    final base = Theme.of(context);
+    final scheme = ColorScheme.fromSeed(
+      seedColor: accent,
+      brightness: Brightness.dark,
+      surface: surface,
+    ).copyWith(
+      primary: accent,
+      onPrimary: background,
+      surface: surface,
+      onSurface: text,
+      surfaceContainerHighest: raised,
+      outline: const Color(0xFF394357),
+    );
+    return base.copyWith(
+      brightness: Brightness.dark,
+      scaffoldBackgroundColor: background,
+      colorScheme: scheme,
+      dividerColor: const Color(0xFF30394B),
+      appBarTheme: const AppBarTheme(
+        backgroundColor: background,
+        foregroundColor: text,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        centerTitle: false,
+        titleTextStyle: TextStyle(
+          color: text, fontSize: 20, fontWeight: FontWeight.w800,
+          letterSpacing: -0.4,
+        ),
+      ),
+      cardTheme: CardThemeData(
+        color: surface,
+        elevation: 0,
+        margin: const EdgeInsets.symmetric(vertical: 5),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(18),
+          side: const BorderSide(color: Color(0xFF2C3547)),
+        ),
+      ),
+      listTileTheme: const ListTileThemeData(
+        contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 7),
+        iconColor: accent,
+        textColor: text,
+      ),
+      tabBarTheme: const TabBarThemeData(
+        labelColor: accent,
+        unselectedLabelColor: muted,
+        indicatorColor: accent,
+        indicatorSize: TabBarIndicatorSize.label,
+        dividerColor: Color(0xFF293244),
+        labelStyle: TextStyle(fontSize: 13, fontWeight: FontWeight.w800),
+        unselectedLabelStyle: TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+      ),
+      chipTheme: base.chipTheme.copyWith(
+        backgroundColor: surface,
+        selectedColor: accent.withValues(alpha: 0.17),
+        side: const BorderSide(color: Color(0xFF354054)),
+        labelStyle: const TextStyle(color: text, fontWeight: FontWeight.w600),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+      inputDecorationTheme: InputDecorationTheme(
+        filled: true,
+        fillColor: surface,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: const BorderSide(color: Color(0xFF364154)),
+        ),
+      ),
+      elevatedButtonTheme: ElevatedButtonThemeData(
+        style: ElevatedButton.styleFrom(
+          backgroundColor: accent, foregroundColor: background,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(13)),
+          textStyle: const TextStyle(fontWeight: FontWeight.w800),
+        ),
+      ),
+      outlinedButtonTheme: OutlinedButtonThemeData(
+        style: OutlinedButton.styleFrom(
+          foregroundColor: text,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(13)),
+        ),
+      ),
+    );
+  }
+}
+
 class FriendProfilePage extends StatefulWidget {
   final String friendUserId;
   final String friendUsername;
@@ -112,13 +210,16 @@ class _FriendProfilePageState extends State<FriendProfilePage>
   Widget build(BuildContext context) {
     final title = widget.friendUsername.isNotEmpty ? "@${widget.friendUsername}" : "Friend";
 
-    return Scaffold(
+    return Theme(
+      data: _FriendUx.theme(context),
+      child: Scaffold(
       appBar: AppBar(
         title: Text(title),
         bottom: TabBar(
           controller: _tabController,
           isScrollable: true,
           tabAlignment: TabAlignment.start,
+          labelPadding: const EdgeInsets.symmetric(horizontal: 15),
           tabs: const [
             Tab(text: "History"),
             Tab(text: "Equipment"),
@@ -177,6 +278,7 @@ class _FriendProfilePageState extends State<FriendProfilePage>
                     _FriendFoodLogTab(rows: _foodLog, error: _foodLogError),
                   ],
                 ),
+      ),
     );
   }
 }
@@ -505,7 +607,7 @@ class _HistoryTabState extends State<_HistoryTab> {
     }
 
     return ListView.builder(
-      padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+      padding: const EdgeInsets.fromLTRB(14, 4, 14, 20),
       itemCount: summaries.length,
       itemBuilder: (context, i) {
         final s = summaries[i];
@@ -513,9 +615,10 @@ class _HistoryTabState extends State<_HistoryTab> {
         final muscleEntries = s.muscleGroupCounts.entries.toList()
           ..sort((a, b) => b.value.compareTo(a.value));
 
-        return Padding(
-          padding: const EdgeInsets.symmetric(vertical: 10),
-          child: Column(
+        return Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Row(
@@ -561,8 +664,8 @@ class _HistoryTabState extends State<_HistoryTab> {
                 final sets = s.exerciseSetCountsByName[name] ?? 0;
                 return Text('• $name ${sets}x');
               }),
-              const Divider(height: 24),
             ],
+          ),
           ),
         );
       },
@@ -577,7 +680,7 @@ class _HistoryTabState extends State<_HistoryTab> {
     }
 
     return ListView.separated(
-      padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+      padding: const EdgeInsets.fromLTRB(14, 4, 14, 20),
       itemCount: history.length,
       separatorBuilder: (_, __) => const SizedBox(height: 8),
       itemBuilder: (context, i) {
@@ -1306,8 +1409,8 @@ class _CopyableContainerTabState extends State<_CopyableContainerTab> {
     final selectedCount = _selectedIndexes.length;
 
     final tip = widget.insertKind == 'routine'
-        ? "Tip: Long-press a routine to select it, then add it to your routines."
-        : "Tip: Long-press equipment to select it, then add it to your equipment list.";
+        ? "Tap a routine to select it for import."
+        : "Tap equipment to select it for import.";
 
     return Stack(
       children: [
@@ -1353,14 +1456,23 @@ class _CopyableContainerTabState extends State<_CopyableContainerTab> {
                 (c['name'] ?? c['equipment_name'] ?? '').toString();
             final isSelected = _selectedIndexes.contains(visibleIndex);
 
-            return ListTile(
+            return Card(
+              child: ListTile(
               leading: _selectMode
                   ? Icon(isSelected ? Icons.check_circle : Icons.radio_button_unchecked)
                   : Icon(widget.leadingIcon),
               title: Text(name),
-              trailing: _selectMode ? null : const Icon(Icons.chevron_right),
+              trailing: _selectMode
+                  ? null
+                  : const Icon(Icons.add_circle_outline, color: _FriendUx.accent),
               selected: isSelected,
-              onTap: _selectMode ? () => _toggleSelect(visibleIndex) : null,
+              onTap: () {
+                if (_selectMode) {
+                  _toggleSelect(visibleIndex);
+                } else {
+                  _enterSelectMode(visibleIndex);
+                }
+              },
               onLongPress: () {
                 if (_selectMode) {
                   _toggleSelect(visibleIndex);
@@ -1368,6 +1480,7 @@ class _CopyableContainerTabState extends State<_CopyableContainerTab> {
                   _enterSelectMode(visibleIndex);
                 }
               },
+            ),
             );
           },
         ),
@@ -1383,7 +1496,9 @@ class _CopyableContainerTabState extends State<_CopyableContainerTab> {
                 color: Theme.of(context).colorScheme.surface,
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-                  child: Row(
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
                     children: [
                       Text(
                         "$selectedCount selected",
@@ -1838,6 +1953,7 @@ class _ExercisesTabState extends State<_ExercisesTab> {
                         label: Text(_isAdding ? "Adding..." : "Add to routine"),
                       ),
                     ],
+                    ),
                   ),
                 ),
               ),
