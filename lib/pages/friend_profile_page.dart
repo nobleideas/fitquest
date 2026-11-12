@@ -1531,14 +1531,13 @@ class _CopyableContainerTabState extends State<_CopyableContainerTab> {
               ),
             ),
           ),
+          ),
       ],
     );
   }
 }
 
 // ---------------- EXERCISES TAB ----------------
-
-enum _AddTargetKind { equipment, routine }
 
 class _ExercisesTab extends StatefulWidget {
   final List<Map<String, dynamic>> exercises;
@@ -1958,7 +1957,6 @@ class _ExercisesTabState extends State<_ExercisesTab> {
                 ),
               ),
             ),
-          ),
       ],
     );
   }
