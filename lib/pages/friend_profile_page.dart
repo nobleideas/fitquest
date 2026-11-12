@@ -33,6 +33,31 @@ class _FriendUx {
       brightness: Brightness.dark,
       scaffoldBackgroundColor: background,
       colorScheme: scheme,
+      // The app-wide theme may be light. Override inherited typography too,
+      // otherwise text on these dark surfaces keeps the light theme's dark ink.
+      textTheme: base.textTheme.apply(
+        bodyColor: text,
+        displayColor: text,
+      ),
+      primaryTextTheme: base.primaryTextTheme.apply(
+        bodyColor: text,
+        displayColor: text,
+      ),
+      dialogTheme: const DialogThemeData(
+        backgroundColor: surface,
+        titleTextStyle: TextStyle(color: text, fontSize: 20, fontWeight: FontWeight.w700),
+        contentTextStyle: TextStyle(color: text, fontSize: 15),
+      ),
+      textButtonTheme: TextButtonThemeData(
+        style: TextButton.styleFrom(foregroundColor: accent),
+      ),
+      popupMenuTheme: const PopupMenuThemeData(
+        color: surface,
+        textStyle: TextStyle(color: text),
+      ),
+      dropdownMenuTheme: const DropdownMenuThemeData(
+        textStyle: TextStyle(color: text),
+      ),
       dividerColor: const Color(0xFF30394B),
       appBarTheme: const AppBarTheme(
         backgroundColor: background,
@@ -76,6 +101,9 @@ class _FriendUx {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       ),
       inputDecorationTheme: InputDecorationTheme(
+        labelStyle: const TextStyle(color: muted),
+        hintStyle: const TextStyle(color: muted),
+        floatingLabelStyle: const TextStyle(color: accent),
         filled: true,
         fillColor: surface,
         contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
@@ -1311,22 +1339,26 @@ class _CopyableContainerTabState extends State<_CopyableContainerTab> {
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
       child: DropdownButtonFormField<String>(
-        value: selectedValue,
+        initialValue: selectedValue,
+        style: const TextStyle(color: Color(0xFFB5C2D0), fontWeight: FontWeight.w500),
+        dropdownColor: _FriendUx.surface,
         isExpanded: true,
         decoration: const InputDecoration(
           labelText: 'Gym',
+          labelStyle: TextStyle(color: Color(0xFF9EACBD)),
+          floatingLabelStyle: TextStyle(color: Color(0xFFB5C2D0)),
           prefixIcon: Icon(Icons.location_on_outlined),
           border: OutlineInputBorder(),
         ),
         items: [
           const DropdownMenuItem<String>(
             value: '__all__',
-            child: Text('All Gyms'),
+            child: Text('All Gyms', style: TextStyle(color: Color(0xFFB5C2D0))),
           ),
           ...gyms.map(
             (gym) => DropdownMenuItem<String>(
               value: gym['id'],
-              child: Text(gym['name'] ?? 'Gym'),
+              child: Text(gym['name'] ?? 'Gym', style: const TextStyle(color: Color(0xFFB5C2D0))),
             ),
           ),
         ],
@@ -1378,6 +1410,14 @@ class _CopyableContainerTabState extends State<_CopyableContainerTab> {
                     ),
                   ),
                   selected: selected,
+                  selectedColor: const Color(0xFF283A48),
+                  backgroundColor: const Color(0xFF1B2530),
+                  labelStyle: TextStyle(
+                    color: selected
+                        ? const Color(0xFFD4E0EA)
+                        : const Color(0xFFADB9C6),
+                    fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
+                  ),
                   onSelected: (_) {
                     setState(() {
                       _selectedMuscle = label;
