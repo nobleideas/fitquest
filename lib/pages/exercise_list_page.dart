@@ -378,6 +378,8 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
                       const Text("Muscle: "),
                       const SizedBox(width: 16),
                       DropdownButton<String>(
+                         dropdownColor: _ExerciseListUx.raised,
+                         style: const TextStyle(color: _ExerciseListUx.ink, fontSize: 16),
                         value: primaryMuscleGroup,
                         items: const [
                           DropdownMenuItem(value: 'back', child: Text('Back')),
@@ -401,6 +403,8 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
                       const Text("Type: "),
                       const SizedBox(width: 16),
                       DropdownButton<String>(
+                         dropdownColor: _ExerciseListUx.raised,
+                         style: const TextStyle(color: _ExerciseListUx.ink, fontSize: 16),
                         value: type,
                         items: const [
                           DropdownMenuItem(value: 'push', child: Text('push')),
@@ -703,6 +707,8 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
                   ),
                   const SizedBox(height: 16),
                   DropdownButtonFormField<String>(
+                     dropdownColor: _ExerciseListUx.raised,
+                     style: const TextStyle(color: _ExerciseListUx.ink, fontSize: 16),
                     value: selectedType,
                     decoration: const InputDecoration(
                       labelText: "Exercise Type",
@@ -790,6 +796,8 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
                   const Text('Move to existing equipment/routine:'),
                   const SizedBox(height: 8),
                   DropdownButtonFormField<String>(
+                     dropdownColor: _ExerciseListUx.raised,
+                     style: const TextStyle(color: _ExerciseListUx.ink, fontSize: 16),
                     value: selectedEquipmentId,
                     isExpanded: true,
                     items: [

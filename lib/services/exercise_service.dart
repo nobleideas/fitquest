@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'video_compression_stub.dart' if (dart.library.js_interop) 'video_compression_web.dart' as compressor;
 import 'package:image_picker/image_picker.dart';
 import 'package:path/path.dart' as p;
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -449,29 +451,55 @@ class ExerciseService {
   }) async {
     final bucket = supabase.storage.from(_formVideoBucket);
 
-    final extension = p.extension(video.name).isNotEmpty
-        ? p.extension(video.name)
-        : '.mp4';
+    if (!kIsWeb) {
+      throw UnsupportedError('Automatic video compression requires the web app.');
+    }
 
-    final storagePath = 'exercise_$exerciseId/form$extension';
-    final bytes = await video.readAsBytes();
+    final originalBytes = await video.readAsBytes();
+    final originalMime = video.mimeType ??
+        (p.extension(video.name).toLowerCase() == '.mov'
+            ? 'video/quicktime'
+            : 'video/mp4');
+    final compressed = await compressor.compressFormVideo(originalBytes, originalMime);
+    final extension = compressed.mimeType == 'video/mp4' ? '.mp4' : '.webm';
 
+    // Use unique paths so a failed replacement never destroys the previous video.
+    final storagePath =
+        'exercise_$exerciseId/form_${DateTime.now().microsecondsSinceEpoch}$extension';
     await bucket.uploadBinary(
       storagePath,
-      bytes,
+      compressed.bytes,
       fileOptions: FileOptions(
-        upsert: true,
-        contentType: video.mimeType ?? 'video/mp4',
+        upsert: false,
+        contentType: compressed.mimeType,
       ),
     );
 
     final publicUrl = bucket.getPublicUrl(storagePath);
+    String? oldUrl;
+    try {
+      final previous = await supabase
+          .from('exercises')
+          .select('video_url')
+          .eq('id', exerciseId)
+          .maybeSingle();
+      oldUrl = _cleanNullableString(previous?['video_url']);
+      await supabase
+          .from('exercises')
+          .update({'video_url': publicUrl})
+          .eq('id', exerciseId);
+    } catch (_) {
+      // Leave the old database reference untouched if replacement fails.
+      try { await bucket.remove([storagePath]); } catch (_) {}
+      rethrow;
+    }
 
-    await supabase
-        .from('exercises')
-        .update({'video_url': publicUrl})
-        .eq('id', exerciseId);
-
+    if (oldUrl != null && oldUrl != publicUrl) {
+      final oldPath = _tryExtractStoragePathFromPublicUrl(oldUrl, _formVideoBucket);
+      if (oldPath != null) {
+        try { await bucket.remove([oldPath]); } catch (_) {}
+      }
+    }
     return publicUrl;
   }
 

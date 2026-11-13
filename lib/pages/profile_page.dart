@@ -797,6 +797,54 @@ class ProfilePageState extends State<ProfilePage> {
     }
   }
 
+  Future<void> _removeFriend(
+    BuildContext context,
+    String friendId,
+    String username,
+  ) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Remove Friend?'),
+        content: Text(
+          'Remove @$username from your friends? '
+          'You will no longer appear on each other’s friends lists.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            style: TextButton.styleFrom(foregroundColor: Colors.redAccent),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    try {
+      await supabase.rpc(
+        'remove_friend',
+        params: {'friend_user_id': friendId},
+      );
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('@$username removed from friends')),
+      );
+      refresh();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not remove friend: $e')),
+      );
+    }
+  }
+
   Widget _volumeBar(String label, double volume) {
     const double target = 25000.0;
 
@@ -1221,7 +1269,35 @@ class ProfilePageState extends State<ProfilePage> {
                             title: Text(uname, maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: const TextStyle(color: Color(0xFFF4F6FB))),
-                            trailing: const Icon(Icons.chevron_right),
+                            trailing: PopupMenuButton<String>(
+                              tooltip: 'Friend options',
+                              icon: const Icon(Icons.more_vert),
+                              onSelected: (value) {
+                                if (value == 'remove') {
+                                  _removeFriend(
+                                    context,
+                                    f['friend_id'].toString(),
+                                    uname,
+                                  );
+                                }
+                              },
+                              itemBuilder: (_) => const [
+                                PopupMenuItem<String>(
+                                  value: 'remove',
+                                  child: Row(
+                                    children: [
+                                      Icon(
+                                        Icons.person_remove_outlined,
+                                        color: Colors.redAccent,
+                                        size: 20,
+                                      ),
+                                      SizedBox(width: 10),
+                                      Text('Remove Friend'),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
                             onTap: () {
                               Navigator.push(
                                 context,

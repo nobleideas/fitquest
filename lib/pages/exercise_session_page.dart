@@ -7,6 +7,7 @@ import 'package:video_player/video_player.dart';
 
 import '../theme/fitquest_theme.dart';
 import '../services/exercise_service.dart';
+import '../services/video_upload_manager.dart';
 import '../services/session_service.dart';
 import '../services/muscle_exercise_position_service.dart';
 import '../services/workout_date_service.dart';
@@ -60,6 +61,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
 
   bool _isLoadingVideos = true;
   bool _isUploadingVideo = false;
+  final VideoUploadManager _videoUploads = VideoUploadManager.instance;
   bool _isRemovingVideo = false;
 
   String? _importedVideoUrl;
@@ -73,6 +75,17 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
     _workoutDateService.selectedDate.addListener(_onWorkoutDateChanged);
     _loadWorkoutHistory();
     _loadExerciseVideos();
+    _videoUploads.activeExercises.addListener(_onVideoUploadStateChanged);
+    _onVideoUploadStateChanged();
+  }
+
+  void _onVideoUploadStateChanged() {
+    if (!mounted) return;
+    final exerciseId = (widget.exercise['id'] ?? '').toString().trim();
+    final busy = _videoUploads.isUploading(exerciseId);
+    if (_isUploadingVideo != busy) {
+      setState(() => _isUploadingVideo = busy);
+    }
   }
 
   void _onWorkoutDateChanged() {
@@ -327,7 +340,17 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
           bestKeys.add(key);
         }
       }
-      // Include the overall best even when its historical position is unknown.
+      // The active workout day can supersede the historical overall best.
+      // A tie retains the existing historical record; only a strictly higher
+      // cumulative weight x reps volume earns the new overall-best highlight.
+      if (hasVolMap[activeKey] == true &&
+          (overallBestVolume == null ||
+              volMap[activeKey]! > overallBestVolume)) {
+        overallBestVolume = volMap[activeKey]!;
+        overallBestKey = activeKey;
+      }
+
+      // Include the overall best even when its exercise position is unknown.
       if (overallBestKey != null) bestKeys.add(overallBestKey);
       final referencePositions = bestVolumeByPosition.keys.toSet();
 
@@ -770,7 +793,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
       await controller.initialize();
       await controller.setVolume(1.0);
       await controller.setPlaybackSpeed(1.0);
-      await controller.setLooping(true);
+      await controller.setLooping(false);
       return controller;
     } catch (_) {
       await controller.dispose();
@@ -852,7 +875,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
       await previewController.initialize();
       await previewController.setVolume(1.0);
       await previewController.setPlaybackSpeed(1.0);
-      await previewController.setLooping(true);
+      await previewController.setLooping(false);
 
       await _disposeController(_userVideoController);
 
@@ -874,50 +897,51 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
     }
   }
 
-  Future<void> _uploadPickedVideo() async {
+  void _uploadPickedVideo() {
     final video = _pickedVideo;
     if (video == null) return;
 
     final exerciseId = (widget.exercise['id'] ?? '').toString().trim();
-    if (exerciseId.isEmpty) return;
+    if (exerciseId.isEmpty || _videoUploads.isUploading(exerciseId)) return;
+    if (_videoUploads.activeExercises.value.isNotEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Please wait for the current video upload to finish.'),
+      ));
+      return;
+    }
 
-    setState(() => _isUploadingVideo = true);
+    // Start the work in a singleton. Do not await it from this route.
+    // The global notice remains visible across navigation.
+    final upload = _videoUploads.start(
+      context: context,
+      exerciseId: exerciseId,
+      video: video,
+      exerciseName: (widget.exercise['name'] ?? 'Exercise').toString(),
+    );
+    setState(() => _pickedVideo = null);
+    _finishUploadOnPage(upload);
+  }
 
+  Future<void> _finishUploadOnPage(Future<String> upload) async {
     try {
-      final publicUrl = await exerciseService.uploadUserFormVideo(
-        exerciseId: exerciseId,
-        video: video,
-      );
-
+      final publicUrl = await upload;
+      if (!mounted) return;
       final controller = await _createNetworkController(publicUrl);
-      await _disposeController(_userVideoController);
-
       if (!mounted) {
         await controller?.dispose();
         return;
       }
-
+      await _disposeController(_userVideoController);
+      if (!mounted) {
+        await controller?.dispose();
+        return;
+      }
       setState(() {
         _userVideoUrl = publicUrl;
         _userVideoController = controller;
-        _pickedVideo = null;
       });
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Your form video was uploaded.'),
-        ),
-      );
-    } catch (e) {
-      if (!mounted) return;
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Upload failed: $e')),
-      );
-    } finally {
-      if (mounted) {
-        setState(() => _isUploadingVideo = false);
-      }
+    } catch (_) {
+      // The global notice reports failures even if this page was closed.
     }
   }
 
@@ -1091,6 +1115,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
   @override
   void dispose() {
     _workoutDateService.selectedDate.removeListener(_onWorkoutDateChanged);
+    _videoUploads.activeExercises.removeListener(_onVideoUploadStateChanged);
     weightController.dispose();
     repsController.dispose();
     userFormNotesController.dispose();
@@ -1335,7 +1360,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
               ...(_bestReferenceDayKeys.toList()
                     ..sort((a, b) => (positionByDayKey[a] ?? 0)
                         .compareTo(positionByDayKey[b] ?? 0)))
-                  .where((key) => !previousDayKeys
+                  .where((key) => key != _todayKey() && !previousDayKeys
                       .skip(_historyPage * _historyPageSize)
                       .take(_historyPageSize)
                       .contains(key))

@@ -1,20 +1,7 @@
+
 <!DOCTYPE html>
 <html>
-
 <head>
-  <!--
-    If you are serving your web app in a path other than the root, change the
-    href value below to reflect the base path you are serving from.
-
-    The path provided below has to start and end with a slash "/" in order for
-    it to work correctly.
-
-    For more details:
-    * https://developer.mozilla.org/en-US/docs/Web/HTML/Element/base
-
-    This is a placeholder for base href that will be replaced by the value of
-    the `--base-href` argument provided to `flutter build`.
-  -->
   <base href="$FLUTTER_BASE_HREF">
 
   <meta charset="UTF-8">
@@ -37,24 +24,32 @@
 </head>
 
 <body>
+  <!-- Load video compression before Flutter -->
+  <script src="fitquest_video_compressor.js"></script>
+
   <script src="flutter_bootstrap.js" async></script>
 
   <script>
-  if ("serviceWorker" in navigator) {
-    window.addEventListener("load", async function () {
-      try {
-        const reg = await navigator.serviceWorker.register("firebase-messaging-sw.js");
-        console.log("✅ firebase-messaging-sw.js registered:", reg.scope);
-      } catch (e) {
-        console.error("❌ Service worker registration failed:", e);
-      }
-    });
-  }
-</script>
+    if ("serviceWorker" in navigator) {
+      window.addEventListener("load", async function () {
+        try {
+          const reg = await navigator.serviceWorker.register(
+            "firebase-messaging-sw.js"
+          );
+          console.log(
+            "✅ firebase-messaging-sw.js registered:",
+            reg.scope
+          );
+        } catch (e) {
+          console.error(
+            "❌ Service worker registration failed:",
+            e
+          );
+        }
+      });
+    }
+  </script>
 
-
-<script src="fitquest_nutrition_scanner.js"></script>
-
+  <script src="fitquest_nutrition_scanner.js"></script>
 </body>
-
 </html>
