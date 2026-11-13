@@ -139,12 +139,12 @@ class FriendProfileService {
         (row['friend_id'] ?? row['id'] ?? '').toString() == friendUserId);
     if (!isAccepted) throw StateError('Only accepted friends can be viewed.');
 
-    final rows = await supabase
-        .from('food_consumptions')
-        .select('id, consumed_at, servings, food_items!inner(id, name, brand, calories, fat, carbs, protein, serving_amount, serving_unit)')
-        .eq('user_id', friendUserId)
-        .order('consumed_at', ascending: false)
-        .limit(1000);
+    // The RPC validates accepted friendship server-side and returns the same
+    // nested food_items structure expected by the friend Food Log tab.
+    final rows = await supabase.rpc(
+      'get_friend_food_log',
+      params: {'friend_user_id': friendUserId, 'max_rows': 1000},
+    );
     return _mapList(rows);
   }
 

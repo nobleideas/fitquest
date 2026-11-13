@@ -651,6 +651,21 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
     );
   }
 
+  // Dialog routes are built above the page's scoped Theme. Reapply the
+  // Meal Tracker palette inside the overlay so forms and menus stay dark.
+  Future<T?> _showDarkDialog<T>({
+    required BuildContext context,
+    required WidgetBuilder builder,
+  }) {
+    return showDialog<T>(
+      context: context,
+      builder: (dialogContext) => Theme(
+        data: _mealTrackerTheme(dialogContext),
+        child: builder(dialogContext),
+      ),
+    );
+  }
+
   Future<void> _openAddFoodDialog() async {
     final name = TextEditingController();
     final brand = TextEditingController();
@@ -665,7 +680,7 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
     bool saving = false;
     bool scanningNutrition = false;
 
-    await showDialog<void>(
+    await _showDarkDialog<void>(
       context: context,
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, setLocal) {
@@ -948,7 +963,7 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
 
     bool saving = false;
 
-    await showDialog<void>(
+    await _showDarkDialog<void>(
       context: context,
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, setLocal) {
@@ -1174,7 +1189,7 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
 
     bool saving = false;
 
-    await showDialog<void>(
+    await _showDarkDialog<void>(
       context: context,
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, setLocal) {
@@ -1368,7 +1383,7 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
     final searchController = TextEditingController();
     String query = '';
 
-    await showDialog<void>(
+    await _showDarkDialog<void>(
       context: context,
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, setLocal) {
@@ -1448,7 +1463,7 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                                       icon: const Icon(Icons.delete_outline),
                                       onPressed: () async {
                                         final confirmed =
-                                            await showDialog<bool>(
+                                            await _showDarkDialog<bool>(
                                           context: this.context,
                                           builder: (confirmContext) =>
                                               AlertDialog(
@@ -1546,7 +1561,7 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
     final searchController = TextEditingController();
     String query = '';
 
-    await showDialog<void>(
+    await _showDarkDialog<void>(
       context: context,
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, setLocal) {
@@ -1619,7 +1634,7 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                                             _foodDisplayName(food);
 
                                         final confirmed =
-                                            await showDialog<bool>(
+                                            await _showDarkDialog<bool>(
                                           context: this.context,
                                           builder: (confirmContext) =>
                                               AlertDialog(
@@ -1731,7 +1746,7 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
 
     bool saving = false;
 
-    await showDialog<void>(
+    await _showDarkDialog<void>(
       context: context,
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, setLocal) {
@@ -1943,7 +1958,7 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
       );
     }
 
-    await showDialog<void>(
+    await _showDarkDialog<void>(
       context: context,
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, setLocal) {
@@ -2130,7 +2145,7 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
       );
     }
 
-    await showDialog<void>(
+    await _showDarkDialog<void>(
       context: context,
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, setLocal) {
@@ -2316,17 +2331,6 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
 
       for (final item in summary.items) {
         buffer.writeln(_foodDisplayName(item.food));
-        buffer.writeln(
-          '${_formatNumber(item.servings)} serving'
-          '${item.servings == 1 ? '' : 's'}',
-        );
-        buffer.writeln('Calories: ${_formatNumber(item.calories)}');
-        buffer.writeln(
-          'Protein: ${_formatNumber(item.protein)}g   '
-          'Carbs: ${_formatNumber(item.carbs)}g   '
-          'Fat: ${_formatNumber(item.fat)}g',
-        );
-        buffer.writeln();
       }
 
       if (summaryIndex < ordered.length - 1) {
@@ -2351,7 +2355,7 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
 
     final selectedDays = <DateTime>{};
 
-    await showDialog<void>(
+    await _showDarkDialog<void>(
       context: context,
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, setLocal) {
@@ -2453,7 +2457,7 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
         ? item.food.name
         : '${item.food.name} • ${item.food.brand}';
 
-    final confirmed = await showDialog<bool>(
+    final confirmed = await _showDarkDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
         title: const Text('Remove consumed item?'),
@@ -2503,24 +2507,26 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 10),
         decoration: BoxDecoration(
-          color: Theme.of(context).colorScheme.surfaceContainerHighest,
+          color: const Color(0xFF121C29),
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: const Color(0xFF405268), width: 0.7),
+          border: Border.all(color: const Color(0xFF263548), width: 0.7),
         ),
         child: Column(
           children: [
             Text(
               _formatNumber(value),
               style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                    fontWeight: FontWeight.w800,
-                    color: const Color(0xFFE7EEF7),
+                    fontWeight: FontWeight.w700,
+                    color: const Color(0xFFCAD6E3),
                   ),
             ),
             const SizedBox(height: 5),
             Text(
               suffix.isEmpty ? label : '$label ($suffix)',
               textAlign: TextAlign.center,
-              style: Theme.of(context).textTheme.bodySmall,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: const Color(0xFF91A3B8),
+                  ),
             ),
           ],
         ),
@@ -2581,6 +2587,7 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                           style:
                               Theme.of(context).textTheme.titleMedium?.copyWith(
                                     fontWeight: FontWeight.bold,
+                                    color: const Color(0xFFD3DFEC),
                                   ),
                         ),
                       ),
@@ -2602,11 +2609,17 @@ class _MealTrackerPageState extends State<MealTrackerPage> {
                     children: [
                       Text(
                         '${_formatNumber(summary.calories)} cal',
-                        style: const TextStyle(fontWeight: FontWeight.w700),
+                        style: const TextStyle(
+                          color: Color(0xFFB5C2D0),
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
-                      Text('P ${_formatNumber(summary.protein)}g'),
-                      Text('C ${_formatNumber(summary.carbs)}g'),
-                      Text('F ${_formatNumber(summary.fat)}g'),
+                      Text('P ${_formatNumber(summary.protein)}g',
+                          style: const TextStyle(color: Color(0xFFB5C2D0))),
+                      Text('C ${_formatNumber(summary.carbs)}g',
+                          style: const TextStyle(color: Color(0xFFB5C2D0))),
+                      Text('F ${_formatNumber(summary.fat)}g',
+                          style: const TextStyle(color: Color(0xFFB5C2D0))),
                     ],
                   ),
                 ],
