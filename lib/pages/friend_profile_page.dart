@@ -707,27 +707,58 @@ class _HistoryTabState extends State<_HistoryTab> {
       return const Center(child: Text("No workout history found."));
     }
 
-    return ListView.separated(
-      padding: const EdgeInsets.fromLTRB(14, 4, 14, 20),
-      itemCount: history.length,
-      separatorBuilder: (_, __) => const SizedBox(height: 8),
-      itemBuilder: (context, i) {
-        final row = history[i];
-        final exercise = (row['exercise_name'] ?? '').toString();
-        final equipment = (row['equipment_name'] ?? '').toString();
-        final weight = row['weight'];
-        final reps = row['reps'];
-        final when = widget.fmtDateTime(row['created_at']);
+    // Group recorded sets by their LOCAL calendar day, matching Workout Summary.
+    final byDay = <DateTime, List<Map<String, dynamic>>>{};
+    for (final row in history) {
+      final local = _rowCreatedAtLocal(row);
+      if (local == null) continue;
+      final day = DateTime(local.year, local.month, local.day);
+      byDay.putIfAbsent(day, () => <Map<String, dynamic>>[]).add(row);
+    }
 
+    final days = byDay.keys.toList()..sort((a, b) => b.compareTo(a));
+    for (final rows in byDay.values) {
+      rows.sort((a, b) {
+        final aTime = _rowCreatedAtLocal(a);
+        final bTime = _rowCreatedAtLocal(b);
+        if (aTime == null && bTime == null) return 0;
+        if (aTime == null) return 1;
+        if (bTime == null) return -1;
+        return aTime.compareTo(bTime);
+      });
+    }
+
+    return ListView.builder(
+      padding: const EdgeInsets.fromLTRB(14, 4, 14, 20),
+      itemCount: days.length,
+      itemBuilder: (context, index) {
+        final day = days[index];
+        final sets = byDay[day]!;
         return Card(
-          child: ListTile(
-            title: Text(exercise),
-            subtitle: Text("$equipment\n$when"),
-            isThreeLine: true,
-            trailing: Text(
-              "${weight ?? ''} x ${reps ?? ''}",
+          child: ExpansionTile(
+            key: PageStorageKey<String>('friend-detailed-${day.toIso8601String()}'),
+            title: Text(
+              _formatDate(day),
               style: const TextStyle(fontWeight: FontWeight.bold),
             ),
+            subtitle: Text('${sets.length} ${sets.length == 1 ? "set" : "sets"}'),
+            children: [
+              for (final row in sets) ...[
+                const Divider(height: 1),
+                ListTile(
+                  title: Text((row['exercise_name'] ?? '').toString()),
+                  subtitle: Text(
+                    '${(row['equipment_name'] ?? '').toString()}\n'
+                    '${widget.fmtDateTime(row['created_at'])}',
+                  ),
+                  isThreeLine: true,
+                  trailing: Text(
+                    "${row['weight'] ?? ''} x ${row['reps'] ?? ''}",
+                    style: const TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ],
+            ],
           ),
         );
       },
@@ -1544,7 +1575,7 @@ class _CopyableContainerTabState extends State<_CopyableContainerTab> {
                         "$selectedCount selected",
                         style: const TextStyle(fontWeight: FontWeight.w600),
                       ),
-                      const Spacer(),
+                      const SizedBox(width: 16),
                       TextButton(
                         onPressed: _isAdding ? null : _selectAllVisible,
                         child: const Text("Select all"),

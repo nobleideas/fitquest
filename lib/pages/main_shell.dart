@@ -77,7 +77,13 @@ class _MainShellState extends State<MainShell> {
           ),
         ),
         body: IndexedStack(index: _index, children: _pages),
-        bottomNavigationBar: BottomNavigationBar(
+        bottomNavigationBar: Container(
+          decoration: const BoxDecoration(
+            border: Border(
+              top: BorderSide(color: Color(0xFF343D49), width: 1),
+            ),
+          ),
+          child: BottomNavigationBar(
             backgroundColor: FitQuestTheme.surface,
             type: BottomNavigationBarType.fixed,
             elevation: 0,
@@ -95,6 +101,7 @@ class _MainShellState extends State<MainShell> {
               ),
               BottomNavigationBarItem(icon: Icon(Icons.person), label: 'Profile'),
             ],
+          ),
         ),
       ),
     );

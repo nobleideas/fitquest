@@ -5,6 +5,96 @@ import '../services/equipment_service.dart';
 import '../services/workout_date_service.dart';
 import 'exercise_session_page.dart';
 
+// Scoped premium-dark styling for equipment and routine exercise lists.
+// Does not change the theme of the workout session page or other screens.
+class _ExerciseListUx {
+  static const background = Color(0xFF10101B);
+  static const surface = Color(0xFF1D1930);
+  static const raised = Color(0xFF29233F);
+  static const accent = Color(0xFFA78BFA);
+  static const ink = Color(0xFFF4F2FA);
+  static const muted = Color(0xFFAAA4BD);
+
+  static ThemeData theme(BuildContext context) {
+    final base = Theme.of(context);
+    final scheme = ColorScheme.fromSeed(
+      seedColor: accent,
+      brightness: Brightness.dark,
+      surface: surface,
+    ).copyWith(
+      primary: accent,
+      onPrimary: background,
+      surface: surface,
+      onSurface: ink,
+      surfaceContainerHighest: raised,
+      secondaryContainer: raised,
+      onSecondaryContainer: ink,
+      outline: const Color(0xFF514768),
+    );
+    return base.copyWith(
+      brightness: Brightness.dark,
+      scaffoldBackgroundColor: background,
+      colorScheme: scheme,
+      textTheme: base.textTheme.apply(bodyColor: ink, displayColor: ink),
+      primaryTextTheme: base.primaryTextTheme.apply(bodyColor: ink, displayColor: ink),
+      appBarTheme: const AppBarTheme(
+        backgroundColor: background,
+        foregroundColor: ink,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        titleTextStyle: TextStyle(
+          color: ink, fontSize: 20, fontWeight: FontWeight.w800,
+          letterSpacing: -0.4,
+        ),
+      ),
+      listTileTheme: const ListTileThemeData(
+        iconColor: accent,
+        textColor: ink,
+        contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 7),
+      ),
+      dialogTheme: const DialogThemeData(
+        backgroundColor: surface,
+        titleTextStyle: TextStyle(color: ink, fontSize: 20, fontWeight: FontWeight.w700),
+        contentTextStyle: TextStyle(color: ink, fontSize: 15),
+      ),
+      popupMenuTheme: const PopupMenuThemeData(
+        color: surface,
+        textStyle: TextStyle(color: ink),
+      ),
+      dropdownMenuTheme: const DropdownMenuThemeData(
+        textStyle: TextStyle(color: ink),
+      ),
+      dividerColor: const Color(0xFF39314F),
+      inputDecorationTheme: InputDecorationTheme(
+        labelStyle: const TextStyle(color: muted),
+        hintStyle: const TextStyle(color: muted),
+        floatingLabelStyle: const TextStyle(color: accent),
+        filled: true,
+        fillColor: surface,
+        border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: const BorderSide(color: Color(0xFF514768)),
+        ),
+      ),
+      elevatedButtonTheme: ElevatedButtonThemeData(
+        style: ElevatedButton.styleFrom(
+          backgroundColor: accent,
+          foregroundColor: background,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(13)),
+        ),
+      ),
+      textButtonTheme: TextButtonThemeData(
+        style: TextButton.styleFrom(foregroundColor: accent),
+      ),
+      floatingActionButtonTheme: const FloatingActionButtonThemeData(
+        backgroundColor: accent,
+        foregroundColor: background,
+      ),
+    );
+  }
+}
+
 class ExerciseListPage extends StatefulWidget {
   final String equipmentId;
   final String equipmentName;
@@ -30,6 +120,37 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
   final _exerciseService = ExerciseService();
   final _equipmentService = EquipmentService();
   final _workoutDateService = WorkoutDateService.instance;
+
+  // Dialogs and bottom sheets live in Navigator overlays outside the page's
+  // Theme widget. Explicitly wrap their builders so they stay dark purple.
+  Future<T?> _showThemedDialog<T>({
+    required BuildContext context,
+    required WidgetBuilder builder,
+  }) {
+    return showDialog<T>(
+      context: context,
+      builder: (overlayContext) => Theme(
+        data: _ExerciseListUx.theme(context),
+        child: builder(overlayContext),
+      ),
+    );
+  }
+
+  Future<T?> _showThemedBottomSheet<T>({
+    required BuildContext context,
+    required WidgetBuilder builder,
+    bool showDragHandle = false,
+  }) {
+    return showModalBottomSheet<T>(
+      context: context,
+      showDragHandle: showDragHandle,
+      backgroundColor: _ExerciseListUx.surface,
+      builder: (overlayContext) => Theme(
+        data: _ExerciseListUx.theme(context),
+        child: builder(overlayContext),
+      ),
+    );
+  }
 
   Set<String> exercisesWithSessionsToday = {};
   final Set<String> _sourceExercisesWithVideo = {};
@@ -235,7 +356,7 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
     String primaryMuscleGroup = 'back';
     String type = 'push';
 
-    await showDialog(
+    await _showThemedDialog(
       context: context,
       builder: (_) {
         return StatefulBuilder(
@@ -390,7 +511,7 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
 
     final selected = <int>{};
 
-    final confirmed = await showDialog<bool>(
+    final confirmed = await _showThemedDialog<bool>(
       context: context,
       builder: (_) {
         return StatefulBuilder(
@@ -522,7 +643,7 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
       return;
     }
 
-    final choice = await showModalBottomSheet<String>(
+    final choice = await _showThemedBottomSheet<String>(
       context: context,
       showDragHandle: true,
       builder: (_) {
@@ -561,7 +682,7 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
     final controller = TextEditingController(text: currentName);
     String selectedType = currentType == 'pull' ? 'pull' : 'push';
 
-    await showDialog(
+    await _showThemedDialog(
       context: context,
       builder: (_) {
         return StatefulBuilder(
@@ -652,7 +773,7 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
     String? selectedEquipmentId;
     final newEquipmentController = TextEditingController();
 
-    await showDialog(
+    await _showThemedDialog(
       context: context,
       builder: (_) {
         return StatefulBuilder(
@@ -790,7 +911,7 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
       return;
     }
 
-    final confirm = await showDialog<bool>(
+    final confirm = await _showThemedDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
         title: const Text("Delete Exercise?"),
@@ -850,7 +971,9 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
     final emptyText = "No exercises available for this $_kindTitle.";
 
     final backlogDate = _workoutDateService.selectedDate.value;
-    return Scaffold(
+    return Theme(
+      data: _ExerciseListUx.theme(context),
+      child: Scaffold(
       appBar: AppBar(title: Text(widget.equipmentName)),
       body: Column(
         children: [
@@ -888,7 +1011,15 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
                       final hasSessionToday = exercisesWithSessionsToday.contains(exerciseId);
                       final hasVideo = _hasFormVideo(exercise);
 
-                      return ListTile(
+                       return Card(
+                         color: _ExerciseListUx.surface,
+                         elevation: 0,
+                         margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+                         shape: RoundedRectangleBorder(
+                           borderRadius: BorderRadius.circular(16),
+                           side: const BorderSide(color: Color(0xFF2C3547)),
+                         ),
+                         child: ListTile(
                         title: Text(
                           exercise['name'],
                           style: hasSessionToday
@@ -898,7 +1029,10 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
                                 )
                               : null,
                         ),
-                        subtitle: Text("${exercise['primary_muscle_group']} • ${exercise['type']}"),
+                        subtitle: Text(
+                           "${exercise['primary_muscle_group']} • ${exercise['type']}",
+                           style: const TextStyle(color: _ExerciseListUx.muted),
+                         ),
                         trailing: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
@@ -933,6 +1067,7 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
                           );
                           await _loadExercises();
                         },
+                         ),
                       );
                     },
                   ),
@@ -942,6 +1077,7 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
       floatingActionButton: FloatingActionButton(
         onPressed: _showAddOptionsIfRoutine,
         child: const Icon(Icons.add),
+      ),
       ),
     );
   }

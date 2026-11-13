@@ -1872,9 +1872,12 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
           Navigator.of(context).pop(result);
         }
       },
-      child: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: ListView(
+      child: Column(
+        children: [
+          Expanded(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+              child: ListView(
           children: [
             // Home actions: descriptive labels on the left, buttons on the right.
             Column(
@@ -2007,11 +2010,11 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
                                             .bodySmall
                                             ?.copyWith(
                                               fontWeight: FontWeight.w700,
-                                              color: Theme.of(context)
-                                                  .colorScheme
-                                                  .primary,
+                                              color: const Color(0xFF78E4C4),
                                               decoration:
                                                   TextDecoration.underline,
+                                              decorationColor:
+                                                  const Color(0xFF78E4C4),
                                             ),
                                       ),
                                     ),
@@ -2072,7 +2075,10 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
                 );
               }).toList(),
           ],
-        ),
+              ),
+            ),
+          ),
+        ],
       ),
         ),
       ),
