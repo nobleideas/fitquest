@@ -42,7 +42,7 @@ class SuggestionService {
       );
     }
 
-    final totalExercisesTarget = (minutes ~/ 5).clamp(1, 100);
+    final totalExercisesTarget = (minutes ~/ 10).clamp(1, 100);
 
     final SuggestedDayType dayType =
         (randomize && fixedDayTypeForRandomize != null)

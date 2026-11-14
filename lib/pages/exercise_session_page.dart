@@ -1,4 +1,5 @@
 import 'dart:io' show File;
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -38,12 +39,14 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
   String? todayDayKey;
   List<String> previousDayKeys = []; // All earlier days, newest first.
   int _historyPage = 0;
+  String? _selectedChartDayKey;
   static const int _historyPageSize = 4;
   int? _currentPosition;
   final _positionService = MuscleExercisePositionService();
   Set<String> _bestReferenceDayKeys = <String>{};
   Set<int> _referencePositions = <int>{};
   String? _overallBestDayKey;
+  double? _overallLongestHoldSeconds;
   bool _isLoadingHistory = true;
   int _historyRequest = 0;
   Map<String, List<Map<String, dynamic>>> sessionsByDayKey = {};
@@ -154,6 +157,92 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
         : value.toStringAsFixed(2).replaceFirst(RegExp(r'0+$'), '').replaceFirst(RegExp(r'\.$'), '');
   }
 
+  // Compare only sets recorded with the currently selected measurement.
+  // Old weight/reps records remain in history, but cannot become timed PRs.
+  bool _matchesPerformanceMetric(Map<String, dynamic> session) =>
+      (session['metric_type'] ?? 'reps').toString() == _selectedMetricType &&
+      (session['load_type'] ?? 'weight').toString() == _selectedLoadType;
+
+  double _comparableMetricValue(Map<String, dynamic> session) {
+    final value = _sessionMetricValue(session);
+    return _selectedMetricType == 'minutes' ? value * 60 : value;
+  }
+
+  // Keep weight/reps volume unchanged. Timed workouts use total duration
+  // across matching sets; a longest uninterrupted hold is tracked separately.
+  double? _dayPerformance(List<Map<String, dynamic>> sessions) {
+    final comparable = sessions.where(_matchesPerformanceMetric).toList();
+    if (comparable.isEmpty) return null;
+    if (_selectedLoadType == 'weight' && _selectedMetricType == 'reps') {
+      return comparable.fold<double>(0, (sum, row) =>
+          sum + _numToDouble(row['weight']) * _sessionMetricValue(row));
+    }
+    if (_selectedMetricType == 'seconds' || _selectedMetricType == 'minutes') {
+      return comparable.fold<double>(0, (sum, row) =>
+          sum + _comparableMetricValue(row));
+    }
+    // Preserve the existing single-set benchmark for non-timed metrics.
+    var best = 0.0;
+    for (final row in comparable) {
+      final value = _comparableMetricValue(row);
+      if (value > best) best = value;
+    }
+    return best;
+  }
+
+  double? _longestHoldForDay(List<Map<String, dynamic>> sessions) {
+    if (_selectedMetricType != 'seconds' && _selectedMetricType != 'minutes') {
+      return null;
+    }
+    double? longest;
+    for (final row in sessions.where(_matchesPerformanceMetric)) {
+      final seconds = _comparableMetricValue(row);
+      if (longest == null || seconds > longest) longest = seconds;
+    }
+    return longest;
+  }
+
+  String get _performanceLabel {
+    if (_selectedLoadType == 'weight' && _selectedMetricType == 'reps') {
+      return 'VOLUME';
+    }
+    switch (_selectedMetricType) {
+      case 'seconds':
+      case 'minutes': return 'DURATION';
+      case 'miles': return 'DISTANCE';
+      default: return 'REPS';
+    }
+  }
+
+  String _performanceValue(double value) {
+    if (_selectedLoadType == 'weight' && _selectedMetricType == 'reps') {
+      return value.toStringAsFixed(0);
+    }
+    if (_selectedMetricType == 'minutes') {
+      // Duration benchmarks are stored internally in seconds for comparison.
+      // Display them in the unit selected by the user.
+      return '${_formatMetricValue(value / 60)} min';
+    }
+    if (_selectedMetricType == 'seconds') {
+      return '${_formatMetricValue(value)} sec';
+    }
+    if (_selectedMetricType == 'miles') return '${_formatMetricValue(value)} mi';
+    return '${_formatMetricValue(value)} reps';
+  }
+
+  // Difficulty is an independent record: level 7 for two minutes must not
+  // be compared by multiplying 7 x 2 against level 3 for five minutes.
+  double? _highestLevelForDay(List<Map<String, dynamic>> sessions) {
+    if (_selectedLoadType != 'level') return null;
+    final matching = sessions.where(_matchesPerformanceMetric);
+    double? highest;
+    for (final row in matching) {
+      final level = _numToDouble(row['weight']);
+      if (highest == null || level > highest) highest = level;
+    }
+    return highest;
+  }
+
   // The most recent saved set is the preference for this exercise.
   // A new exercise keeps the default Weight + Reps.
   void _restoreMetricPreference(List<Map<String, dynamic>> sessions) {
@@ -261,7 +350,8 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
         }
       }
 
-      final currentPosition = await _resolveCurrentPosition(
+      // Begin current-position work concurrently with the history fetch.
+      final currentPositionFuture = _resolveCurrentPosition(
           user.id, exerciseId, activeDate);
       final rows = await _fetchAllExerciseSessions(
           user.id, exerciseId, activeDate);
@@ -275,6 +365,62 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
       }
       map.putIfAbsent(activeKey, () => []);
 
+      // First paint: show saved workout days immediately after the history
+      // query, without waiting for legacy-order repairs or position lookups.
+      // Performance is calculated from matching metric types, so the initial
+      // cards contain real sets without mixing incompatible measurements.
+      final immediateKeys = map.keys
+          .where((key) => key.compareTo(activeKey) < 0)
+          .toList()..sort((a, b) => b.compareTo(a));
+      final immediateVolume = <String, double>{};
+      final immediateHasVolume = <String, bool>{};
+      for (final entry in map.entries) {
+        final performance = _dayPerformance(entry.value);
+        final volume = performance ?? 0.0;
+        final hasVolume = performance != null;
+        immediateVolume[entry.key] = volume;
+        immediateHasVolume[entry.key] = hasVolume;
+      }
+      final immediateLongestHold = map.values
+          .map(_longestHoldForDay)
+          .whereType<double>()
+          .fold<double?>(null, (best, value) =>
+              best == null || value > best ? value : best);
+      String? immediateBestKey;
+      double? immediateBestVolume;
+      for (final key in immediateKeys) {
+        if (immediateHasVolume[key] != true) continue;
+        final volume = immediateVolume[key]!;
+        if (immediateBestVolume == null || volume > immediateBestVolume) {
+          immediateBestVolume = volume;
+          immediateBestKey = key;
+        }
+      }
+      if (immediateHasVolume[activeKey] == true &&
+          (immediateBestVolume == null ||
+              immediateVolume[activeKey]! > immediateBestVolume)) {
+        immediateBestKey = activeKey;
+      }
+      if (mounted && request == _historyRequest && _todayKey() == activeKey) {
+        setState(() {
+          todayDayKey = map[activeKey]!.isNotEmpty ? activeKey : null;
+          previousDayKeys = immediateKeys;
+          sessionsByDayKey = Map.of(map);
+          volumeByDayKey = immediateVolume;
+          hasVolumeByDayKey = immediateHasVolume;
+          positionByDayKey = {};
+          _bestReferenceDayKeys = immediateBestKey == null
+              ? <String>{} : <String>{immediateBestKey};
+          _referencePositions = {};
+          _overallBestDayKey = immediateBestKey;
+          _overallLongestHoldSeconds = immediateLongestHold;
+          if (_historyPage * _historyPageSize >= immediateKeys.length) {
+            _historyPage = 0;
+          }
+          _isLoadingHistory = false;
+        });
+      }
+
       // Historical sessions may predate persistent exercise_order. Backfill
       // only days that need it, and re-read the affected exercise's sets.
       for (final key in map.keys.toList()) {
@@ -285,35 +431,49 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
         map[key] = await sessionService.getSessionsForDate(exerciseId, day);
       }
 
+      final currentPosition = await currentPositionFuture;
       final priorKeys = map.keys.where((key) => key.compareTo(activeKey) < 0)
           .toList()..sort((a, b) => b.compareTo(a));
       final volMap = <String, double>{};
       final hasVolMap = <String, bool>{};
       final positionMap = <String, int>{};
+      // Fetch historical positions concurrently in small batches instead of
+      // waiting for a network round-trip for every single workout day.
+      // Keep the batch bounded to avoid flooding Supabase on long histories.
       final positionCache = <String, Map<String, int>>{};
-      for (final entry in map.entries) {
-        var volume = 0.0;
-        var hasVolume = false;
-        for (final session in entry.value) {
-          if ((session['metric_type'] ?? 'reps').toString() == 'reps' &&
-              (session['load_type'] ?? 'weight').toString() == 'weight') {
-            hasVolume = true;
-            volume += _numToDouble(session['weight']) *
-                _sessionMetricValue(session);
-          }
+      final positionKeys = map.entries
+          .where((entry) => entry.value.isNotEmpty)
+          .map((entry) => entry.key)
+          .toList();
+      const positionBatchSize = 6;
+      for (var i = 0; i < positionKeys.length; i += positionBatchSize) {
+        final batch = positionKeys.skip(i).take(positionBatchSize).toList();
+        final positions = await Future.wait(batch.map((key) =>
+            _positionService.positionsForDay(_dateFromDayKey(key))));
+        for (var j = 0; j < batch.length; j++) {
+          positionCache[batch[j]] = positions[j];
         }
+      }
+      for (final entry in map.entries) {
+        final performance = _dayPerformance(entry.value);
+        final volume = performance ?? 0.0;
+        final hasVolume = performance != null;
         volMap[entry.key] = volume;
         hasVolMap[entry.key] = hasVolume;
         if (entry.value.isNotEmpty) {
-          final day = _dateFromDayKey(entry.key);
-          positionCache[entry.key] = await _positionService.positionsForDay(day);
-          final position = positionCache[entry.key]![exerciseId];
+          final position = positionCache[entry.key]?[exerciseId];
           if (position != null) positionMap[entry.key] = position;
         }
       }
 
-      // Volume is the primary benchmark, independent of exercise order.
-      // Also retain the best volume for each muscle-group position.
+      final overallLongestHold = map.values
+          .map(_longestHoldForDay)
+          .whereType<double>()
+          .fold<double?>(null, (best, value) =>
+              best == null || value > best ? value : best);
+
+      // Compare the active measurement independently of exercise order.
+      // Also retain the best matching performance at each position.
       final bestVolumeByPosition = <int, double>{};
       double? overallBestVolume;
       String? overallBestKey;
@@ -342,7 +502,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
       }
       // The active workout day can supersede the historical overall best.
       // A tie retains the existing historical record; only a strictly higher
-      // cumulative weight x reps volume earns the new overall-best highlight.
+      // matching performance earns the new overall-best highlight.
       if (hasVolMap[activeKey] == true &&
           (overallBestVolume == null ||
               volMap[activeKey]! > overallBestVolume)) {
@@ -368,6 +528,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
         _bestReferenceDayKeys = bestKeys;
         _referencePositions = referencePositions;
         _overallBestDayKey = overallBestKey;
+        _overallLongestHoldSeconds = overallLongestHold;
         if (_historyPage * _historyPageSize >= priorKeys.length) {
           _historyPage = 0;
         }
@@ -695,7 +856,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
                 style: theme.textTheme.titleSmall),
             if (isBestMatch)
               Text(isOverallBest
-                  ? 'OVERALL BEST VOLUME'
+                  ? 'OVERALL BEST $_performanceLabel'
                   : 'BEST AT THIS POSITION',
                   style: theme.textTheme.labelMedium?.copyWith(
                     color: theme.colorScheme.primary,
@@ -708,7 +869,16 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
                     fontWeight: FontWeight.bold,
                   )),
             if (showVolume)
-              Text('Volume: ${volume.toStringAsFixed(0)}',
+              Text('${_performanceLabel == 'VOLUME' ? 'Volume' : _performanceLabel == 'DURATION' ? 'Total duration' : 'Best $_performanceLabel'}: ${_performanceValue(volume)}',
+                  style: FitQuestTheme.dark.textTheme.bodySmall),
+            if (_longestHoldForDay(sessions) != null)
+              Text(
+                'Longest hold: ${_performanceValue(_longestHoldForDay(sessions)!)}'
+                '${_longestHoldForDay(sessions) == _overallLongestHoldSeconds ? '  •  PERSONAL BEST' : ''}',
+                style: FitQuestTheme.dark.textTheme.bodySmall,
+              ),
+            if (_highestLevelForDay(sessions) != null)
+              Text('Highest level: ${_formatMetricValue(_highestLevelForDay(sessions)!)}',
                   style: FitQuestTheme.dark.textTheme.bodySmall),
             if (position != null)
               Text(_positionLabel(position),
@@ -768,6 +938,87 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
                   ),
                 );
               }).toList(),
+      ),
+    );
+  }
+
+  // Chronological performance chart. Uses the same metric-filtered daily
+  // values as the history cards; no inferred positions for legacy records.
+  Widget _buildProgressChart() {
+    final keys = volumeByDayKey.keys
+        .where((key) => hasVolumeByDayKey[key] == true)
+        .toList()..sort();
+    if (keys.isEmpty) return const SizedBox.shrink();
+
+    final values = keys.map((key) => volumeByDayKey[key]!).toList();
+    final best = values.reduce(math.max);
+    final selectedKey = keys.contains(_selectedChartDayKey)
+        ? _selectedChartDayKey! : keys.last;
+    final selectedIndex = keys.indexOf(selectedKey);
+    final selectedPosition = positionByDayKey[selectedKey];
+    final selectedSessions = sessionsByDayKey[selectedKey] ?? const <Map<String, dynamic>>[];
+    final pointWidth = 74.0;
+    final plotWidth = math.max(300.0, keys.length * pointWidth + 36);
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Exercise progress', style: FitQuestTheme.dark.textTheme.titleMedium),
+            const SizedBox(height: 4),
+            Text('$_performanceLabel over time • Order = position in muscle-group workout',
+                style: FitQuestTheme.dark.textTheme.bodySmall),
+            const SizedBox(height: 12),
+            LayoutBuilder(builder: (context, constraints) {
+              return SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                reverse: true,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTapDown: (details) {
+                    final index = ((details.localPosition.dx - 18) / pointWidth)
+                        .round().clamp(0, keys.length - 1);
+                    setState(() => _selectedChartDayKey = keys[index]);
+                  },
+                  child: CustomPaint(
+                    size: Size(math.max(plotWidth, constraints.maxWidth), 224),
+                    painter: _ExerciseProgressPainter(
+                      values: values,
+                      positions: keys.map((key) => positionByDayKey[key]).toList(),
+                      dates: keys.map((key) => _dateFromDayKey(key)).toList(),
+                      selectedIndex: selectedIndex,
+                      bestValue: best,
+                      accent: FitQuestTheme.dark.colorScheme.primary,
+                    ),
+                  ),
+                ),
+              );
+            }),
+            const SizedBox(height: 10),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: FitQuestTheme.dark.colorScheme.primary.withValues(alpha: 0.35)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('${_formatDate(_dateFromDayKey(selectedKey))}  •  ${_performanceValue(values[selectedIndex])}',
+                      style: FitQuestTheme.dark.textTheme.titleSmall),
+                  Text('Muscle-group order: ${selectedPosition == null ? 'Not recorded' : _positionLabel(selectedPosition)}  •  ${selectedSessions.length} sets${values[selectedIndex] == best ? '  •  Best performance' : ''}',
+                      style: FitQuestTheme.dark.textTheme.bodySmall),
+                ],
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text('Tap a point to inspect it. Swipe horizontally for older workouts. An em dash means order was not recorded.',
+                style: FitQuestTheme.dark.textTheme.bodySmall),
+          ],
+        ),
       ),
     );
   }
@@ -975,7 +1226,9 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
 
     final confirm = await showDialog<bool>(
       context: context,
-      builder: (_) => AlertDialog(
+      builder: (_) => Theme(
+        data: FitQuestTheme.dark,
+        child: AlertDialog(
         title: const Text('Remove your form video?'),
         content: const Text(
           'This removes only your uploaded video. '
@@ -991,6 +1244,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
             child: const Text('Remove'),
           ),
         ],
+        ),
       ),
     );
 
@@ -1214,6 +1468,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
                     onChanged: (checked) {
                       if (checked == true) {
                         setState(() { _selectedLoadType = type; _metricPreferenceLoaded = true; });
+                        _loadWorkoutHistory();
                       }
                     },
                   ),
@@ -1246,6 +1501,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
                     onChanged: (checked) {
                       if (checked == true) {
                         setState(() { _selectedMetricType = type; _metricPreferenceLoaded = true; });
+                        _loadWorkoutHistory();
                       }
                     },
                   ),
@@ -1311,6 +1567,10 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
 
             const SizedBox(height: 20),
 
+            // ----------------- Historical progress chart -----------------
+            _buildProgressChart(),
+            const SizedBox(height: 20),
+
             // ----------------- Paged Previous Days -----------------
             const FitQuestSectionHeader(
               title: 'Previous days',
@@ -1320,9 +1580,9 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
             Text(
               isBacklogging
                   ? 'Earlier workout days before the selected backlog date. '
-                    'Highest volume is highlighted; position-specific bests are also marked.'
+                    'Best performance for the selected metric is highlighted; position-specific bests are also marked.'
                   : 'Browse all previous workout days, four at a time. '
-                    'Highest volume is highlighted; position-specific bests are also marked.',
+                    'Best performance for the selected metric is highlighted; position-specific bests are also marked.',
               style: FitQuestTheme.dark.textTheme.bodySmall,
             ),
             const SizedBox(height: 12),
@@ -1382,7 +1642,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
                         }),
                         icon: const Icon(Icons.emoji_events_outlined),
                         label: Text(key == _overallBestDayKey
-                             ? 'Jump to overall best volume'
+                             ? 'Jump to overall best ${_performanceLabel.toLowerCase()}'
                              : 'Jump to best ${positionByDayKey[key] == null ? 'exercise' : _positionLabel(positionByDayKey[key]!)} day'),
                       )),
             ],
@@ -1571,4 +1831,79 @@ if ((_importedVideoUrl ?? '').trim().isNotEmpty &&
     ),
     );
   }
+}
+
+
+class _ExerciseProgressPainter extends CustomPainter {
+  final List<double> values;
+  final List<int?> positions;
+  final List<DateTime> dates;
+  final int selectedIndex;
+  final double bestValue;
+  final Color accent;
+
+  const _ExerciseProgressPainter({
+    required this.values,
+    required this.positions,
+    required this.dates,
+    required this.selectedIndex,
+    required this.bestValue,
+    required this.accent,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (values.isEmpty) return;
+    const left = 18.0;
+    const step = 74.0;
+    const top = 20.0;
+    const bottom = 151.0;
+    final maximum = bestValue <= 0 ? 1.0 : bestValue * 1.12;
+    double y(double v) => bottom - (v / maximum) * (bottom - top);
+    final grid = Paint()..color = Colors.white.withValues(alpha: 0.12)..strokeWidth = 1;
+    for (var i = 0; i <= 3; i++) {
+      final yy = top + (bottom - top) * i / 3;
+      canvas.drawLine(Offset(0, yy), Offset(size.width, yy), grid);
+    }
+    final line = Paint()..color = accent..strokeWidth = 2.5..style = PaintingStyle.stroke;
+    final path = Path();
+    for (var i = 0; i < values.length; i++) {
+      final x = left + i * step;
+      if (i == 0) { path.moveTo(x, y(values[i])); }
+      else { path.lineTo(x, y(values[i])); }
+    }
+    canvas.drawPath(path, line);
+    for (var i = 0; i < values.length; i++) {
+      final x = left + i * step;
+      final yy = y(values[i]);
+      final isSelected = i == selectedIndex;
+      final isBest = values[i] == bestValue;
+      canvas.drawCircle(Offset(x, yy), isSelected ? 6.5 : 4.5,
+          Paint()..color = isBest ? const Color(0xFFFFD166) : accent);
+      if (isSelected) {
+        canvas.drawCircle(Offset(x, yy), 9,
+            Paint()..color = accent.withValues(alpha: 0.55)..style = PaintingStyle.stroke..strokeWidth = 2);
+      }
+      final d = dates[i];
+      _label(canvas, '${d.month}/${d.day}', Offset(x, 166), Colors.white70, 11);
+      _label(canvas, positions[i] == null ? '—' : '#${positions[i]}',
+          Offset(x, 190), Colors.white, 12);
+    }
+    _label(canvas, 'DATE', const Offset(18, 216), Colors.white54, 9, center: false);
+    _label(canvas, 'ORDER', const Offset(70, 216), Colors.white54, 9, center: false);
+  }
+
+  void _label(Canvas canvas, String value, Offset at, Color color, double size,
+      {bool center = true}) {
+    final tp = TextPainter(
+      text: TextSpan(text: value, style: TextStyle(color: color, fontSize: size)),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    tp.paint(canvas, Offset(center ? at.dx - tp.width / 2 : at.dx, at.dy));
+  }
+
+  @override
+  bool shouldRepaint(covariant _ExerciseProgressPainter old) =>
+      old.selectedIndex != selectedIndex || old.values != values ||
+      old.positions != positions || old.dates != dates;
 }
