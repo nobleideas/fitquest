@@ -1607,23 +1607,6 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
               ],
             ),
             const SizedBox(height: 10),
-            Center(
-              child: OutlinedButton.icon(
-                icon: const Icon(Icons.shuffle, size: 18),
-                label: const Text('Randomize'),
-                onPressed: _isSuggesting || s.exercises.isEmpty
-                    ? null
-                    : () async {
-                        await _buildSuggestedRoutine(
-                          minutes: s.minutes,
-                          choice: SuggestedDayTypeChoice
-                              .auto, // ignored during randomize; type stays fixed
-                          randomize: true,
-                        );
-                      },
-              ),
-            ),
-            const SizedBox(height: 10),
             if (s.exercises.isEmpty)
               Text(s.message ?? 'No suggestions available.')
             else
