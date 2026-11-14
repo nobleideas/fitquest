@@ -1,23 +1,21 @@
 import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
-
 import 'exercise_service.dart';
 
-/// Singleton: uploads continue when users navigate between FitQuest pages.
-/// The queue is in memory and does not survive closing/reloading the web app.
+/// Singleton: uploads continue while navigating between FitQuest pages.
+/// Jobs are in memory and do not survive closing or reloading the web app.
 class VideoUploadManager {
   VideoUploadManager._();
   static final VideoUploadManager instance = VideoUploadManager._();
 
-  /// Includes queued and currently uploading exercises.
   final ValueNotifier<Map<String, bool>> activeExercises =
       ValueNotifier<Map<String, bool>>(<String, bool>{});
-
   final List<_VideoJob> _queue = <_VideoJob>[];
   bool _processing = false;
   OverlayEntry? _notice;
+  OverlayState? _rootOverlay;
+  Timer? _hideTimer;
   double _top = 90;
   double _left = 12;
   final ValueNotifier<_UploadNotice> _noticeState = ValueNotifier(
@@ -37,59 +35,75 @@ class VideoUploadManager {
       throw StateError('A video for this exercise is already uploading or queued.');
     }
 
+    // Keep the root overlay so a completion message can be shown even after
+    // the exercise page that started this upload has been popped.
+    _rootOverlay = Overlay.of(context, rootOverlay: true);
     final completer = Completer<String>();
     _queue.add(_VideoJob(exerciseId, video, exerciseName, completer));
     activeExercises.value = {...activeExercises.value, exerciseId: true};
-    _showNotice(context);
-    _updateQueuedNotice();
+
+    _showMessage(
+      'Uploading video for "$exerciseName". You can continue using FitQuest.',
+      busy: true,
+      duration: const Duration(seconds: 4),
+    );
     if (!_processing) unawaited(_processQueue());
     return completer.future;
-  }
-
-  void _updateQueuedNotice() {
-    if (_processing) return;
-    _noticeState.value = _UploadNotice(
-      'Video uploads queued: ${_queue.length}. Keep FitQuest open and visible.',
-      true,
-    );
   }
 
   Future<void> _processQueue() async {
     if (_processing) return;
     _processing = true;
-    while (_queue.isNotEmpty) {
-      final job = _queue.removeAt(0);
-      final remaining = _queue.length;
-      _noticeState.value = _UploadNotice(
-        'Uploading "${job.exerciseName}"${remaining > 0 ? ' ($remaining waiting)' : ''}. '
-        'You can navigate FitQuest. Keep the app open and visible. Drag this notice to move it.',
-        true,
-      );
-      try {
-        final url = await ExerciseService().uploadUserFormVideo(
-          exerciseId: job.exerciseId,
-          video: job.video,
-        );
-        job.completer.complete(url);
-        _noticeState.value = _UploadNotice(
-          'Uploaded "${job.exerciseName}" successfully.', false,
-        );
-      } catch (e) {
-        job.completer.completeError(e);
-        _noticeState.value = _UploadNotice(
-          'Upload failed for "${job.exerciseName}": $e', false,
-        );
-      } finally {
-        activeExercises.value = {...activeExercises.value}
-          ..remove(job.exerciseId);
+    try {
+      while (_queue.isNotEmpty) {
+        final job = _queue.removeAt(0);
+        try {
+          final url = await ExerciseService().uploadUserFormVideo(
+            exerciseId: job.exerciseId,
+            video: job.video,
+          );
+          job.completer.complete(url);
+          _showMessage(
+            'Video uploaded successfully for "${job.exerciseName}".',
+            busy: false,
+            duration: const Duration(seconds: 6),
+          );
+        } catch (e) {
+          job.completer.completeError(e);
+          _showMessage(
+            'Video upload failed for "${job.exerciseName}": $e',
+            busy: false,
+            // Errors remain until dismissed so they cannot be missed.
+          );
+        } finally {
+          activeExercises.value = {...activeExercises.value}
+            ..remove(job.exerciseId);
+        }
       }
+    } finally {
+      _processing = false;
     }
-    _processing = false;
   }
 
-  void _showNotice(BuildContext context) {
+  void _showMessage(
+    String message, {
+    required bool busy,
+    Duration? duration,
+  }) {
+    _hideTimer?.cancel();
+    _hideTimer = null;
+    _noticeState.value = _UploadNotice(message, busy);
+    _showNotice();
+    if (duration != null) {
+      _hideTimer = Timer(duration, dismiss);
+    }
+  }
+
+  void _showNotice() {
     if (_notice != null) return;
-    final overlay = Overlay.of(context, rootOverlay: true);
+    final overlay = _rootOverlay;
+    if (overlay == null || !overlay.mounted) return;
+
     _notice = OverlayEntry(
       builder: (overlayContext) {
         final screen = MediaQuery.sizeOf(overlayContext);
@@ -119,16 +133,22 @@ class VideoUploadManager {
                     padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
                     child: Row(children: [
                       if (state.busy)
-                        const SizedBox(width: 20, height: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2))
+                        const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
                       else
                         const Icon(Icons.video_file_outlined, color: Colors.white70),
                       const SizedBox(width: 12),
-                      Expanded(child: Text(state.message,
-                          style: const TextStyle(color: Colors.white, fontSize: 13))),
+                      Expanded(
+                        child: Text(
+                          state.message,
+                          style: const TextStyle(color: Colors.white, fontSize: 13),
+                        ),
+                      ),
                       const Icon(Icons.drag_indicator, color: Colors.white54, size: 18),
-                      if (!state.busy)
-                        IconButton(
+                      IconButton(
                           tooltip: 'Dismiss',
                           onPressed: dismiss,
                           icon: const Icon(Icons.close, color: Colors.white),
@@ -146,6 +166,8 @@ class VideoUploadManager {
   }
 
   void dismiss() {
+    _hideTimer?.cancel();
+    _hideTimer = null;
     _notice?.remove();
     _notice?.dispose();
     _notice = null;
