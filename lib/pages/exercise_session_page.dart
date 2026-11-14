@@ -1,6 +1,6 @@
 import 'dart:io' show File;
 
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:video_player/video_player.dart';
@@ -903,22 +903,42 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
     }
   }
 
-  void _uploadPickedVideo() {
+  Future<void> _uploadPickedVideo() async {
     final video = _pickedVideo;
     if (video == null) return;
 
     final exerciseId = (widget.exercise['id'] ?? '').toString().trim();
     if (exerciseId.isEmpty || _videoUploads.isUploading(exerciseId)) return;
 
-    // Start the work in a singleton. Do not await it from this route.
-    // The global notice remains visible across navigation.
+    // The root overlay survives navigation away from this exercise page.
+    final uploadContext = Overlay.of(context, rootOverlay: true).context;
+    final exerciseName = (widget.exercise['name'] ?? 'Exercise').toString();
+
+    // Release the preview before starting the compressor's own video playback.
+    final previewController = _userVideoController;
+    setState(() {
+      _pickedVideo = null;
+      _userVideoController = null;
+    });
+
+    try {
+      if (previewController != null) {
+        await previewController.pause();
+        await previewController.dispose();
+      }
+    } catch (e) {
+      // A failed preview cleanup must not prevent the upload.
+      debugPrint('Could not release video preview: $e');
+    }
+
+    // The singleton owns this operation, not the exercise page.
+    // Do not require this page to remain mounted after preview cleanup.
     final upload = _videoUploads.start(
-      context: context,
+      context: uploadContext,
       exerciseId: exerciseId,
       video: video,
-      exerciseName: (widget.exercise['name'] ?? 'Exercise').toString(),
+      exerciseName: exerciseName,
     );
-    setState(() => _pickedVideo = null);
     _finishUploadOnPage(upload);
   }
 
