@@ -1,744 +1,1569 @@
-import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
-import 'video_compression_stub.dart' if (dart.library.js_interop) 'video_compression_web.dart' as compressor;
+import 'dart:io' show File;
+
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:path/path.dart' as p;
+import 'package:video_player/video_player.dart';
+
+import '../theme/fitquest_theme.dart';
+import '../services/exercise_service.dart';
+import '../services/video_upload_manager.dart';
+import '../services/session_service.dart';
+import '../services/muscle_exercise_position_service.dart';
+import '../services/workout_date_service.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-class ExerciseVideoData {
-  final String? userVideoUrl;
-  final String? importedVideoUrl;
-  final String? sourceExerciseId;
-  final String? userFormNotes;
-  final String? importedFormNotes;
+class ExerciseSessionPage extends StatefulWidget {
+  final Map<String, dynamic> exercise;
+  const ExerciseSessionPage({super.key, required this.exercise});
 
-  const ExerciseVideoData({
-    required this.userVideoUrl,
-    required this.importedVideoUrl,
-    required this.sourceExerciseId,
-    required this.userFormNotes,
-    required this.importedFormNotes,
-  });
-
-  bool get hasUserVideo =>
-      userVideoUrl != null && userVideoUrl!.trim().isNotEmpty;
-
-  bool get hasImportedVideo =>
-      importedVideoUrl != null && importedVideoUrl!.trim().isNotEmpty;
+  @override
+  State<ExerciseSessionPage> createState() => _ExerciseSessionPageState();
 }
 
+class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
+  final weightController = TextEditingController();
+  final repsController = TextEditingController();
+  final userFormNotesController = TextEditingController();
+  final SessionService sessionService = SessionService();
+  final WorkoutDateService _workoutDateService = WorkoutDateService.instance;
+  bool _isSavingSet = false;
+  final ExerciseService exerciseService = ExerciseService();
+  bool _isRemovingTrainerVideo = false;
+  bool _isSavingFormNotes = false;
+  String _selectedMetricType = 'reps';
+  String _selectedLoadType = 'weight';
 
-class ExerciseDayPerformance {
-  final DateTime day;
-  final double totalVolume;
-  final double estimatedOneRepMax;
+  // --- Current workout and paged historical workout days
+  String? todayDayKey;
+  List<String> previousDayKeys = []; // All earlier days, newest first.
+  int _historyPage = 0;
+  static const int _historyPageSize = 4;
+  int? _currentPosition;
+  final _positionService = MuscleExercisePositionService();
+  Set<String> _bestReferenceDayKeys = <String>{};
+  Set<int> _referencePositions = <int>{};
+  String? _overallBestDayKey;
+  bool _isLoadingHistory = true;
+  int _historyRequest = 0;
+  Map<String, List<Map<String, dynamic>>> sessionsByDayKey = {};
+  Map<String, double> volumeByDayKey = {};
+  Map<String, bool> hasVolumeByDayKey = {};
+  Map<String, int> positionByDayKey = {};
+  bool _metricPreferenceLoaded = false;
 
-  const ExerciseDayPerformance({
-    required this.day,
-    required this.totalVolume,
-    required this.estimatedOneRepMax,
-  });
-}
+  // -------- Form video state --------
+  final ImagePicker _picker = ImagePicker();
+  XFile? _pickedVideo;
 
-class ExercisePerformanceData {
-  final double? strengthTrendPercent;
-  final double? volumeTrendPercent;
-  final String strengthTrendLabel;
-  final String volumeTrendLabel;
-  final String progressSummary;
+  VideoPlayerController? _importedVideoController;
+  VideoPlayerController? _userVideoController;
 
-  const ExercisePerformanceData({
-    required this.strengthTrendPercent,
-    required this.volumeTrendPercent,
-    required this.strengthTrendLabel,
-    required this.volumeTrendLabel,
-    required this.progressSummary,
-  });
-}
+  bool _isLoadingVideos = true;
+  bool _isUploadingVideo = false;
+  final VideoUploadManager _videoUploads = VideoUploadManager.instance;
+  bool _isRemovingVideo = false;
 
-class ExerciseService {
-  final supabase = Supabase.instance.client;
+  String? _importedVideoUrl;
+  String? _userVideoUrl;
+  String? _sourceExerciseId;
+  String? _trainerFormNotes;
 
-  static const String _formVideoBucket = 'exercise_form_video';
-
-
-
-  // -----------------------------
-  // PERFORMANCE / PROGRESS
-  // -----------------------------
-
-  Future<ExercisePerformanceData> getExercisePerformanceData({
-    required String exerciseId,
-  }) async {
-    final user = supabase.auth.currentUser;
-    if (user == null) {
-      throw StateError('User must be logged in.');
-    }
-
-    final rowsRaw = await supabase
-        .from('exercise_sessions')
-        .select('id, weight, reps, load_type, metric_type, metric_value, created_at')
-        .eq('user_id', user.id)
-        .eq('exercise_id', exerciseId)
-        .order('created_at', ascending: false)
-        .limit(500);
-
-    final rows = (rowsRaw as List)
-        .whereType<Map>()
-        .map((row) => Map<String, dynamic>.from(row))
-        .toList();
-
-    final days = _groupPerformanceDays(rows);
-
-    final now = DateTime.now();
-    final today = DateTime(now.year, now.month, now.day);
-    final priorDays = days.where((day) => day.day.isBefore(today)).toList();
-    final comparisonDays = priorDays.take(6).toList();
-
-    final progress = _calculateProgress(comparisonDays);
-
-    return ExercisePerformanceData(
-      strengthTrendPercent: progress.$1,
-      volumeTrendPercent: progress.$2,
-      strengthTrendLabel: _trendLabel(progress.$1),
-      volumeTrendLabel: _trendLabel(progress.$2),
-      progressSummary: progress.$3,
-    );
+  @override
+  void initState() {
+    super.initState();
+    _workoutDateService.selectedDate.addListener(_onWorkoutDateChanged);
+    _loadWorkoutHistory();
+    _loadExerciseVideos();
+    _videoUploads.activeExercises.addListener(_onVideoUploadStateChanged);
+    _onVideoUploadStateChanged();
   }
 
-  List<ExerciseDayPerformance> _groupPerformanceDays(
-    List<Map<String, dynamic>> rows,
-  ) {
-    final grouped = <DateTime, List<Map<String, dynamic>>>{};
+  void _onVideoUploadStateChanged() {
+    if (!mounted) return;
+    final exerciseId = (widget.exercise['id'] ?? '').toString().trim();
+    final busy = _videoUploads.isUploading(exerciseId);
+    if (_isUploadingVideo != busy) {
+      setState(() => _isUploadingVideo = busy);
+    }
+  }
 
+  void _onWorkoutDateChanged() {
+    if (!mounted) return;
+    _loadWorkoutHistory();
+  }
+
+  // ---------- Day key helpers ----------
+  String _dayKey(DateTime dt) {
+    final d = dt.toLocal();
+    final y = d.year.toString().padLeft(4, '0');
+    final m = d.month.toString().padLeft(2, '0');
+    final day = d.day.toString().padLeft(2, '0');
+    return '$y-$m-$day';
+  }
+
+  String _todayKey() => _dayKey(_workoutDateService.activeDate);
+
+  DateTime _dateFromDayKey(String key) {
+    final parts = key.split('-').map(int.parse).toList();
+    return DateTime(parts[0], parts[1], parts[2]);
+  }
+
+  String _formatDate(DateTime d) => "${d.month}/${d.day}/${d.year}";
+
+  // ---------- numeric helpers ----------
+  double _numToDouble(dynamic v) {
+    if (v == null) return 0.0;
+    if (v is num) return v.toDouble();
+    return double.tryParse(v.toString()) ?? 0.0;
+  }
+
+  int _numToInt(dynamic v) {
+    if (v == null) return 0;
+    if (v is int) return v;
+    if (v is num) return v.toInt();
+    return int.tryParse(v.toString()) ?? 0;
+  }
+
+  String _loadLabel(String loadType) {
+    return loadType == 'level' ? 'Level' : 'Weight';
+  }
+
+  String _metricLabel(String metricType) {
+    switch (metricType) {
+      case 'seconds':
+        return 'Seconds';
+      case 'minutes':
+        return 'Minutes';
+      case 'miles':
+        return 'Miles';
+      default:
+        return 'Reps';
+    }
+  }
+
+  double _sessionMetricValue(Map<String, dynamic> session) {
+    final stored = session['metric_value'];
+    if (stored != null) return _numToDouble(stored);
+    return _numToDouble(session['reps']);
+  }
+
+  String _formatMetricValue(double value) {
+    return value == value.roundToDouble()
+        ? value.toInt().toString()
+        : value.toStringAsFixed(2).replaceFirst(RegExp(r'0+$'), '').replaceFirst(RegExp(r'\.$'), '');
+  }
+
+  // The most recent saved set is the preference for this exercise.
+  // A new exercise keeps the default Weight + Reps.
+  void _restoreMetricPreference(List<Map<String, dynamic>> sessions) {
+    if (_metricPreferenceLoaded || sessions.isEmpty) return;
+    final latest = List<Map<String, dynamic>>.from(sessions)
+      ..sort((a, b) => (b['created_at'] ?? '').toString()
+          .compareTo((a['created_at'] ?? '').toString()));
+    final row = latest.first;
+    final load = (row['load_type'] ?? 'weight').toString();
+    final metric = (row['metric_type'] ?? 'reps').toString();
+    _selectedLoadType = ['weight', 'level'].contains(load) ? load : 'weight';
+    _selectedMetricType = ['reps', 'seconds', 'minutes', 'miles'].contains(metric)
+        ? metric : 'reps';
+    _metricPreferenceLoaded = true;
+  }
+
+  // Persistent exercise order is assigned atomically when a set is saved.
+  // Older records without an order remain unclassified rather than guessing.
+  bool _hasStoredOrder(List<Map<String, dynamic>> sessions) {
+    return sessions.any((session) {
+      final raw = session['exercise_order'];
+      final order = raw is num ? raw.toInt() : int.tryParse('$raw');
+      return order != null && order > 0;
+    });
+  }
+
+  String _positionLabel(int n) => MuscleExercisePositionService.label(
+      n, (widget.exercise['primary_muscle_group'] ?? '').toString());
+
+  // ---------- Sessions and muscle-position-aware history ----------
+  Future<List<Map<String, dynamic>>> _fetchAllExerciseSessions(
+    String userId,
+    String exerciseId,
+    DateTime activeDate,
+  ) async {
+    final endUtc = DateTime(activeDate.year, activeDate.month,
+            activeDate.day + 1)
+        .toUtc()
+        .toIso8601String();
+    final all = <Map<String, dynamic>>[];
+    const pageSize = 500;
+    for (var offset = 0; ; offset += pageSize) {
+      final page = await Supabase.instance.client
+          .from('exercise_sessions')
+          .select()
+          .eq('user_id', userId)
+          .eq('exercise_id', exerciseId)
+          .lt('created_at', endUtc)
+          .order('created_at', ascending: false)
+          .range(offset, offset + pageSize - 1);
+      all.addAll(page.map((r) => Map<String, dynamic>.from(r)));
+      if (page.length < pageSize) break;
+    }
+    return all;
+  }
+
+  Future<int?> _resolveCurrentPosition(String userId, String exerciseId,
+      DateTime activeDate) async {
+    await sessionService.backfillExerciseOrdersForDate(activeDate);
+    final positions = await _positionService.positionsForDay(activeDate);
+    if (positions.containsKey(exerciseId)) return positions[exerciseId];
+    // The next distinct exercise in this muscle group, if not yet logged.
+    final muscle = (widget.exercise['primary_muscle_group'] ?? '').toString().trim();
+    if (muscle.isEmpty) return null;
+    final start = DateTime(activeDate.year, activeDate.month, activeDate.day);
+    final end = DateTime(activeDate.year, activeDate.month, activeDate.day + 1);
+    final rows = await Supabase.instance.client.from('exercise_sessions')
+        .select('exercise_id, exercises!inner(primary_muscle_group)')
+        .eq('user_id', userId)
+        .gte('created_at', start.toUtc().toIso8601String())
+        .lt('created_at', end.toUtc().toIso8601String());
+    final ids = <String>{};
     for (final row in rows) {
-      final parsed = DateTime.tryParse((row['created_at'] ?? '').toString());
-      if (parsed == null) continue;
-
-      final local = parsed.toLocal();
-      final day = DateTime(local.year, local.month, local.day);
-      grouped.putIfAbsent(day, () => <Map<String, dynamic>>[]).add(row);
+      final ex = row['exercises'];
+      if (ex is Map && (ex['primary_muscle_group'] ?? '').toString().trim().toLowerCase() == muscle.toLowerCase()) {
+        ids.add(row['exercise_id'].toString());
+      }
     }
+    return ids.length + 1;
+  }
 
-    final result = grouped.entries.map((entry) {
-      final sets = entry.value
-          .where((row) =>
-              (row['load_type'] ?? 'weight').toString() == 'weight' &&
-              (row['metric_type'] ?? 'reps').toString() == 'reps')
-          .map((row) => (
-                weight: _performanceDouble(row['weight']),
-                reps: row['metric_value'] != null
-                    ? _performanceInt(row['metric_value'])
-                    : _performanceInt(row['reps']),
-              ))
-          .where((set) => set.weight > 0 && set.reps > 0)
-          .toList();
+  Future<void> _loadWorkoutHistory() async {
+    final user = Supabase.instance.client.auth.currentUser;
+    final exerciseId = (widget.exercise['id'] ?? '').toString().trim();
+    if (user == null || exerciseId.isEmpty) return;
+    final request = ++_historyRequest;
+    final activeKey = _todayKey();
+    final activeDate = _dateFromDayKey(activeKey);
+    if (mounted) setState(() => _isLoadingHistory = true);
 
-      final totalVolume = sets.fold<double>(
-        0,
-        (sum, set) => sum + set.weight * set.reps,
-      );
-
-      double estimatedOneRepMax = 0;
-      if (sets.isNotEmpty) {
-        estimatedOneRepMax = sets
-            .map((set) => set.weight * (1 + set.reps / 30.0))
-            .reduce((a, b) => a > b ? a : b);
+    try {
+      // Restore the exercise's most recently used metric selection, including
+      // when viewing an older backlog date.
+      if (!_metricPreferenceLoaded) {
+        final latestRows = await Supabase.instance.client
+            .from('exercise_sessions')
+            .select('created_at, metric_type, load_type')
+            .eq('user_id', user.id)
+            .eq('exercise_id', exerciseId)
+            .order('created_at', ascending: false)
+            .limit(1);
+        if (latestRows.isNotEmpty && mounted && request == _historyRequest) {
+          setState(() => _restoreMetricPreference(
+              latestRows.map((row) => Map<String, dynamic>.from(row)).toList()));
+        }
       }
 
-      return ExerciseDayPerformance(
-        day: entry.key,
-        totalVolume: totalVolume,
-        estimatedOneRepMax: estimatedOneRepMax,
-      );
-    }).toList()
-      ..sort((a, b) => b.day.compareTo(a.day));
-
-    return result;
-  }
-
-  (double?, double?, String) _calculateProgress(
-    List<ExerciseDayPerformance> days,
-  ) {
-    if (days.length < 2) {
-      return (
-        null,
-        null,
-        'Complete this exercise on more days to establish a progress trend.',
-      );
-    }
-
-    final recent = days.take(3).toList();
-    final previous = days.skip(3).take(3).toList();
-
-    double strengthTrend;
-    double volumeTrend;
-
-    if (previous.isNotEmpty) {
-      strengthTrend = _percentChange(
-        _average(previous.map((day) => day.estimatedOneRepMax).toList()),
-        _average(recent.map((day) => day.estimatedOneRepMax).toList()),
-      );
-
-      volumeTrend = _percentChange(
-        _average(previous.map((day) => day.totalVolume).toList()),
-        _average(recent.map((day) => day.totalVolume).toList()),
-      );
-    } else {
-      strengthTrend = _percentChange(
-        recent.last.estimatedOneRepMax,
-        recent.first.estimatedOneRepMax,
-      );
-
-      volumeTrend = _percentChange(
-        recent.last.totalVolume,
-        recent.first.totalVolume,
-      );
-    }
-
-    String summary;
-    if (strengthTrend > 1 && volumeTrend < -1) {
-      summary =
-          'Strength is improving even though recent volume is lower. Fatigue, exercise order, or heavier working weights can explain that difference.';
-    } else if (strengthTrend > 1 && volumeTrend > 1) {
-      summary = 'Both strength and rolling volume are improving.';
-    } else if (strengthTrend.abs() <= 1 && volumeTrend > 1) {
-      summary = 'Strength is steady while work capacity and volume are improving.';
-    } else if (strengthTrend.abs() <= 1 && volumeTrend < -1) {
-      summary =
-          'Strength is holding steady while volume is temporarily lower. This is not automatically regression.';
-    } else if (strengthTrend < -1) {
-      summary =
-          'Recent strength performance is lower. Consider recovery, fatigue, exercise order, and consistency before treating it as regression.';
-    } else {
-      summary = 'Recent performance is relatively stable.';
-    }
-
-    return (strengthTrend, volumeTrend, summary);
-  }
-
-
-  String _trendLabel(double? value) {
-    if (value == null) return 'Not enough data';
-    if (value > 1) return 'Improving';
-    if (value < -1) return 'Lower recently';
-    return 'Stable';
-  }
-
-  double _average(List<double> values) {
-    final valid = values.where((value) => value > 0).toList();
-    if (valid.isEmpty) return 0;
-    return valid.reduce((a, b) => a + b) / valid.length;
-  }
-
-  double _percentChange(double previous, double current) {
-    if (previous <= 0) return 0;
-    return ((current - previous) / previous) * 100;
-  }
-
-
-
-
-  double _performanceDouble(dynamic value) {
-    if (value is num) return value.toDouble();
-    return double.tryParse((value ?? '').toString()) ?? 0;
-  }
-
-  int _performanceInt(dynamic value) {
-    if (value is int) return value;
-    if (value is num) return value.toInt();
-    return int.tryParse((value ?? '').toString()) ?? 0;
-  }
-
-
-  // -----------------------------
-  // READ
-  // -----------------------------
-
-  Future<List<dynamic>> getExercisesForEquipment(String equipmentId) async {
-    final res = await supabase
-        .from('exercises')
-        .select()
-        .eq('equipment_id', equipmentId);
-
-    return res;
-  }
-
-  Future<void> removeImportedTrainerVideo({
-  required String exerciseId,
-}) async {
-  await supabase
-      .from('exercises')
-      .update({
-        'video_source_exercise_id': null,
-      })
-      .eq('id', exerciseId);
-}
-
-  Future<Map<String, dynamic>> mergeMyDuplicateExercises() async {
-  final mergeRaw = await supabase.rpc(
-    'merge_my_duplicate_exercises',
-  );
-
-  final cleanupRaw = await supabase.rpc(
-    'delete_my_empty_containers',
-  );
-
-  final mergeResult = mergeRaw is Map
-      ? Map<String, dynamic>.from(mergeRaw)
-      : <String, dynamic>{};
-
-  final cleanupResult = cleanupRaw is Map
-      ? Map<String, dynamic>.from(cleanupRaw)
-      : <String, dynamic>{};
-
-  return {
-    ...mergeResult,
-    ...cleanupResult,
-  };
-}
-
-  /// Load exercises included in a routine via routine_items.
-  Future<List<Map<String, dynamic>>> getExercisesForRoutine(
-    String routineId,
-  ) async {
-    final rows = await supabase
-        .from('routine_items')
-        .select('exercise:exercises(*)')
-        .eq('routine_id', routineId)
-        .order('sort_order', ascending: true)
-        .order('created_at', ascending: true);
-
-    final list = <Map<String, dynamic>>[];
-
-    if (rows is List) {
+      final currentPosition = await _resolveCurrentPosition(
+          user.id, exerciseId, activeDate);
+      final rows = await _fetchAllExerciseSessions(
+          user.id, exerciseId, activeDate);
+      final map = <String, List<Map<String, dynamic>>>{};
       for (final row in rows) {
-        if (row is Map && row['exercise'] is Map) {
-          list.add(
-            Map<String, dynamic>.from(row['exercise'] as Map),
-          );
+        final dt = DateTime.tryParse((row['created_at'] ?? '').toString());
+        if (dt == null) continue;
+        final key = _dayKey(dt);
+        if (key.compareTo(activeKey) > 0) continue;
+        map.putIfAbsent(key, () => []).add(row);
+      }
+      map.putIfAbsent(activeKey, () => []);
+
+      // Historical sessions may predate persistent exercise_order. Backfill
+      // only days that need it, and re-read the affected exercise's sets.
+      for (final key in map.keys.toList()) {
+        final sessions = map[key]!;
+        if (sessions.isEmpty || _hasStoredOrder(sessions)) continue;
+        final day = _dateFromDayKey(key);
+        await sessionService.backfillExerciseOrdersForDate(day);
+        map[key] = await sessionService.getSessionsForDate(exerciseId, day);
+      }
+
+      final priorKeys = map.keys.where((key) => key.compareTo(activeKey) < 0)
+          .toList()..sort((a, b) => b.compareTo(a));
+      final volMap = <String, double>{};
+      final hasVolMap = <String, bool>{};
+      final positionMap = <String, int>{};
+      final positionCache = <String, Map<String, int>>{};
+      for (final entry in map.entries) {
+        var volume = 0.0;
+        var hasVolume = false;
+        for (final session in entry.value) {
+          if ((session['metric_type'] ?? 'reps').toString() == 'reps' &&
+              (session['load_type'] ?? 'weight').toString() == 'weight') {
+            hasVolume = true;
+            volume += _numToDouble(session['weight']) *
+                _sessionMetricValue(session);
+          }
+        }
+        volMap[entry.key] = volume;
+        hasVolMap[entry.key] = hasVolume;
+        if (entry.value.isNotEmpty) {
+          final day = _dateFromDayKey(entry.key);
+          positionCache[entry.key] = await _positionService.positionsForDay(day);
+          final position = positionCache[entry.key]![exerciseId];
+          if (position != null) positionMap[entry.key] = position;
         }
       }
-    }
 
-    return list;
-  }
+      // Volume is the primary benchmark, independent of exercise order.
+      // Also retain the best volume for each muscle-group position.
+      final bestVolumeByPosition = <int, double>{};
+      double? overallBestVolume;
+      String? overallBestKey;
+      for (final key in priorKeys) {
+        if (hasVolMap[key] != true) continue;
+        final volume = volMap[key]!;
+        final position = positionMap[key];
+        if (position != null &&
+            (bestVolumeByPosition[position] == null ||
+                volume > bestVolumeByPosition[position]!)) {
+          bestVolumeByPosition[position] = volume;
+        }
+        // Prior keys are newest first: equal volumes prefer the newer day.
+        if (overallBestVolume == null || volume > overallBestVolume) {
+          overallBestVolume = volume;
+          overallBestKey = key;
+        }
+      }
+      final bestKeys = <String>{};
+      for (final key in priorKeys) {
+        final position = positionMap[key];
+        if (position != null && hasVolMap[key] == true &&
+            volMap[key] == bestVolumeByPosition[position]) {
+          bestKeys.add(key);
+        }
+      }
+      // The active workout day can supersede the historical overall best.
+      // A tie retains the existing historical record; only a strictly higher
+      // cumulative weight x reps volume earns the new overall-best highlight.
+      if (hasVolMap[activeKey] == true &&
+          (overallBestVolume == null ||
+              volMap[activeKey]! > overallBestVolume)) {
+        overallBestVolume = volMap[activeKey]!;
+        overallBestKey = activeKey;
+      }
 
-  // -----------------------------
-  // EXERCISE VIDEOS
-  // -----------------------------
+      // Include the overall best even when its exercise position is unknown.
+      if (overallBestKey != null) bestKeys.add(overallBestKey);
+      final referencePositions = bestVolumeByPosition.keys.toSet();
 
-  /// Loads both videos independently:
-  /// - userVideoUrl: this user's own uploaded form video
-  /// - importedVideoUrl: the trainer/friend source video
-  Future<ExerciseVideoData> getExerciseVideos({
-    required String exerciseId,
-    Map<String, dynamic>? passedExercise,
-  }) async {
-    String? userVideoUrl = _cleanNullableString(
-      passedExercise?['video_url'],
-    );
-
-    String? sourceExerciseId = _cleanNullableString(
-      passedExercise?['video_source_exercise_id'],
-    );
-
-    String? userFormNotes = _cleanNullableString(
-      passedExercise?['form_notes'],
-    );
-
-    // Fetch the current exercise so video + notes stay in sync even if the
-    // page was opened with a partial/stale exercise map.
-    final row = await supabase
-        .from('exercises')
-        .select('video_url, video_source_exercise_id, form_notes')
-        .eq('id', exerciseId)
-        .maybeSingle();
-
-    userVideoUrl ??= _cleanNullableString(row?['video_url']);
-    sourceExerciseId ??=
-        _cleanNullableString(row?['video_source_exercise_id']);
-    userFormNotes ??= _cleanNullableString(row?['form_notes']);
-
-    String? importedVideoUrl;
-    String? importedFormNotes;
-
-    if (sourceExerciseId != null) {
-      importedVideoUrl = await resolveExerciseVideoUrl(sourceExerciseId);
-      importedFormNotes = await resolveExerciseFormNotes(sourceExerciseId);
-    }
-
-    return ExerciseVideoData(
-      userVideoUrl: userVideoUrl,
-      importedVideoUrl: importedVideoUrl,
-      sourceExerciseId: sourceExerciseId,
-      userFormNotes: userFormNotes,
-      importedFormNotes: importedFormNotes,
-    );
-  }
-
-  /// Resolves a friend's/trainer's video URL through the existing RPC.
-  Future<String?> resolveExerciseVideoUrl(
-    String sourceExerciseId,
-  ) async {
-    try {
-      final result = await supabase.rpc(
-        'get_exercise_video_url',
-        params: {'p_exercise_id': sourceExerciseId},
+      if (!mounted || request != _historyRequest || _todayKey() != activeKey) {
+        return;
+      }
+      setState(() {
+        todayDayKey = map[activeKey]!.isNotEmpty ? activeKey : null;
+        previousDayKeys = priorKeys;
+        sessionsByDayKey = map;
+        volumeByDayKey = volMap;
+        hasVolumeByDayKey = hasVolMap;
+        positionByDayKey = positionMap;
+        _currentPosition = currentPosition;
+        _bestReferenceDayKeys = bestKeys;
+        _referencePositions = referencePositions;
+        _overallBestDayKey = overallBestKey;
+        if (_historyPage * _historyPageSize >= priorKeys.length) {
+          _historyPage = 0;
+        }
+        _isLoadingHistory = false;
+      });
+    } catch (e) {
+      if (!mounted || request != _historyRequest) return;
+      setState(() => _isLoadingHistory = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not load workout history: $e')),
       );
-
-      if (result == null) return null;
-
-      if (result is String) {
-        return _cleanNullableString(result);
-      }
-
-      if (result is List && result.isNotEmpty) {
-        final first = result.first;
-
-        if (first is Map && first.isNotEmpty) {
-          return _cleanNullableString(first.values.first);
-        }
-
-        return _cleanNullableString(first);
-      }
-
-      if (result is Map) {
-        if (result.values.isEmpty) return null;
-        return _cleanNullableString(result.values.first);
-      }
-
-      return _cleanNullableString(result);
-    } catch (_) {
-      return null;
     }
   }
 
-  /// Resolves form notes from the trainer/friend source exercise.
-  /// If RLS does not permit reading the source row, this safely returns null.
-  Future<String?> resolveExerciseFormNotes(String sourceExerciseId) async {
+  Future<void> _saveSet() async {
+    if (_isSavingSet) return;
+    final weight = double.tryParse(weightController.text.trim());
+    final metricValue = double.tryParse(repsController.text.trim());
+    if (weight == null || metricValue == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Enter a valid load and metric value.')),
+      );
+      return;
+    }
+    if (_selectedMetricType == 'reps' && metricValue != metricValue.roundToDouble()) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Reps must be a whole number.')),
+      );
+      return;
+    }
+    setState(() => _isSavingSet = true);
+    bool sessionSaved = false;
     try {
-      final row = await supabase
-          .from('exercises')
-          .select('form_notes')
-          .eq('id', sourceExerciseId)
-          .maybeSingle();
-
-      return _cleanNullableString(row?['form_notes']);
-    } catch (_) {
-      return null;
+      final res = await sessionService.insertSession(
+        exerciseId: widget.exercise['id'].toString(),
+        weight: weight,
+        metricType: _selectedMetricType,
+        metricValue: metricValue,
+        loadType: _selectedLoadType,
+      );
+      sessionSaved = true;
+      // Only call XP once for a newly inserted session. Never automatically
+      // retry the RPC, since the database function is not idempotent.
+      await Supabase.instance.client.rpc(
+        'add_session_xp',
+        params: {'session_id': res['id']},
+      );
+      if (!mounted) return;
+      weightController.clear();
+      repsController.clear();
+      await _loadWorkoutHistory();
+    } catch (e) {
+      if (!mounted) return;
+      // The session may already be committed even if XP failed. Do not retry
+      // saving automatically; that could create duplicate sets.
+      if (sessionSaved) await _loadWorkoutHistory();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(sessionSaved
+          ? 'Set saved, but XP confirmation failed. Check history before trying again. $e'
+          : 'Could not save set: $e'),
+      ));
+    } finally {
+      if (mounted) setState(() => _isSavingSet = false);
     }
   }
 
-  Future<void> updateExerciseFormNotes({
-    required String exerciseId,
-    required String? formNotes,
-  }) async {
-    final cleaned = _cleanNullableString(formNotes);
-
-    await supabase
-        .from('exercises')
-        .update({'form_notes': cleaned})
-        .eq('id', exerciseId);
+  Future<void> _deleteSession(String sessionId) async {
+    await sessionService.deleteSession(sessionId);
+    await _loadWorkoutHistory();
   }
 
-  /// Uploads only the user's personal form video.
-  ///
-  /// This intentionally preserves video_source_exercise_id so the imported
-  /// trainer video remains available beside the user's own video.
-  Future<String> uploadUserFormVideo({
-    required String exerciseId,
-    required XFile video,
-  }) async {
-    final bucket = supabase.storage.from(_formVideoBucket);
+  Future<void> _editSession(Map<String, dynamic> session) async {
+    final weightEditController = TextEditingController(
+      text: _numToDouble(session['weight']).toString().replaceFirst(RegExp(r'\.0$'), ''),
+    );
+    final metricEditController = TextEditingController(
+      text: _formatMetricValue(_sessionMetricValue(session)),
+    );
+    var metricType = (session['metric_type'] ?? 'reps').toString();
+    var loadType = (session['load_type'] ?? 'weight').toString();
 
-    if (!kIsWeb) {
-      throw UnsupportedError('Automatic video compression requires the web app.');
-    }
-
-    final originalBytes = await video.readAsBytes();
-    final originalMime = video.mimeType ??
-        (p.extension(video.name).toLowerCase() == '.mov'
-            ? 'video/quicktime'
-            : 'video/mp4');
-    final compressed = await compressor.compressFormVideo(originalBytes, originalMime);
-    final extension = compressed.mimeType == 'video/mp4' ? '.mp4' : '.webm';
-
-    // Use unique paths so a failed replacement never destroys the previous video.
-    final storagePath =
-        'exercise_$exerciseId/form_${DateTime.now().microsecondsSinceEpoch}$extension';
-    await bucket.uploadBinary(
-      storagePath,
-      compressed.bytes,
-      fileOptions: FileOptions(
-        upsert: false,
-        contentType: compressed.mimeType,
+    final save = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Edit set'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: weightEditController,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  decoration: InputDecoration(
+                    labelText: _loadLabel(loadType),
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Wrap(
+                  spacing: 4,
+                  runSpacing: 0,
+                  children: ['weight', 'level'].map((type) {
+                    return SizedBox(
+                      width: 112,
+                      child: CheckboxListTile(
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        controlAffinity: ListTileControlAffinity.leading,
+                        title: Text(_loadLabel(type), style: const TextStyle(fontSize: 13)),
+                        value: loadType == type,
+                        onChanged: (checked) {
+                          if (checked == true) {
+                            setDialogState(() => loadType = type);
+                          }
+                        },
+                      ),
+                    );
+                  }).toList(),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: metricEditController,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  decoration: InputDecoration(
+                    labelText: _metricLabel(metricType),
+                    border: const OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 4,
+                  runSpacing: 0,
+                  children: ['reps', 'seconds', 'minutes', 'miles'].map((type) {
+                    return SizedBox(
+                      width: 112,
+                      child: CheckboxListTile(
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        controlAffinity: ListTileControlAffinity.leading,
+                        title: Text(_metricLabel(type), style: const TextStyle(fontSize: 13)),
+                        value: metricType == type,
+                        onChanged: (checked) {
+                          if (checked == true) {
+                            setDialogState(() => metricType = type);
+                          }
+                        },
+                      ),
+                    );
+                  }).toList(),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('Save'),
+            ),
+          ],
+        ),
       ),
     );
 
-    final publicUrl = bucket.getPublicUrl(storagePath);
-    String? oldUrl;
-    try {
-      final previous = await supabase
-          .from('exercises')
-          .select('video_url')
-          .eq('id', exerciseId)
-          .single();
-      oldUrl = _cleanNullableString(previous['video_url']);
+    if (save != true) return;
 
-      // Require a returned row so an RLS-blocked update cannot look successful.
-      final updated = await supabase
-          .from('exercises')
-          .update({'video_url': publicUrl})
-          .eq('id', exerciseId)
-          .select('video_url')
-          .single();
-      if (_cleanNullableString(updated['video_url']) != publicUrl) {
-        throw StateError('The new video reference was not saved.');
-      }
-    } catch (e) {
-      // Keep the old reference. Clean up the newly uploaded object if possible.
-      try {
-        await bucket.remove([storagePath]);
-      } catch (cleanupError) {
-        debugPrint('Could not clean up failed upload $storagePath: $cleanupError');
-      }
-      rethrow;
+    final weight = double.tryParse(weightEditController.text.trim());
+    final metricValue = double.tryParse(metricEditController.text.trim());
+    if (weight == null || metricValue == null) return;
+    if (metricType == 'reps' && metricValue != metricValue.roundToDouble()) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Reps must be a whole number.')),
+      );
+      return;
     }
 
-    if (oldUrl != null && oldUrl != publicUrl) {
-      final oldPath = _tryExtractStoragePathFromPublicUrl(oldUrl, _formVideoBucket);
-      if (oldPath == null) {
-        debugPrint('Old form video URL could not be parsed for cleanup: $oldUrl');
-      } else if (!oldPath.startsWith('exercise_$exerciseId/')) {
-        debugPrint('Skipped cleanup of unexpected old video path: $oldPath');
-      } else if (oldPath != storagePath) {
-        try {
-          await bucket.remove([oldPath]);
-          debugPrint('Removed replaced form video: $oldPath');
-        } catch (e) {
-          // New video is already saved: do not report the entire upload as failed.
-          debugPrint('WARNING: Old form video remains in Storage ($oldPath): $e');
-        }
-      }
-    }
-    return publicUrl;
-  }
-
-  /// Removes only the user's personal video.
-  ///
-  /// The imported trainer/source reference remains untouched.
-  Future<void> removeUserFormVideo({
-    required String exerciseId,
-    required String? userVideoUrl,
-  }) async {
-    final url = (userVideoUrl ?? '').trim();
-
-    await supabase
-        .from('exercises')
-        .update({'video_url': null})
-        .eq('id', exerciseId);
-
-    if (url.isEmpty) return;
-
-    final storagePath = _tryExtractStoragePathFromPublicUrl(
-      url,
-      _formVideoBucket,
+    await sessionService.updateSession(
+      sessionId: session['id'].toString(),
+      weight: weight,
+      metricType: metricType,
+      metricValue: metricValue,
+      loadType: loadType,
     );
 
-    if (storagePath == null) return;
+    await _loadWorkoutHistory();
+  }
 
+  Future<void> _saveUserFormNotes() async {
+    final exerciseId = (widget.exercise['id'] ?? '').toString().trim();
+    if (exerciseId.isEmpty) return;
+
+    setState(() => _isSavingFormNotes = true);
     try {
-      await supabase.storage
-          .from(_formVideoBucket)
-          .remove([storagePath]);
-    } catch (_) {
-      // The database update succeeded. A missing storage object should not
-      // prevent the user video from being removed from the exercise.
+      final notes = userFormNotesController.text.trim();
+      await Supabase.instance.client
+          .from('exercises')
+          .update({'form_notes': notes.isEmpty ? null : notes})
+          .eq('id', exerciseId);
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Form tips saved.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not save form tips: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _isSavingFormNotes = false);
     }
   }
 
-  String? _cleanNullableString(dynamic value) {
-    final cleaned = (value ?? '').toString().trim();
-    return cleaned.isEmpty ? null : cleaned;
+  Future<void> _removeTrainerVideo() async {
+  final hasTrainerVideo =
+      (_importedVideoUrl ?? '').trim().isNotEmpty &&
+      (_sourceExerciseId ?? '').trim().isNotEmpty;
+
+  if (!hasTrainerVideo) return;
+
+  final confirm = await showDialog<bool>(
+    context: context,
+    builder: (_) => AlertDialog(
+      title: const Text('Remove trainer video?'),
+      content: const Text(
+        'This will remove the imported trainer video from this exercise. '
+        'Your own uploaded form video will not be affected.',
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, false),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          onPressed: () => Navigator.pop(context, true),
+          child: const Text('Remove'),
+        ),
+      ],
+    ),
+  );
+
+  if (confirm != true) return;
+
+  final exerciseId = (widget.exercise['id'] ?? '').toString().trim();
+  if (exerciseId.isEmpty) return;
+
+  setState(() => _isRemovingTrainerVideo = true);
+
+  try {
+    await exerciseService.removeImportedTrainerVideo(
+      exerciseId: exerciseId,
+    );
+
+    await _disposeController(_importedVideoController);
+
+    if (!mounted) return;
+
+    setState(() {
+      _importedVideoUrl = null;
+      _sourceExerciseId = null;
+      _importedVideoController = null;
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Trainer video removed from this exercise.'),
+      ),
+    );
+  } catch (e) {
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Failed to remove trainer video: $e'),
+      ),
+    );
+  } finally {
+    if (mounted) {
+      setState(() => _isRemovingTrainerVideo = false);
+    }
+  }
+}
+
+  Widget _buildWorkoutDayCard({
+    required String dayKey,
+    required String title,
+    bool initiallyExpanded = false,
+  }) {
+    final sessions = sessionsByDayKey[dayKey] ?? const [];
+    final volume = volumeByDayKey[dayKey] ?? 0;
+    final showVolume = hasVolumeByDayKey[dayKey] ?? false;
+    final position = positionByDayKey[dayKey];
+    final isBestMatch = _bestReferenceDayKeys.contains(dayKey);
+    final isOverallBest = dayKey == _overallBestDayKey;
+    final isReferencePosition = dayKey != _todayKey() &&
+        position != null && _referencePositions.contains(position);
+    final isExactPosition = position == _currentPosition;
+    final theme = FitQuestTheme.dark;
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      elevation: 0,
+      color: isOverallBest ? theme.colorScheme.primaryContainer : null,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(18),
+        side: isOverallBest
+            ? BorderSide(color: theme.colorScheme.primary, width: 2)
+            : isReferencePosition
+                ? BorderSide(color: theme.colorScheme.primary.withValues(alpha: 0.5))
+                : const BorderSide(color: FitQuestTheme.outline),
+      ),
+      child: ExpansionTile(
+        initiallyExpanded: initiallyExpanded,
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('$title  •  ${sessions.length} ${sessions.length == 1 ? 'set' : 'sets'}',
+                style: theme.textTheme.titleSmall),
+            if (isBestMatch)
+              Text(isOverallBest
+                  ? 'OVERALL BEST VOLUME'
+                  : 'BEST AT THIS POSITION',
+                  style: theme.textTheme.labelMedium?.copyWith(
+                    color: theme.colorScheme.primary,
+                    fontWeight: FontWeight.bold,
+                  )),
+            if (isReferencePosition && !isBestMatch)
+              Text(isExactPosition ? 'SAME EXERCISE POSITION' : 'POSITION HISTORY',
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: theme.colorScheme.primary,
+                    fontWeight: FontWeight.bold,
+                  )),
+            if (showVolume)
+              Text('Volume: ${volume.toStringAsFixed(0)}',
+                  style: FitQuestTheme.dark.textTheme.bodySmall),
+            if (position != null)
+              Text(_positionLabel(position),
+                  style: FitQuestTheme.dark.textTheme.bodySmall),
+          ],
+        ),
+        children: sessions.isEmpty
+            ? const [
+                ListTile(
+                  leading: Icon(Icons.info_outline),
+                  title: Text('No sets found for this day.'),
+                ),
+              ]
+            : sessions.map((session) {
+                final metricType = (session['metric_type'] ?? 'reps').toString();
+                final loadType = (session['load_type'] ?? 'weight').toString();
+                final metricValue = _sessionMetricValue(session);
+                final setVolume = metricType == 'reps' && loadType == 'weight'
+                    ? _numToDouble(session['weight']) * metricValue
+                    : null;
+
+                return Dismissible(
+                  key: Key(session['id'].toString()),
+                  direction: DismissDirection.endToStart,
+                  background: Container(
+                    alignment: Alignment.centerRight,
+                    color: Colors.red,
+                    padding: const EdgeInsets.only(right: 20),
+                    child: const Icon(
+                      Icons.delete,
+                      color: Colors.white,
+                    ),
+                  ),
+                  onDismissed: (_) =>
+                      _deleteSession(session['id'].toString()),
+                  child: ListTile(
+                    leading: const Icon(Icons.fitness_center),
+                    title: Text('${_loadLabel(loadType)}: ${session['weight']}'),
+                    subtitle: Text(
+                      '${_metricLabel(metricType)}: ${_formatMetricValue(metricValue)}',
+                    ),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (setVolume != null)
+                          Text(
+                            'Vol: ${setVolume.toStringAsFixed(0)}',
+                            style: FitQuestTheme.dark.textTheme.bodySmall,
+                          ),
+                        IconButton(
+                          tooltip: 'Edit set',
+                          icon: const Icon(Icons.edit_outlined),
+                          onPressed: () => _editSession(session),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              }).toList(),
+      ),
+    );
   }
 
-  String? _tryExtractStoragePathFromPublicUrl(
-    String url,
-    String bucketId,
-  ) {
+  // ---------- Exercise videos ----------
+  Future<void> _disposeController(
+    VideoPlayerController? controller,
+  ) async {
+    await controller?.dispose();
+  }
+
+  Future<VideoPlayerController?> _createNetworkController(
+    String? url,
+  ) async {
+    final cleanedUrl = (url ?? '').trim();
+    if (cleanedUrl.isEmpty) return null;
+
+    final controller = VideoPlayerController.networkUrl(
+      Uri.parse(cleanedUrl),
+    );
+
     try {
-      final marker = '/storage/v1/object/public/$bucketId/';
-      final markerIndex = url.indexOf(marker);
-
-      if (markerIndex == -1) return null;
-
-      final path = url.substring(markerIndex + marker.length);
-      return path.isEmpty ? null : path;
+      await controller.initialize();
+      await controller.setVolume(1.0);
+      await controller.setPlaybackSpeed(1.0);
+      await controller.setLooping(false);
+      // Show a preview frame half a second into the video.
+      final previewPosition = controller.value.duration > const Duration(milliseconds: 500)
+          ? const Duration(milliseconds: 500)
+          : Duration.zero;
+      await controller.seekTo(previewPosition);
+      await controller.pause();
+      return controller;
     } catch (_) {
+      await controller.dispose();
       return null;
     }
   }
 
-  // -----------------------------
-  // CREATE / UPDATE
-  // -----------------------------
+  Future<void> _loadExerciseVideos() async {
+    if (mounted) {
+      setState(() => _isLoadingVideos = true);
+    }
 
-  Future<Map<String, dynamic>> insertExerciseReturningRow({
-    required String name,
-    required String primaryMuscleGroup,
-    required String type,
-    required String equipmentId,
-  }) async {
-    final muscleGroupLower = primaryMuscleGroup.toLowerCase();
+    try {
+      final exerciseId = (widget.exercise['id'] ?? '').toString().trim();
+      if (exerciseId.isEmpty) return;
 
-    final res = await supabase
-        .from('exercises')
-        .insert({
-          'name': name,
-          'primary_muscle_group': muscleGroupLower,
-          'type': type,
-          'equipment_id': equipmentId,
-        })
-        .select()
-        .single();
+      final videos = await exerciseService.getExerciseVideos(
+        exerciseId: exerciseId,
+        passedExercise: widget.exercise,
+      );
 
-    return Map<String, dynamic>.from(res);
+      final importedController = await _createNetworkController(
+        videos.importedVideoUrl,
+      );
+      final userController = await _createNetworkController(
+        videos.userVideoUrl,
+      );
+
+      await _disposeController(_importedVideoController);
+      await _disposeController(_userVideoController);
+
+      if (!mounted) {
+        await importedController?.dispose();
+        await userController?.dispose();
+        return;
+      }
+
+      setState(() {
+        _importedVideoUrl = videos.importedVideoUrl;
+        _userVideoUrl = videos.userVideoUrl;
+        _sourceExerciseId = videos.sourceExerciseId;
+        _trainerFormNotes = videos.importedFormNotes;
+        userFormNotesController.text = videos.userFormNotes ?? '';
+        _importedVideoController = importedController;
+        _userVideoController = userController;
+      });
+    } catch (e) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not load form videos: $e')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _isLoadingVideos = false);
+      }
+    }
   }
 
-  Future<void> insertExercise({
-    required String name,
-    required String primaryMuscleGroup,
-    required String type,
-    required String equipmentId,
-  }) async {
-    await insertExerciseReturningRow(
-      name: name,
-      primaryMuscleGroup: primaryMuscleGroup,
-      type: type,
-      equipmentId: equipmentId,
+  Future<void> _pickVideo() async {
+    try {
+      final video = await _picker.pickVideo(
+        source: ImageSource.gallery,
+      );
+      if (video == null) return;
+
+      VideoPlayerController previewController;
+
+      if (kIsWeb) {
+        previewController = VideoPlayerController.networkUrl(
+          Uri.parse(video.path),
+        );
+      } else {
+        previewController = VideoPlayerController.file(
+          File(video.path),
+        );
+      }
+
+      await previewController.initialize();
+      await previewController.setVolume(1.0);
+      await previewController.setPlaybackSpeed(1.0);
+      await previewController.setLooping(false);
+      // Show a preview frame half a second into the selected video.
+      final previewPosition = previewController.value.duration > const Duration(milliseconds: 500)
+          ? const Duration(milliseconds: 500)
+          : Duration.zero;
+      await previewController.seekTo(previewPosition);
+      await previewController.pause();
+
+      await _disposeController(_userVideoController);
+
+      if (!mounted) {
+        await previewController.dispose();
+        return;
+      }
+
+      setState(() {
+        _pickedVideo = video;
+        _userVideoController = previewController;
+      });
+    } catch (e) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Picking video failed: $e')),
+      );
+    }
+  }
+
+  void _uploadPickedVideo() {
+    final video = _pickedVideo;
+    if (video == null) return;
+
+    final exerciseId = (widget.exercise['id'] ?? '').toString().trim();
+    if (exerciseId.isEmpty || _videoUploads.isUploading(exerciseId)) return;
+
+    // Start the work in a singleton. Do not await it from this route.
+    // The global notice remains visible across navigation.
+    final upload = _videoUploads.start(
+      context: context,
+      exerciseId: exerciseId,
+      video: video,
+      exerciseName: (widget.exercise['name'] ?? 'Exercise').toString(),
+    );
+    setState(() => _pickedVideo = null);
+    _finishUploadOnPage(upload);
+  }
+
+  Future<void> _finishUploadOnPage(Future<String> upload) async {
+    try {
+      final publicUrl = await upload;
+      if (!mounted) return;
+      final controller = await _createNetworkController(publicUrl);
+      if (!mounted) {
+        await controller?.dispose();
+        return;
+      }
+      await _disposeController(_userVideoController);
+      if (!mounted) {
+        await controller?.dispose();
+        return;
+      }
+      setState(() {
+        _userVideoUrl = publicUrl;
+        _userVideoController = controller;
+      });
+    } catch (_) {
+      // The global notice reports failures even if this page was closed.
+    }
+  }
+
+  Future<void> _removeUserFormVideo() async {
+    final hasSavedUserVideo = (_userVideoUrl ?? '').trim().isNotEmpty;
+    final hasPickedVideo = _pickedVideo != null;
+
+    if (!hasSavedUserVideo && !hasPickedVideo) return;
+
+    if (hasPickedVideo && !hasSavedUserVideo) {
+      await _disposeController(_userVideoController);
+
+      if (!mounted) return;
+      setState(() {
+        _pickedVideo = null;
+        _userVideoController = null;
+      });
+      return;
+    }
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Remove your form video?'),
+        content: const Text(
+          'This removes only your uploaded video. '
+          'The imported trainer video will remain available.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Remove'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
+    final exerciseId = (widget.exercise['id'] ?? '').toString().trim();
+    if (exerciseId.isEmpty) return;
+
+    setState(() => _isRemovingVideo = true);
+
+    try {
+      await exerciseService.removeUserFormVideo(
+        exerciseId: exerciseId,
+        userVideoUrl: _userVideoUrl,
+      );
+
+      await _disposeController(_userVideoController);
+
+      if (!mounted) return;
+
+      setState(() {
+        _userVideoUrl = null;
+        _userVideoController = null;
+        _pickedVideo = null;
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Your form video was removed.'),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to remove video: $e')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _isRemovingVideo = false);
+      }
+    }
+  }
+
+  Widget _buildVideoPlayerCard({
+    required String title,
+    required String emptyMessage,
+    required VideoPlayerController? controller,
+    required String? videoUrl,
+    String? subtitle,
+    String? formNotes,
+  }) {
+    final hasUrl = (videoUrl ?? '').trim().isNotEmpty;
+    final isReady = controller != null && controller.value.isInitialized;
+
+    return Card(
+      elevation: 2,
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              title,
+              style: FitQuestTheme.dark.textTheme.titleSmall,
+            ),
+            if (subtitle != null) ...[
+              const SizedBox(height: 4),
+              Text(
+                subtitle,
+                style: FitQuestTheme.dark.textTheme.bodySmall,
+              ),
+            ],
+            const SizedBox(height: 10),
+            if (isReady) ...[
+              AspectRatio(
+                aspectRatio: controller.value.aspectRatio,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: VideoPlayer(controller),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  IconButton(
+                    icon: Icon(
+                      controller.value.isPlaying
+                          ? Icons.pause
+                          : Icons.play_arrow,
+                    ),
+                    onPressed: () async {
+                      if (controller.value.isPlaying) {
+                        await controller.pause();
+                      } else {
+                        await controller.setVolume(1.0);
+                        await controller.play();
+                      }
+
+                      if (mounted) setState(() {});
+                    },
+                  ),
+                  const Spacer(),
+                  if (hasUrl) const Text('Saved ✓'),
+                ],
+              ),
+            ] else
+              Text(
+                hasUrl ? 'Loading video...' : emptyMessage,
+                style: FitQuestTheme.dark.textTheme.bodySmall,
+              ),
+            if ((formNotes ?? '').trim().isNotEmpty) ...[
+              const SizedBox(height: 10),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  border: Border.all(color: FitQuestTheme.dark.dividerColor),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  formNotes!.trim(),
+                  style: FitQuestTheme.dark.textTheme.bodySmall,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
     );
   }
 
-  Future<void> updateExerciseName({
-    required String exerciseId,
-    required String name,
-  }) async {
-    await supabase
-        .from('exercises')
-        .update({'name': name})
-        .eq('id', exerciseId);
+  @override
+  void dispose() {
+    _workoutDateService.selectedDate.removeListener(_onWorkoutDateChanged);
+    _videoUploads.activeExercises.removeListener(_onVideoUploadStateChanged);
+    weightController.dispose();
+    repsController.dispose();
+    userFormNotesController.dispose();
+    _importedVideoController?.dispose();
+    _userVideoController?.dispose();
+    super.dispose();
   }
 
-  Future<void> updateExerciseType({
-    required String exerciseId,
-    required String type,
-  }) async {
-    await supabase
-        .from('exercises')
-        .update({'type': type})
-        .eq('id', exerciseId);
-  }
+  @override
+  Widget build(BuildContext context) {
+    final exercise = widget.exercise;
+    final isBacklogging = _workoutDateService.isBacklogging;
+    final activeWorkoutDate = _workoutDateService.activeDate;
 
-  /// Move an exercise to another equipment.
-  Future<void> moveExerciseToEquipment({
-    required String exerciseId,
-    required String equipmentId,
-  }) async {
-    await supabase
-        .from('exercises')
-        .update({'equipment_id': equipmentId})
-        .eq('id', exerciseId);
-  }
+    return Theme(
+      data: FitQuestTheme.dark,
+      child: Scaffold(
+      appBar: AppBar(
+        toolbarHeight: 76,
+        title: Text(
+          (exercise['name'] ?? 'Exercise').toString(),
+          maxLines: 2,
+          softWrap: true,
+          overflow: TextOverflow.visible,
+          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+        ),
+      ),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (isBacklogging) ...[
+              Card(
+                child: ListTile(
+                  leading: const Icon(Icons.history),
+                  title: const Text('Backlog Workout'),
+                  subtitle: Text('Logging for ${_formatDate(activeWorkoutDate)}'),
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
+            // ----------------- Log Form -----------------
+            const FitQuestSectionHeader(
+              title: 'Log your session',
+              subtitle: 'One set at a time. Every rep counts.',
+              icon: Icons.fitness_center,
+            ),
+            Row(children: [
+              Expanded(child: FitQuestMetricTile(
+                label: 'EXERCISE POSITION',
+                value: _currentPosition == null ? '—' : _positionLabel(_currentPosition!),
+                icon: Icons.layers_outlined,
+              )),
+              const SizedBox(width: 12),
+              Expanded(child: FitQuestMetricTile(
+                label: 'SETS LOGGED',
+                value: '${sessionsByDayKey[_todayKey()]?.length ?? 0}',
+                icon: Icons.check_circle_outline,
+                accentColor: FitQuestTheme.mint,
+              )),
+            ]),
+            const SizedBox(height: 20),
+            TextField(
+              controller: weightController,
+              keyboardType: TextInputType.number,
+              decoration: InputDecoration(
+                labelText: _loadLabel(_selectedLoadType),
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 4),
+            Wrap(
+              spacing: 4,
+              runSpacing: 0,
+              children: ['weight', 'level'].map((type) {
+                return SizedBox(
+                  width: 112,
+                  child: CheckboxListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    controlAffinity: ListTileControlAffinity.leading,
+                    title: Text(_loadLabel(type), style: const TextStyle(fontSize: 13)),
+                    value: _selectedLoadType == type,
+                    onChanged: (checked) {
+                      if (checked == true) {
+                        setState(() { _selectedLoadType = type; _metricPreferenceLoaded = true; });
+                      }
+                    },
+                  ),
+                );
+              }).toList(),
+            ),
+            const SizedBox(height: 12),
 
-  // -----------------------------
-  // ROUTINES (routine_items)
-  // -----------------------------
+            TextField(
+              controller: repsController,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: InputDecoration(
+                labelText: _metricLabel(_selectedMetricType),
+                border: const OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 4),
+            Wrap(
+              spacing: 4,
+              runSpacing: 0,
+              children: ['reps', 'seconds', 'minutes', 'miles'].map((type) {
+                return SizedBox(
+                  width: 112,
+                  child: CheckboxListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    controlAffinity: ListTileControlAffinity.leading,
+                    title: Text(_metricLabel(type), style: const TextStyle(fontSize: 13)),
+                    value: _selectedMetricType == type,
+                    onChanged: (checked) {
+                      if (checked == true) {
+                        setState(() { _selectedMetricType = type; _metricPreferenceLoaded = true; });
+                      }
+                    },
+                  ),
+                );
+              }).toList(),
+            ),
+            const SizedBox(height: 8),
 
-  /// Add a canonical exercise to a routine without duplication.
-  Future<void> addExerciseToRoutine({
-    required String routineId,
-    required String exerciseId,
-    int? sortOrder,
-  }) async {
-    final existing = await supabase
-        .from('routine_items')
-        .select('id')
-        .eq('routine_id', routineId)
-        .eq('exercise_id', exerciseId);
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                icon: const Icon(Icons.save),
+                label: Text(_isSavingSet ? "Saving..." : "Save Set"),
+                onPressed: _isSavingSet ? null : _saveSet,
+              ),
+            ),
 
-    if (existing is List && existing.isNotEmpty) return;
+            const SizedBox(height: 16),
 
-    final data = <String, dynamic>{
-      'routine_id': routineId,
-      'exercise_id': exerciseId,
-    };
+            const SizedBox(height: 24),
 
-    if (sortOrder != null) {
-      data['sort_order'] = sortOrder;
-    }
+            // ----------------- Today's Workout -----------------
+            FitQuestSectionHeader(
+              title: isBacklogging ? 'Selected workout day' : "Today's workout",
+              icon: Icons.today_outlined,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              isBacklogging
+                  ? "Sets for ${_formatDate(activeWorkoutDate)} appear here. Existing sets are preserved when you add more."
+                  : "Today's recorded sets appear here.",
+              style: FitQuestTheme.dark.textTheme.bodySmall,
+            ),
+            const SizedBox(height: 12),
 
-    await supabase.from('routine_items').insert(data);
-  }
+            if (todayDayKey == null)
+              Card(
+                elevation: 1,
+                child: Padding(
+                  padding: const EdgeInsets.all(14),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.info_outline),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          isBacklogging
+                              ? "No sets recorded for this exercise on ${_formatDate(activeWorkoutDate)}."
+                              : "No sets have been recorded for this exercise today.",
+                          style: FitQuestTheme.dark.textTheme.bodyMedium,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              )
+            else
+              _buildWorkoutDayCard(
+                dayKey: todayDayKey!,
+                title: isBacklogging ? _formatDate(activeWorkoutDate) : "Today",
+                initiallyExpanded: true,
+              ),
 
-  /// Remove an exercise from a routine without deleting its sessions.
-  Future<void> removeExerciseFromRoutine({
-    required String routineId,
-    required String exerciseId,
-  }) async {
-    await supabase
-        .from('routine_items')
-        .delete()
-        .eq('routine_id', routineId)
-        .eq('exercise_id', exerciseId);
-  }
+            const SizedBox(height: 20),
 
-  // -----------------------------
-  // DELETE / COUNTS
-  // -----------------------------
+            // ----------------- Paged Previous Days -----------------
+            const FitQuestSectionHeader(
+              title: 'Previous days',
+              icon: Icons.history,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              isBacklogging
+                  ? 'Earlier workout days before the selected backlog date. '
+                    'Highest volume is highlighted; position-specific bests are also marked.'
+                  : 'Browse all previous workout days, four at a time. '
+                    'Highest volume is highlighted; position-specific bests are also marked.',
+              style: FitQuestTheme.dark.textTheme.bodySmall,
+            ),
+            const SizedBox(height: 12),
+            if (_isLoadingHistory)
+              const Center(child: CircularProgressIndicator())
+            else if (previousDayKeys.isEmpty)
+              const Card(
+                child: ListTile(
+                  leading: Icon(Icons.history),
+                  title: Text('No previous workout days for this exercise.'),
+                ),
+              )
+            else ...[
+              ...previousDayKeys
+                  .skip(_historyPage * _historyPageSize)
+                  .take(_historyPageSize)
+                  .map((key) => _buildWorkoutDayCard(
+                        dayKey: key,
+                        title: _formatDate(_dateFromDayKey(key)),
+                      )),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  TextButton.icon(
+                    onPressed: _historyPage == 0
+                        ? null
+                        : () => setState(() => _historyPage--),
+                    icon: const Icon(Icons.chevron_left),
+                    label: const Text('Newer'),
+                  ),
+                  Text(
+                    '${_historyPage + 1} / '
+                    '${(previousDayKeys.length + _historyPageSize - 1) ~/ _historyPageSize}',
+                    style: FitQuestTheme.dark.textTheme.bodySmall,
+                  ),
+                  TextButton.icon(
+                    onPressed: (_historyPage + 1) * _historyPageSize >=
+                            previousDayKeys.length
+                        ? null
+                        : () => setState(() => _historyPage++),
+                    icon: const Icon(Icons.chevron_right),
+                    label: const Text('Older'),
+                  ),
+                ],
+              ),
+              ...(_bestReferenceDayKeys.toList()
+                    ..sort((a, b) => (positionByDayKey[a] ?? 0)
+                        .compareTo(positionByDayKey[b] ?? 0)))
+                  .where((key) => key != _todayKey() && !previousDayKeys
+                      .skip(_historyPage * _historyPageSize)
+                      .take(_historyPageSize)
+                      .contains(key))
+                  .map((key) => TextButton.icon(
+                        onPressed: () => setState(() {
+                          _historyPage = previousDayKeys.indexOf(key) ~/
+                              _historyPageSize;
+                        }),
+                        icon: const Icon(Icons.emoji_events_outlined),
+                        label: Text(key == _overallBestDayKey
+                             ? 'Jump to overall best volume'
+                             : 'Jump to best ${positionByDayKey[key] == null ? 'exercise' : _positionLabel(positionByDayKey[key]!)} day'),
+                      )),
+            ],
 
-  Future<void> deleteExercise(String exerciseId) async {
-    await supabase
-        .from('exercises')
-        .delete()
-        .eq('id', exerciseId);
-  }
+            const SizedBox(height: 24),
 
-  Future<int> getSessionCountForExercise(
-    String exerciseId,
-  ) async {
-    final res = await supabase
-        .from('exercise_sessions')
-        .select('id')
-        .eq('exercise_id', exerciseId);
+            // ----------------- Exercise Form Videos -----------------
+            const FitQuestSectionHeader(
+              title: 'Exercise form videos',
+              icon: Icons.play_circle_outline,
+            ),
+            const SizedBox(height: 6),
+            Text(
+              "Compare the imported trainer demonstration with your own form.",
+              style: FitQuestTheme.dark.textTheme.bodySmall,
+            ),
+            const SizedBox(height: 12),
 
-    return (res as List).length;
-  }
+            if (_isLoadingVideos)
+              const Center(child: CircularProgressIndicator())
+            else ...[
+              _buildVideoPlayerCard(
+                title: "Trainer Form Video",
+                subtitle: _sourceExerciseId == null
+                    ? null
+                    : "Imported with this exercise",
+                emptyMessage: "No imported trainer video is available.",
+                controller: _importedVideoController,
+                videoUrl: _importedVideoUrl,
+                formNotes: _trainerFormNotes,
+              ),
 
-  Future<void> deleteSessionsForExercise(
-    String exerciseId,
-  ) async {
-    await supabase
-        .from('exercise_sessions')
-        .delete()
-        .eq('exercise_id', exerciseId);
-  }
+if ((_importedVideoUrl ?? '').trim().isNotEmpty &&
+    (_sourceExerciseId ?? '').trim().isNotEmpty) ...[
+  const SizedBox(height: 8),
+  SizedBox(
+    width: double.infinity,
+    child: OutlinedButton.icon(
+      icon: _isRemovingTrainerVideo
+          ? const SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+              ),
+            )
+          : const Icon(Icons.link_off),
+      label: Text(
+        _isRemovingTrainerVideo
+            ? 'Removing Trainer Video...'
+            : 'Remove Trainer Video',
+      ),
+      onPressed:
+          (_isRemovingTrainerVideo ||
+                  _isUploadingVideo ||
+                  _isRemovingVideo)
+              ? null
+              : _removeTrainerVideo,
+    ),
+  ),
+],
+              const SizedBox(height: 12),
+              _buildVideoPlayerCard(
+                title: "My Form Video",
+                subtitle: "Upload your own video without replacing the trainer video.",
+                emptyMessage: "You have not uploaded a form video yet.",
+                controller: _userVideoController,
+                videoUrl: _pickedVideo != null
+                    ? _pickedVideo!.path
+                    : _userVideoUrl,
+              ),
+            const SizedBox(height: 12),
 
-  Future<void> deleteExerciseCascade(
-    String exerciseId,
-  ) async {
-    await deleteSessionsForExercise(exerciseId);
-    await deleteExercise(exerciseId);
-  }
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    icon: const Icon(Icons.video_library),
+                    label: Text(
+                      _pickedVideo == null
+                          ? "Choose My Video"
+                          : "Change Selection",
+                    ),
+                    onPressed:
+                        (_isUploadingVideo || _isRemovingVideo)
+                            ? null
+                            : _pickVideo,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: ElevatedButton.icon(
+                    icon: _isUploadingVideo
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                            ),
+                          )
+                        : const Icon(Icons.cloud_upload),
+                    label: Text(
+                      _isUploadingVideo ? "Uploading..." : "Upload Mine",
+                    ),
+                    onPressed:
+                        (_pickedVideo == null ||
+                            _isUploadingVideo ||
+                            _isRemovingVideo)
+                        ? null
+                        : _uploadPickedVideo,
+                  ),
+                ),
+              ],
+            ),
 
-  /// Removes routine links before deleting the exercise.
-  Future<void> deleteExerciseCascadeSafe(
-    String exerciseId,
-  ) async {
-    await supabase
-        .from('routine_items')
-        .delete()
-        .eq('exercise_id', exerciseId);
+            if (_pickedVideo != null) ...[
+              const SizedBox(height: 8),
+              Text(
+                "Selected: ${_pickedVideo!.name}",
+                style: FitQuestTheme.dark.textTheme.bodySmall,
+              ),
+            ],
 
-    await deleteExerciseCascade(exerciseId);
+            if ((_userVideoUrl ?? '').trim().isNotEmpty ||
+                _pickedVideo != null) ...[
+              const SizedBox(height: 10),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  icon: _isRemovingVideo
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                          ),
+                        )
+                      : const Icon(Icons.delete_outline),
+                  label: Text(
+                    _isRemovingVideo
+                        ? "Removing..."
+                        : _pickedVideo != null &&
+                              (_userVideoUrl ?? '').trim().isEmpty
+                        ? "Discard Selection"
+                        : "Remove My Video",
+                  ),
+                  onPressed:
+                      (_isUploadingVideo || _isRemovingVideo)
+                      ? null
+                      : _removeUserFormVideo,
+                ),
+              ),
+            ],
+            const SizedBox(height: 16),
+              TextField(
+                controller: userFormNotesController,
+                minLines: 2,
+                maxLines: 4,
+                decoration: const InputDecoration(
+                  labelText: 'My form tips / isolation notes',
+                  hintText: 'Example: Keep elbows tucked and pause at peak contraction...',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerRight,
+                child: OutlinedButton.icon(
+                  icon: _isSavingFormNotes
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.notes),
+                  label: Text(
+                    _isSavingFormNotes ? 'Saving...' : 'Save Form Tips',
+                  ),
+                  onPressed: _isSavingFormNotes ? null : _saveUserFormNotes,
+                ),
+              ),
+          ],
+          ],
+        ),
+      ),
+    ),
+    );
   }
 }
