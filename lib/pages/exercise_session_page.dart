@@ -910,15 +910,26 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
     final exerciseId = (widget.exercise['id'] ?? '').toString().trim();
     if (exerciseId.isEmpty || _videoUploads.isUploading(exerciseId)) return;
 
-    // Start the work in a singleton. Do not await it from this route.
-    // The global notice remains visible across navigation.
+    // Start the manager first: this immediately shows the global notice and
+    // starts the queued upload, even if this page is navigated away from.
     final upload = _videoUploads.start(
       context: context,
       exerciseId: exerciseId,
       video: video,
       exerciseName: (widget.exercise['name'] ?? 'Exercise').toString(),
     );
-    setState(() => _pickedVideo = null);
+
+    // The preview is no longer needed. Detach it from page state immediately,
+    // then release it without blocking the upload or its floating notice.
+    final previewController = _userVideoController;
+    setState(() {
+      _pickedVideo = null;
+      _userVideoController = null;
+    });
+    if (previewController != null) {
+      previewController.dispose();
+    }
+
     _finishUploadOnPage(upload);
   }
 
