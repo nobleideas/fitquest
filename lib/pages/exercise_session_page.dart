@@ -794,6 +794,9 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
       await controller.setVolume(1.0);
       await controller.setPlaybackSpeed(1.0);
       await controller.setLooping(false);
+      // Ask the browser to decode the opening frame before playback.
+      await controller.seekTo(Duration.zero);
+      await controller.pause();
       return controller;
     } catch (_) {
       await controller.dispose();
@@ -876,6 +879,9 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
       await previewController.setVolume(1.0);
       await previewController.setPlaybackSpeed(1.0);
       await previewController.setLooping(false);
+      // Show the selected video's opening frame while awaiting upload.
+      await previewController.seekTo(Duration.zero);
+      await previewController.pause();
 
       await _disposeController(_userVideoController);
 
@@ -903,12 +909,6 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
 
     final exerciseId = (widget.exercise['id'] ?? '').toString().trim();
     if (exerciseId.isEmpty || _videoUploads.isUploading(exerciseId)) return;
-    if (_videoUploads.activeExercises.value.isNotEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('Please wait for the current video upload to finish.'),
-      ));
-      return;
-    }
 
     // Start the work in a singleton. Do not await it from this route.
     // The global notice remains visible across navigation.
