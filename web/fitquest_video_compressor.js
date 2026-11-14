@@ -1,14 +1,21 @@
+
 /* FitQuest browser-side form video compression.
  * Preserves audio while compressing video.
  * Requires canvas.captureStream, MediaRecorder, and Web Audio API.
  * Encodes in real time.
  */
-window.fitQuestCompressVideo = async function (inputBytes, inputMime, maxSeconds) {
+window.fitQuestCompressVideo = async function (
+  inputBytes,
+  inputMime,
+  maxSeconds
+) {
   if (
     typeof MediaRecorder === 'undefined' ||
     !HTMLCanvasElement.prototype.captureStream
   ) {
-    throw new Error('Video compression is not supported by this browser.');
+    throw new Error(
+      'Video compression is not supported by this browser.'
+    );
   }
 
   const mimeTypes = [
@@ -18,10 +25,14 @@ window.fitQuestCompressVideo = async function (inputBytes, inputMime, maxSeconds
     'video/webm'
   ];
 
-  const outputMime = mimeTypes.find(t => MediaRecorder.isTypeSupported(t));
+  const outputMime = mimeTypes.find(t =>
+    MediaRecorder.isTypeSupported(t)
+  );
 
   if (!outputMime) {
-    throw new Error('This browser cannot encode MP4 or WebM videos.');
+    throw new Error(
+      'This browser cannot encode MP4 or WebM videos.'
+    );
   }
 
   const sourceBlob = new Blob(
@@ -33,7 +44,13 @@ window.fitQuestCompressVideo = async function (inputBytes, inputMime, maxSeconds
 
   const video = document.createElement('video');
   video.preload = 'auto';
-  video.muted = true;
+
+  // Do not mute the source element.
+  // Safari may suppress captured audio when muted.
+  // Audio is routed only to the recording destination,
+  // not to the device speakers.
+  video.muted = false;
+  video.volume = 1;
   video.playsInline = true;
   video.setAttribute('playsinline', '');
   video.src = sourceUrl;
@@ -45,17 +62,27 @@ window.fitQuestCompressVideo = async function (inputBytes, inputMime, maxSeconds
   let audioDestination;
   let frameId;
 
+  const delay = ms =>
+    new Promise(resolve => setTimeout(resolve, ms));
+
   try {
     await new Promise((resolve, reject) => {
       video.onloadedmetadata = resolve;
       video.onerror = () => reject(
-        new Error('The selected video cannot be decoded by this browser.')
+        new Error(
+          'The selected video cannot be decoded by this browser.'
+        )
       );
       video.load();
     });
 
-    if (!Number.isFinite(video.duration) || video.duration <= 0) {
-      throw new Error('Could not determine video duration.');
+    if (
+      !Number.isFinite(video.duration) ||
+      video.duration <= 0
+    ) {
+      throw new Error(
+        'Could not determine video duration.'
+      );
     }
 
     if (video.duration > maxSeconds) {
@@ -84,36 +111,45 @@ window.fitQuestCompressVideo = async function (inputBytes, inputMime, maxSeconds
     canvas.width = width;
     canvas.height = height;
 
-    const ctx = canvas.getContext('2d', { alpha: false });
+    const ctx = canvas.getContext('2d', {
+      alpha: false
+    });
 
     if (!ctx) {
-      throw new Error('Unable to initialize video encoder canvas.');
+      throw new Error(
+        'Unable to initialize video encoder canvas.'
+      );
     }
 
     // Capture compressed video frames.
     stream = canvas.captureStream(24);
 
-    // Capture the original video's audio using Web Audio.
     const AudioContextClass =
-      window.AudioContext || window.webkitAudioContext;
+      window.AudioContext ||
+      window.webkitAudioContext;
 
     if (!AudioContextClass) {
-      throw new Error('Audio compression is not supported by this browser.');
+      throw new Error(
+        'Audio compression is not supported by this browser.'
+      );
     }
 
     audioContext = new AudioContextClass();
 
-    audioSource = audioContext.createMediaElementSource(video);
-    audioDestination = audioContext.createMediaStreamDestination();
+    audioSource =
+      audioContext.createMediaElementSource(video);
 
-    // Route audio into the recording without playing it
-    // through the device speakers.
+    audioDestination =
+      audioContext.createMediaStreamDestination();
+
+    // Capture audio without playing it through speakers.
     audioSource.connect(audioDestination);
 
-    // Add the audio track to the video recording stream.
-    const audioTracks = audioDestination.stream.getAudioTracks();
-
-    for (const track of audioTracks) {
+    // Add captured audio to the recording stream.
+    for (
+      const track of
+      audioDestination.stream.getAudioTracks()
+    ) {
       stream.addTrack(track);
     }
 
@@ -126,9 +162,9 @@ window.fitQuestCompressVideo = async function (inputBytes, inputMime, maxSeconds
     });
 
     const recorded = new Promise((resolve, reject) => {
-      recorder.ondataavailable = e => {
-        if (e.data && e.data.size) {
-          chunks.push(e.data);
+      recorder.ondataavailable = event => {
+        if (event.data && event.data.size > 0) {
+          chunks.push(event.data);
         }
       };
 
@@ -136,41 +172,73 @@ window.fitQuestCompressVideo = async function (inputBytes, inputMime, maxSeconds
         new Error('Video encoding failed.')
       );
 
-      recorder.onstop = () => resolve(
-        new Blob(chunks, {
-          type: recorder.mimeType || outputMime
-        })
-      );
+      recorder.onstop = () => {
+        resolve(
+          new Blob(chunks, {
+            type: recorder.mimeType || outputMime
+          })
+        );
+      };
     });
 
     const draw = () => {
       if (!video.paused && !video.ended) {
-        ctx.drawImage(video, 0, 0, width, height);
+        ctx.drawImage(
+          video,
+          0,
+          0,
+          width,
+          height
+        );
+
         frameId = requestAnimationFrame(draw);
       }
     };
 
     video.currentTime = 0;
 
-    // Ensure the audio processing context is running.
     if (audioContext.state === 'suspended') {
       await audioContext.resume();
     }
+
+    // Start playback and recording close together.
+    // Register the end handler before playback starts.
+    const playbackEnded = new Promise(
+      (resolve, reject) => {
+        video.onended = resolve;
+        video.onerror = () => reject(
+          new Error(
+            'Video playback failed during compression.'
+          )
+        );
+      }
+    );
 
     recorder.start(1000);
 
     try {
       await video.play();
+
+      // Ensure the audio context is actually running.
+      if (audioContext.state === 'suspended') {
+        await audioContext.resume();
+      }
+
       draw();
 
-      await new Promise((resolve, reject) => {
-        video.onended = resolve;
-        video.onerror = () => reject(
-          new Error('Video playback failed during compression.')
-        );
-      });
+      await playbackEnded;
+
+      // Allow final audio samples to reach MediaRecorder.
+      await delay(350);
+
+      if (recorder.state === 'recording') {
+        recorder.requestData();
+      }
+
+      await delay(150);
+
     } finally {
-      if (frameId) {
+      if (frameId != null) {
         cancelAnimationFrame(frameId);
       }
 
@@ -184,7 +252,9 @@ window.fitQuestCompressVideo = async function (inputBytes, inputMime, maxSeconds
     const result = await recorded;
 
     if (!result.size) {
-      throw new Error('Compression produced an empty video.');
+      throw new Error(
+        'Compression produced an empty video.'
+      );
     }
 
     if (result.size >= sourceBlob.size) {
@@ -193,12 +263,10 @@ window.fitQuestCompressVideo = async function (inputBytes, inputMime, maxSeconds
       );
     }
 
-    const outputBytes = new Uint8Array(
-      await result.arrayBuffer()
-    );
-
     return {
-      bytes: outputBytes,
+      bytes: new Uint8Array(
+        await result.arrayBuffer()
+      ),
       mimeType: result.type.split(';')[0],
       originalSize: sourceBlob.size,
       compressedSize: result.size
@@ -210,14 +278,16 @@ window.fitQuestCompressVideo = async function (inputBytes, inputMime, maxSeconds
     video.load();
 
     if (stream) {
-      stream.getTracks().forEach(track => track.stop());
+      stream.getTracks().forEach(
+        track => track.stop()
+      );
     }
 
     if (audioSource) {
       audioSource.disconnect();
     }
 
-    if (audioContext) {
+    if (audioContext && audioContext.state !== 'closed') {
       await audioContext.close();
     }
 
