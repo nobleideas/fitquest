@@ -1,4 +1,4 @@
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
 import 'video_compression_stub.dart' if (dart.library.js_interop) 'video_compression_web.dart' as compressor;
 import 'package:image_picker/image_picker.dart';
 import 'package:path/path.dart' as p;
@@ -482,22 +482,43 @@ class ExerciseService {
           .from('exercises')
           .select('video_url')
           .eq('id', exerciseId)
-          .maybeSingle();
-      oldUrl = _cleanNullableString(previous?['video_url']);
-      await supabase
+          .single();
+      oldUrl = _cleanNullableString(previous['video_url']);
+
+      // Require a returned row so an RLS-blocked update cannot look successful.
+      final updated = await supabase
           .from('exercises')
           .update({'video_url': publicUrl})
-          .eq('id', exerciseId);
-    } catch (_) {
-      // Leave the old database reference untouched if replacement fails.
-      try { await bucket.remove([storagePath]); } catch (_) {}
+          .eq('id', exerciseId)
+          .select('video_url')
+          .single();
+      if (_cleanNullableString(updated['video_url']) != publicUrl) {
+        throw StateError('The new video reference was not saved.');
+      }
+    } catch (e) {
+      // Keep the old reference. Clean up the newly uploaded object if possible.
+      try {
+        await bucket.remove([storagePath]);
+      } catch (cleanupError) {
+        debugPrint('Could not clean up failed upload $storagePath: $cleanupError');
+      }
       rethrow;
     }
 
     if (oldUrl != null && oldUrl != publicUrl) {
       final oldPath = _tryExtractStoragePathFromPublicUrl(oldUrl, _formVideoBucket);
-      if (oldPath != null) {
-        try { await bucket.remove([oldPath]); } catch (_) {}
+      if (oldPath == null) {
+        debugPrint('Old form video URL could not be parsed for cleanup: $oldUrl');
+      } else if (!oldPath.startsWith('exercise_$exerciseId/')) {
+        debugPrint('Skipped cleanup of unexpected old video path: $oldPath');
+      } else if (oldPath != storagePath) {
+        try {
+          await bucket.remove([oldPath]);
+          debugPrint('Removed replaced form video: $oldPath');
+        } catch (e) {
+          // New video is already saved: do not report the entire upload as failed.
+          debugPrint('WARNING: Old form video remains in Storage ($oldPath): $e');
+        }
       }
     }
     return publicUrl;
