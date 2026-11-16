@@ -40,6 +40,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
   List<String> previousDayKeys = []; // All earlier days, newest first.
   int _historyPage = 0;
   String? _selectedChartDayKey;
+  bool _chartDetailsExpanded = false;
   static const int _historyPageSize = 4;
   int? _currentPosition;
   final _positionService = MuscleExercisePositionService();
@@ -980,7 +981,10 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
                   onTapDown: (details) {
                     final index = ((details.localPosition.dx - 18) / pointWidth)
                         .round().clamp(0, keys.length - 1);
-                    setState(() => _selectedChartDayKey = keys[index]);
+                    setState(() {
+                      _selectedChartDayKey = keys[index];
+                      // Keep details open to compare sets between points.
+                    });
                   },
                   child: CustomPaint(
                     size: Size(math.max(plotWidth, constraints.maxWidth), 224),
@@ -999,23 +1003,79 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
             const SizedBox(height: 10),
             Container(
               width: double.infinity,
-              padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: FitQuestTheme.dark.colorScheme.primary.withValues(alpha: 0.35)),
+                border: Border.all(
+                  color: FitQuestTheme.dark.colorScheme.primary.withValues(alpha: 0.35),
+                ),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('${_formatDate(_dateFromDayKey(selectedKey))}  •  ${_performanceValue(values[selectedIndex])}',
-                      style: FitQuestTheme.dark.textTheme.titleSmall),
-                  Text('Muscle-group order: ${selectedPosition == null ? 'Not recorded' : _positionLabel(selectedPosition)}  •  ${selectedSessions.length} sets${values[selectedIndex] == best ? '  •  Best performance' : ''}',
-                      style: FitQuestTheme.dark.textTheme.bodySmall),
+                  InkWell(
+                    borderRadius: BorderRadius.circular(10),
+                    onTap: () => setState(() =>
+                        _chartDetailsExpanded = !_chartDetailsExpanded),
+                    child: Padding(
+                      padding: const EdgeInsets.all(10),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  '${_formatDate(_dateFromDayKey(selectedKey))}  •  ${_performanceValue(values[selectedIndex])}',
+                                  style: FitQuestTheme.dark.textTheme.titleSmall,
+                                ),
+                                Text(
+                                  'Muscle-group order: ${selectedPosition == null ? 'Not recorded' : _positionLabel(selectedPosition)}  •  ${selectedSessions.length} sets${values[selectedIndex] == best ? '  •  Best performance' : ''}',
+                                  style: FitQuestTheme.dark.textTheme.bodySmall,
+                                ),
+                              ],
+                            ),
+                          ),
+                          Icon(_chartDetailsExpanded
+                              ? Icons.expand_less : Icons.expand_more),
+                        ],
+                      ),
+                    ),
+                  ),
+                  if (_chartDetailsExpanded) ...[
+                    Divider(height: 1, color: FitQuestTheme.dark.dividerColor),
+                    if (selectedSessions.isEmpty)
+                      const Padding(
+                        padding: EdgeInsets.all(12),
+                        child: Text('No sets recorded for this workout.'),
+                      )
+                    else
+                      ...selectedSessions.asMap().entries.map((entry) {
+                        final session = entry.value;
+                        final metricType =
+                            (session['metric_type'] ?? 'reps').toString();
+                        final loadType =
+                            (session['load_type'] ?? 'weight').toString();
+                        final metricValue = _sessionMetricValue(session);
+                        final setVolume = metricType == 'reps' && loadType == 'weight'
+                            ? _numToDouble(session['weight']) * metricValue
+                            : null;
+                        return ListTile(
+                          dense: true,
+                          leading: const Icon(Icons.fitness_center),
+                          title: Text('Set ${entry.key + 1}  •  ${_loadLabel(loadType)}: ${_formatMetricValue(_numToDouble(session['weight']))}'),
+                          subtitle: Text('${_metricLabel(metricType)}: ${_formatMetricValue(metricValue)}'),
+                          trailing: setVolume == null
+                              ? null
+                              : Text('Vol: ${setVolume.toStringAsFixed(0)}',
+                                  style: FitQuestTheme.dark.textTheme.bodySmall),
+                        );
+                      }),
+                  ],
                 ],
               ),
             ),
             const SizedBox(height: 6),
-            Text('Tap a point to inspect it. Swipe horizontally for older workouts. An em dash means order was not recorded.',
+            Text('Tap a point to inspect it, then tap the summary to view its sets. Swipe horizontally for older workouts. An em dash means order was not recorded.',
                 style: FitQuestTheme.dark.textTheme.bodySmall),
           ],
         ),
