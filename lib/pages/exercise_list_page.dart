@@ -767,14 +767,61 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
     String? targetEquipmentName;
 
     final equipmentListDynamic = await _equipmentService.getAllEquipment();
-    final equipmentList = equipmentListDynamic
+    final routineListDynamic = await _equipmentService.getRoutines();
+    final equipmentList = [...equipmentListDynamic, ...routineListDynamic]
         .map((e) => Map<String, dynamic>.from(e as Map))
-        .toList()
+        .fold<Map<String, Map<String, dynamic>>>({}, (byId, item) {
+          byId[item['id'].toString()] = item;
+          return byId;
+        }).values.toList()
       ..sort((a, b) {
         final an = (a['name'] ?? '').toString().toLowerCase();
         final bn = (b['name'] ?? '').toString().toLowerCase();
         return an.compareTo(bn);
       });
+
+    // Load previews before opening the dropdown, so hovering is immediate.
+    // Each preview is keyed by equipment ID, not name: duplicate names remain distinct.
+    final previews = <String, List<String>>{};
+    final equipmentIds = equipmentList
+        .where((e) => (e['kind'] ?? 'equipment').toString() != 'routine')
+        .map((e) => e['id'].toString())
+        .toList();
+    if (equipmentIds.isNotEmpty) {
+      try {
+        final rows = await supabase
+            .from('exercises')
+            .select('equipment_id, name')
+            .inFilter('equipment_id', equipmentIds);
+        for (final row in rows) {
+          final id = row['equipment_id']?.toString() ?? '';
+          final name = row['name']?.toString() ?? '';
+          if (id.isNotEmpty && name.isNotEmpty) {
+            previews.putIfAbsent(id, () => []).add(name);
+          }
+        }
+      } catch (e) {
+        debugPrint('Could not load equipment hover previews: $e');
+      }
+    }
+    // Routines may reference exercises through a separate join table.
+    for (final item in equipmentList) {
+      if ((item['kind'] ?? '').toString() != 'routine') continue;
+      final id = item['id'].toString();
+      try {
+        final rows = await _exerciseService.getExercisesForRoutine(id);
+        previews[id] = rows
+            .map((row) => (row['name'] ?? '').toString())
+            .where((name) => name.isNotEmpty)
+            .toList();
+      } catch (e) {
+        debugPrint('Could not load routine hover preview: $e');
+      }
+    }
+    for (final names in previews.values) {
+      names.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    }
+    if (!mounted) return;
 
     String? selectedEquipmentId;
     final newEquipmentController = TextEditingController();
@@ -796,15 +843,82 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
                   const Text('Move to existing equipment/routine:'),
                   const SizedBox(height: 8),
                   DropdownButtonFormField<String>(
-                     dropdownColor: _ExerciseListUx.raised,
-                     style: const TextStyle(color: _ExerciseListUx.ink, fontSize: 16),
+                    dropdownColor: _ExerciseListUx.raised,
+                    style: const TextStyle(color: _ExerciseListUx.ink, fontSize: 16),
                     value: selectedEquipmentId,
                     isExpanded: true,
+                    hint: const Text('Select equipment/routine',
+                        style: TextStyle(color: _ExerciseListUx.ink)),
+                    // The closed field renders plain light text, not the
+                    // hover widget used in the opened dropdown.
+                    selectedItemBuilder: (context) => [
+                      for (final e in equipmentList)
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text(
+                            e['name'].toString(),
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: _ExerciseListUx.ink, fontSize: 16),
+                          ),
+                        ),
+                    ],
                     items: [
                       for (final e in equipmentList)
-                        DropdownMenuItem(
+                        DropdownMenuItem<String>(
                           value: e['id'].toString(),
-                          child: Text(e['name'].toString()),
+                          child: Tooltip(
+                            waitDuration: const Duration(milliseconds: 250),
+                            showDuration: const Duration(seconds: 12),
+                            preferBelow: false,
+                            verticalOffset: 22,
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 16, vertical: 12),
+                            decoration: BoxDecoration(
+                              color: _ExerciseListUx.surface,
+                              border: Border.all(
+                                color: _ExerciseListUx.accent.withOpacity(0.45)),
+                              borderRadius: BorderRadius.circular(14),
+                              boxShadow: const [BoxShadow(
+                                color: Color(0x88000000),
+                                blurRadius: 18,
+                                offset: Offset(0, 6),
+                              )],
+                            ),
+                            richMessage: TextSpan(
+                              style: const TextStyle(
+                                color: _ExerciseListUx.ink,
+                                fontSize: 13,
+                                height: 1.5,
+                              ),
+                              children: [
+                                TextSpan(
+                                  text: '${e['name']}  •  '
+                                      '${previews[e['id'].toString()]?.length ?? 0} exercises\n',
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    color: _ExerciseListUx.accent,
+                                  ),
+                                ),
+                                TextSpan(
+                                  text: (previews[e['id'].toString()] ?? []).isEmpty
+                                      ? 'No exercises yet'
+                                      : previews[e['id'].toString()]!
+                                          .map((name) => '• $name')
+                                          .join('\n'),
+                                ),
+                              ],
+                            ),
+                            child: SizedBox(
+                              width: double.infinity,
+                              child: Text(
+                                e['name'].toString(),
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  color: _ExerciseListUx.ink, fontSize: 16),
+                              ),
+                            ),
+                          ),
                         ),
                     ],
                     onChanged: newEquipmentController.text.isNotEmpty
@@ -818,6 +932,7 @@ class _ExerciseListPageState extends State<ExerciseListPage> {
                     decoration: const InputDecoration(
                       border: OutlineInputBorder(),
                       hintText: 'Select equipment/routine',
+                      hintStyle: TextStyle(color: _ExerciseListUx.ink),
                     ),
                   ),
                   const SizedBox(height: 16),
