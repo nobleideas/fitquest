@@ -1892,8 +1892,8 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
                   onPressed: _startBacklogWorkout,
                 ),
                 _homeActionRow(
-                  label: 'Report Bug',
-                  tooltip: 'Report a bug / suggestion',
+                  label: 'Report Bug / Suggest Feature',
+                  tooltip: 'Report a bug or suggest a feature',
                   icon: const Icon(Icons.bug_report_outlined),
                   onPressed: _isSubmittingReport ? null : _openReportDialog,
                 ),
