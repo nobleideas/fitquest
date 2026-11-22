@@ -824,7 +824,10 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
     required String title,
     bool initiallyExpanded = false,
   }) {
-    final sessions = sessionsByDayKey[dayKey] ?? const [];
+    final sessions = List<Map<String, dynamic>>.from(
+      sessionsByDayKey[dayKey] ?? const <Map<String, dynamic>>[],
+    )..sort((a, b) => (a['created_at'] ?? '').toString()
+        .compareTo((b['created_at'] ?? '').toString()));
     final volume = volumeByDayKey[dayKey] ?? 0;
     final showVolume = hasVolumeByDayKey[dayKey] ?? false;
     final position = positionByDayKey[dayKey];
@@ -893,7 +896,8 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
                   title: Text('No sets found for this day.'),
                 ),
               ]
-            : sessions.map((session) {
+            : sessions.asMap().entries.map((entry) {
+                final session = entry.value;
                 final metricType = (session['metric_type'] ?? 'reps').toString();
                 final loadType = (session['load_type'] ?? 'weight').toString();
                 final metricValue = _sessionMetricValue(session);
@@ -917,7 +921,7 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
                       _deleteSession(session['id'].toString()),
                   child: ListTile(
                     leading: const Icon(Icons.fitness_center),
-                    title: Text('${_loadLabel(loadType)}: ${session['weight']}'),
+                    title: Text('Set ${entry.key + 1}  •  ${_loadLabel(loadType)}: ${session['weight']}'),
                     subtitle: Text(
                       '${_metricLabel(metricType)}: ${_formatMetricValue(metricValue)}',
                     ),
@@ -957,7 +961,10 @@ class _ExerciseSessionPageState extends State<ExerciseSessionPage> {
         ? _selectedChartDayKey! : keys.last;
     final selectedIndex = keys.indexOf(selectedKey);
     final selectedPosition = positionByDayKey[selectedKey];
-    final selectedSessions = sessionsByDayKey[selectedKey] ?? const <Map<String, dynamic>>[];
+    final selectedSessions = List<Map<String, dynamic>>.from(
+      sessionsByDayKey[selectedKey] ?? const <Map<String, dynamic>>[],
+    )..sort((a, b) => (a['created_at'] ?? '').toString()
+        .compareTo((b['created_at'] ?? '').toString()));
     final pointWidth = 74.0;
     final plotWidth = math.max(300.0, keys.length * pointWidth + 36);
 
