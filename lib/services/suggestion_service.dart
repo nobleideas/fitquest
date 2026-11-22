@@ -1,6 +1,8 @@
 // lib/services/suggestion_service.dart
 import 'dart:math';
 
+import 'package:flutter/foundation.dart';
+
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 enum SuggestedDayType { push, pull, legsCore }
@@ -25,6 +27,16 @@ class SuggestionService {
   final SupabaseClient supabase;
 
   SuggestionService(this.supabase);
+
+  static const String _hackSquatId = 'a5628c9c-ad89-407f-b94e-40bb4db8d976';
+
+  void _trace(String message) {
+    assert(() {
+      debugPrint('[FitQuest Suggestion Debug] $message');
+      return true;
+    }());
+  }
+
 
   Future<SuggestedRoutine> buildRoutine({
     required int minutes,
@@ -89,6 +101,11 @@ class SuggestionService {
       );
     }
 
+    _trace('BUILD dayType=${dayType.name} minutes=$minutes randomize=$randomize '
+        'groups=$desiredGroups excludedHack=${excludeIds.contains(_hackSquatId)} '
+        'legCandidates=${(candidatesByGroup['legs'] ?? []).length} '
+        'hackInLegCandidates=${(candidatesByGroup['legs'] ?? []).any((e) => e['id'] == _hackSquatId)}');
+
     final usedIds = <String>{};
     final picked = <Map<String, dynamic>>[];
 
@@ -143,6 +160,8 @@ class SuggestionService {
     }
 
     final finalPicked = picked.take(totalExercisesTarget).toList();
+    _trace('BUILD selected=${finalPicked.map((e) => e['name']).join(', ')} '
+        'hackSelected=${finalPicked.any((e) => e['id'] == _hackSquatId)}');
 
     if (finalPicked.isEmpty) {
       return SuggestedRoutine(
@@ -274,6 +293,12 @@ class SuggestionService {
       exerciseType: exerciseType,
     );
 
+    _trace('ROTATE slot=$index dayType=${routine.dayType.name} '
+        'current=${currentExercise['name']} currentType=$currentExerciseType '
+        'filterType=$exerciseType group=$currentMuscleGroup '
+        'candidateCount=${candidates.length} '
+        'hackInCandidates=${candidates.any((e) => e['id'] == _hackSquatId)} '
+        'candidateNames=${candidates.map((e) => '${e['name']}(${e['type']})').join(', ')}');
     if (candidates.length <= 1) return routine;
 
     final historyKey = individualRandomizeHistoryKey(
@@ -354,6 +379,9 @@ class SuggestionService {
       return null;
     }
 
+    _trace('ROTATE currentIndex=$currentIndex existingIds=$existingIds '
+        'sharedHistory=$sharedHistory hackAlreadyShown=${sharedHistory.contains(_hackSquatId)} '
+        'hackInOtherSlot=${existingIds.contains(_hackSquatId)}');
     var replacement = findReplacement();
 
     // Once every available exercise in this muscle group has been considered,
@@ -374,6 +402,8 @@ class SuggestionService {
       replacement = findReplacement();
     }
 
+    _trace('ROTATE replacement=${replacement?['name'] ?? 'NONE'} '
+        'hackSelected=${replacement?['id'] == _hackSquatId}');
     if (replacement == null) return routine;
 
     final replacementId = (replacement['id'] ?? '').toString();
@@ -726,15 +756,33 @@ class SuggestionService {
       return <Map<String, dynamic>>[];
     }
 
-    // Resolve the active gym's equipment first. This avoids relying on an
-    // embedded Supabase relationship to enforce gym membership.
+    // Only equipment explicitly assigned to the active gym is eligible.
+    // equipment.gym_id records a single/original gym and must not be used
+    // as the membership filter for equipment shared across multiple gyms.
+    final assignmentRows = await supabase
+        .from('equipment_gyms')
+        .select('equipment_id')
+        .eq('user_id', user.id)
+        .eq('gym_id', activeGymId);
+
+    final assignedEquipmentIds = assignmentRows
+        .map((row) => (row['equipment_id'] ?? '').toString().trim())
+        .where((id) => id.isNotEmpty)
+        .toSet();
+
+    if (assignedEquipmentIds.isEmpty) return <Map<String, dynamic>>[];
+
+    // Validate ownership and kind before allowing any assigned equipment
+    // into the exercise pool. Do not fall back to another gym's equipment.
     final equipmentRows = await supabase
         .from('equipment')
         .select('id, name, kind')
         .eq('user_id', user.id)
-        .eq('gym_id', activeGymId)
-        .eq('kind', 'equipment');
+        .eq('kind', 'equipment')
+        .inFilter('id', assignedEquipmentIds.toList());
 
+    _trace('POOL group=$canonicalMuscleGroup typeFilter=${normalizedExerciseType.isEmpty ? 'ANY' : normalizedExerciseType} '
+        'activeGym=$activeGymId equipmentRows=${equipmentRows.length}');
     final equipmentById = <String, Map<String, dynamic>>{};
 
     for (final raw in equipmentRows) {
@@ -766,6 +814,8 @@ class SuggestionService {
     }
 
     final exerciseRows = await query;
+    _trace('POOL rawExerciseCount=${exerciseRows.length} '
+        'hackInRaw=${exerciseRows.any((e) => e['id'] == _hackSquatId)}');
     final candidates = <Map<String, dynamic>>[];
 
     for (final raw in exerciseRows) {
@@ -788,6 +838,9 @@ class SuggestionService {
       candidates.add(ex);
     }
 
+    _trace('POOL eligibleCount=${candidates.length} '
+        'hackEligible=${candidates.any((e) => e['id'] == _hackSquatId)} '
+        'hackExcludedByHistory=${excludeIds.contains(_hackSquatId)}');
     if (candidates.isEmpty) return candidates;
 
     final enrichedCandidates =
@@ -807,6 +860,7 @@ class SuggestionService {
       lastSetDateByExerciseId: lastSetDateByExerciseId,
     );
 
+    _trace('POOL sortedCandidates=${enrichedCandidates.map((e) => e['name']).join(', ')}');
     return enrichedCandidates;
   }
 
