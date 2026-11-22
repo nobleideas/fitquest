@@ -1910,14 +1910,14 @@ class HomePageState extends State<HomePage> with WidgetsBindingObserver {
             const SizedBox(height: 12),
             _buildBacklogStatus(),
             if (_workoutDateService.isBacklogging) const SizedBox(height: 12),
+            _buildSuggestedRoutineCard(),
+            if (_suggestedRoutine != null) const SizedBox(height: 12),
+
             Text(
               'Workout Summary Feed',
               style: const TextStyle(color: Color(0xFFF4F6FB), fontSize: 24, fontWeight: FontWeight.w800),
             ),
             const SizedBox(height: 12),
-
-            _buildSuggestedRoutineCard(),
-            if (_suggestedRoutine != null) const SizedBox(height: 12),
 
             _buildWorkoutFilterBar(),
             const SizedBox(height: 10),
